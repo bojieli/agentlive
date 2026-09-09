@@ -36,3 +36,10 @@ export {
   importClaudeRecording,
   type ClaudeImportOptions,
 } from "./import-claude.js";
+export {
+  inspectKimiHistory,
+  captureKimiHistory,
+  type KimiHistoryManifest,
+  type KimiCaptureSink,
+} from "./kimi-history.js";
+export { importKimiRecording, type KimiImportOptions } from "./import-kimi.js";

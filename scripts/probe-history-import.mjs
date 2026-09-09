@@ -7,14 +7,24 @@ import { randomBytes, createHash } from "node:crypto";
 import {
   importCodexRecording,
   importClaudeRecording,
+  importKimiRecording,
 } from "../packages/adapters/dist/index.js";
 import { startServer } from "../packages/server/dist/index.js";
 import { initialState, apply } from "../packages/playback/dist/index.js";
 const args = process.argv.slice(2);
-const agent = args[0] === "--claude" ? (args.shift(), "claude") : "codex";
+const agent =
+  args[0] === "--claude"
+    ? (args.shift(), "claude")
+    : args[0] === "--kimi"
+      ? (args.shift(), "kimi")
+      : "codex";
 const sourcePath = args[0];
 const importRecording =
-  agent === "claude" ? importClaudeRecording : importCodexRecording;
+  agent === "claude"
+    ? importClaudeRecording
+    : agent === "kimi"
+      ? importKimiRecording
+      : importCodexRecording;
 if (!sourcePath)
   throw new Error(
     "Usage: node scripts/probe-history-import.mjs <codex-session.jsonl>",
