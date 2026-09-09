@@ -193,7 +193,7 @@ export class OpenCodeCapture {
     await atomicJson(join(this.directory, "pending.json"), intent);
     await this.recover();
   }
-  accept(input: OpenCodeSnapshot): Promise<void> {
+  accept(input: OpenCodeSnapshot, signal?: AbortSignal): Promise<void> {
     const serialized = canonicalJson(input);
     if (Buffer.byteLength(serialized) > 64 * 1024 * 1024)
       return Promise.reject(
@@ -210,14 +210,15 @@ export class OpenCodeCapture {
         await atomicJson(join(this.directory, "state.json"), this.state);
       } else if (this.state.createdAt !== snapshot.info.time.created)
         throw new Error("OpenCode native creation time changed");
-      await this.convert(snapshot);
+      await this.convert(snapshot, signal);
     });
     this.tail = work.catch(() => {
       this.failed = true;
     });
     return work;
   }
-  private async convert(snapshot: OpenCodeSnapshot) {
+  private async convert(snapshot: OpenCodeSnapshot, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     const sessionId = hash("session");
     const seen = new Set([sessionId]);
     const gap = (reason: string): EventContent => ({
@@ -241,6 +242,7 @@ export class OpenCodeCapture {
       ],
     );
     for (const message of snapshot.messages) {
+      signal?.throwIfAborted();
       const id = hash(message.info.id);
       seen.add(id);
       const complete =
@@ -302,6 +304,7 @@ export class OpenCodeCapture {
         hash({ kind: "message", role: message.info.role }),
       );
       for (const part of message.parts) {
+        signal?.throwIfAborted();
         if (
           ["text", "reasoning", "step-start", "step-finish"].includes(part.type)
         )
@@ -413,7 +416,8 @@ export class OpenCodeCapture {
           );
       }
     }
-    for (const [id, previous] of Object.entries(this.state.entities))
+    for (const [id, previous] of Object.entries(this.state.entities)) {
+      signal?.throwIfAborted();
       if (previous.present && !seen.has(id))
         await this.revise(
           id,
@@ -427,6 +431,7 @@ export class OpenCodeCapture {
           ],
           false,
         );
+    }
   }
   async close() {
     await this.tail;

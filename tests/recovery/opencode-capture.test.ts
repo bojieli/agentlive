@@ -216,3 +216,33 @@ it("freezes queued native snapshots before the caller mutates their parts", asyn
   expect([...result.state.messages.values()][0]?.text).toBe("original");
   expect([...result.state.tools.values()][0]?.output).toBe("done token_abcdef");
 });
+it("stops between durable entities on cancellation and safely resumes the snapshot", async () => {
+  const journal = await setup();
+  let capture = await OpenCodeCapture.open(journal);
+  captures.push(capture);
+  const controller = new AbortController();
+  const real = journal.capture.bind(journal);
+  const spy = vi.spyOn(journal, "capture").mockImplementation(async (input) => {
+    const result = await real(input);
+    if (input.content[0]?.kind === "message.started") controller.abort();
+    return result;
+  });
+  try {
+    await expect(
+      capture.accept(
+        snapshot("retained", true, "completed"),
+        controller.signal,
+      ),
+    ).rejects.toThrow();
+  } finally {
+    spy.mockRestore();
+  }
+  expect((await replay(journal)).state.messages.size).toBe(1);
+  expect((await replay(journal)).state.tools.size).toBe(0);
+  await capture.close();
+  captures.pop();
+  capture = await OpenCodeCapture.open(journal);
+  captures.push(capture);
+  await capture.accept(snapshot("retained", true, "completed"));
+  expect((await replay(journal)).state.tools.size).toBe(1);
+});

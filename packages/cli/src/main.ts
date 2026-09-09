@@ -9,6 +9,7 @@ import {
   publishCodexRecording,
   publishClaudeRecording,
   publishKimiRecording,
+  publishOpenCodeRecording,
   importClaudeRecording,
   importCodexRecording,
   importKimiRecording,
@@ -22,6 +23,7 @@ Commands:
   agentlive serve [--host 127.0.0.1] [--port 7331]
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
+  agentlive publish --agent opencode --native-server <origin> --native-session <id>
   agentlive watch --stream <recording-id> [--server <origin>] [--anonymous]
   agentlive replay --stream <recording-id> [--server <origin>] [--anonymous]
 
@@ -104,6 +106,7 @@ async function main() {
       title: { type: "string" },
       "artifact-root": { type: "string", multiple: true },
       "artifact-base": { type: "string" },
+      "native-server": { type: "string" },
       "native-session": { type: "string" },
       "native-agent": { type: "string" },
     },
@@ -124,7 +127,7 @@ async function main() {
         ? ["server", "stream", "anonymous"]
         : [
             ...(command === "publish"
-              ? ["record-format", "resume-import"]
+              ? ["record-format", "resume-import", "native-server"]
               : []),
             "agent",
             "source",
@@ -197,6 +200,69 @@ async function main() {
     });
     return;
   }
+  if (command === "publish" && values.agent === "opencode") {
+    if (!values["native-server"] || !values["native-session"])
+      throw new Error(
+        "OpenCode publishing requires --native-server and --native-session",
+      );
+    if (
+      values.source ||
+      values["native-agent"] ||
+      values["resume-import"] ||
+      values["record-format"] ||
+      values["artifact-root"] ||
+      values["artifact-base"]
+    )
+      throw new Error(
+        "OpenCode server publishing does not accept file import or conversion options",
+      );
+    const visibility = values.visibility ?? "private";
+    if (
+      visibility !== "private" &&
+      visibility !== "public" &&
+      visibility !== "unlisted"
+    )
+      throw new Error("Visibility must be private, unlisted, or public");
+    const secret = process.env.AGENTLIVE_OWNER_SECRET
+      ? validateSecret(process.env.AGENTLIVE_OWNER_SECRET)
+      : await ownerCredential(ownerFile, false);
+    secrets.push(secret);
+    await publishOpenCodeRecording({
+      publisherRoot: join(stateDir, "publisher"),
+      serverOrigin: values.server ?? "http://127.0.0.1:7331",
+      ownerCredential: secret,
+      nativeServerOrigin: values["native-server"],
+      nativeSessionId: values["native-session"],
+      ...(process.env.OPENCODE_SERVER_PASSWORD
+        ? { nativePassword: process.env.OPENCODE_SERVER_PASSWORD }
+        : {}),
+      ...(process.env.OPENCODE_SERVER_USERNAME
+        ? { nativeUsername: process.env.OPENCODE_SERVER_USERNAME }
+        : {}),
+      title: values.title ?? "Live opencode session",
+      visibility,
+      secrets,
+      signal: controller.signal,
+      onReady: (recording) => {
+        process.stdout.write(
+          JSON.stringify({ event: "publishing", ...recording }) + "\n",
+        );
+      },
+      onStatus: (status) => {
+        process.stdout.write(
+          JSON.stringify({ event: "publisher-status", status }) + "\n",
+        );
+      },
+      onNativeStatus: (status) => {
+        process.stdout.write(
+          JSON.stringify({ event: "native-status", status }) + "\n",
+        );
+      },
+    });
+    return;
+  }
+  if (values["native-server"])
+    throw new Error("Native server applies only to OpenCode publishing");
   const agent = values.agent,
     sourcePath = values.source;
   if (

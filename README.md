@@ -2,7 +2,7 @@
 
 Broadcast and replay coding-agent sessions from one stable session URL, with structured messages, tools, file changes, and versioned attachments.
 
-**Implementation is in progress.** This repository currently contains the implementation plan, live-agent transport probes, and tested recorder/publisher/playback foundations plus a programmatic HTTP/WebSocket server, shared synchronization engines, and immutable attachment storage. A workspace CLI can start the server and import recordings from all four agents. The distributable installer and viewers are unfinished. See [implementation status](IMPLEMENTATION_STATUS.md) for verified work and remaining release gates.
+**Implementation is in progress.** This repository currently contains the implementation plan, live-agent transport probes, and tested recorder/publisher/playback foundations plus a programmatic HTTP/WebSocket server, shared synchronization engines, and immutable attachment storage. A workspace CLI can start the server, import recordings from all four agents, publish live sessions, and watch with a durable local cache. The distributable installer and viewers are unfinished. See [implementation status](IMPLEMENTATION_STATUS.md) for verified work and remaining release gates.
 
 ## Development
 
@@ -107,7 +107,7 @@ npx --yes pnpm@12.3.4 agentlive publish --agent codex --source /path/to/session.
 
 Start `serve` first using the same state directory. Publishing defaults to private visibility. Use `--record-format legacy` for older histories without structured item records. Stop with Ctrl-C and run the same command to resume the same recording; it stays open, and pending captured events remain on disk. The initial retained history is included. Source catch-up and remote delivery are separate states: `source-caught-up` reports local conversion, while publisher status reports network progress.
 
-This command currently supports Codex, Claude Code, and Kimi Code. Initial recording creation needs connectivity; an existing binding can capture text while disconnected. Attachment upload can pause conversion until connectivity returns. Compatible ended imports can continue live with `--resume-import` and their original import options.
+File following supports Codex, Claude Code, and Kimi Code; OpenCode uses its native server as described below. Initial recording creation needs connectivity; an existing binding can capture text while disconnected. Attachment upload can pause conversion until connectivity returns. Compatible ended imports can continue live with `--resume-import` and their original import options.
 
 A read-only native transport/restart probe is available:
 
@@ -163,4 +163,23 @@ npx --yes pnpm@12.3.4 agentlive publish --agent claude \
 
 Use the same state directory, server, source prefix, filtering policy, title, visibility, and artifact settings as the import. With `--resume-import`, the default title matches the import command's default. For Codex, select the same structured/legacy format as the imported prefix. The transition preserves the recording ID, producer sequence, and existing attachment identities. Its durable intent and idempotent reopen operation allow retrying the same command after a lost response or process restart.
 
-The import must already be fully uploaded and ended. Changed converters or filtering policies still require a separate migration. OpenCode live continuation remains pending its live adapter. Once the transition starts, the import command rejects that binding to avoid ending a recording being continued live.
+The import must already be fully uploaded and ended. Changed converters or filtering policies still require a separate migration. Continuing an OpenCode historical import remains pending snapshot-converter migration. Once the transition starts, the import command rejects that binding to avoid ending a recording being continued live.
+
+Publish an existing OpenCode session through its native headless server:
+
+```sh
+# Start OpenCode with your configured provider and existing server credentials.
+opencode serve --pure --hostname 127.0.0.1 --port 4096
+
+# In another terminal, attach AgentLive to the native session.
+npx --yes pnpm@12.3.4 agentlive publish --agent opencode \
+  --native-server http://127.0.0.1:4096 --native-session <session-id>
+```
+
+Use `OPENCODE_SERVER_PASSWORD` (and `OPENCODE_SERVER_USERNAME` when configured) in the publisher's environment for native server authentication. `--server` selects the AgentLive destination separately. Initial attachment validates native identity/authentication before creating the remote recording. Repeat the command to resume the same publisher binding; native-server reconnect and AgentLive-server reconnect run independently. An existing binding keeps capturing available native snapshots while AgentLive is offline, then sends its durable backlog.
+
+OpenCode publishing currently preserves observed snapshots, not every native text delta. Artifact conversion, import continuation, source removal/reopen presentation, and scalable snapshot state remain unfinished. The installed-agent integration test covers three native turns, native server restart, a turn while publication is detached, and deduplicated publisher restart:
+
+```sh
+node scripts/probe-opencode-publish.mjs
+```

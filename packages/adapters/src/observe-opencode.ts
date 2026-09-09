@@ -51,9 +51,17 @@ export async function observeOpenCodeSession(
       }
     : {};
   let reconnecting = false;
+  let status:
+    "connecting" | "observing" | "reconnecting" | "stopped" | undefined;
+  const report = (next: NonNullable<typeof status>) => {
+    if (status !== next) {
+      status = next;
+      options.onStatus?.(next);
+    }
+  };
   try {
     while (!options.signal.aborted) {
-      options.onStatus?.(reconnecting ? "reconnecting" : "connecting");
+      report(reconnecting ? "reconnecting" : "connecting");
       const controller = new AbortController();
       const signal = AbortSignal.any([options.signal, controller.signal]);
       let reading: Promise<void> | undefined;
@@ -204,7 +212,7 @@ export async function observeOpenCodeSession(
             }
             committed = boundary;
             nextPoll = performance.now() + pollMs;
-            options.onStatus?.("observing");
+            report("observing");
             reconnecting = false;
           }
           await delay(Math.min(100, pollMs), signal);
@@ -231,6 +239,6 @@ export async function observeOpenCodeSession(
         });
     }
   } finally {
-    options.onStatus?.("stopped");
+    report("stopped");
   }
 }

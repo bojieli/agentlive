@@ -77,3 +77,7 @@ export {
   type OpenCodeSnapshot,
 } from "./opencode-history.js";
 export { OpenCodeCapture } from "./opencode-capture.js";
+export {
+  publishOpenCodeRecording,
+  type OpenCodePublishOptions,
+} from "./publish-opencode.js";
