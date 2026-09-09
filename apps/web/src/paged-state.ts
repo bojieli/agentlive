@@ -1,3 +1,4 @@
+import type { TextSource } from "./text-source.js";
 import {
   PagedReducer,
   initialPagedState,
@@ -9,6 +10,7 @@ import {
   storedEventSchema,
   type StoredEvent,
   type SnapshotDescriptor,
+  snapshotContentReferenceSchema,
 } from "@agentlive/protocol";
 import { BrowserContentStore } from "./content-store.js";
 import type { CacheBinding } from "./history-cache.js";
@@ -135,6 +137,18 @@ export class BrowserPagedState {
     signal?: AbortSignal,
   ) {
     return this.content.read(ref, offset, length, signal);
+  }
+  textSource(
+    reference: Parameters<BrowserContentStore["read"]>[0],
+  ): TextSource {
+    const ref = snapshotContentReferenceSchema.parse(reference);
+    Object.freeze(ref);
+    return Object.freeze({
+      key: canonicalJson({ ...this.binding, ref }),
+      units: ref.units,
+      read: (offset: number, length: number, signal: AbortSignal) =>
+        this.content.read(ref, offset, length, signal),
+    });
   }
   close() {
     if (!this.closing) {

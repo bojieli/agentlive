@@ -1277,3 +1277,10 @@ Keep browser working-state publication, snapshot transport/local-content bridgin
 BrowserPagedState now serializes bounded event batches into PagedReducer and selects completed roots through BrowserContentStore's IndexedDB compare-and-set checkpoint pointer. Reopen the saved root and continue from its sequence without retaining the event prefix. Validate root binding/boundaries, reject divergent stale writers or backward replacement and permit exact publication retries. Keep latest reduced history separate from paused viewport position.
 
 Only update in-memory state after pointer publication succeeds. Failed/cancelled batches can leave derivative pages but cannot claim a partial prefix. Reopen after an uncertain commit outcome. Verify simultaneous writers, suffix continuation, failed batches, cancellation during the actual pointer transaction and native recording recovery from the persisted pointer. Production BrowserSession receipt/viewport integration, snapshot import, historical checkpoint seeking and eviction recovery remain required.
+
+
+### Asynchronous text pages in the activity renderer
+
+The existing PagedText renderer now accepts immutable TextSource range readers as well as strings. BrowserPagedState provides recording/content-bound sources. Read one 16,384-unit page plus boundary units, preserving exact surrogate behavior, page controls and follow-latest selection. Resolve search reveal through bounded overlapping scans with periodic yields and cancellation.
+
+Cancel obsolete source/page requests, hide mismatched results, show loading/error state and bound page/reveal waits. Verify parity with string paging, cross-chunk literal matches, partial-range rejection, stalled sources and native persisted text. Actual browser interaction and the BrowserSession receipt/row/viewport migration remain required.

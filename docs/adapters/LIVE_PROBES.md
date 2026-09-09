@@ -177,3 +177,10 @@ Native restart/resume, deduplication, browser-model restoration, search and seek
 On 2026-09-10, Claude `--resume-import` passed two native turns with 28 stored events, four messages and 16 activity items. The verifier used BrowserPagedState to apply/publish each event, closed it at the midpoint, and reopened by discovering the persisted checkpoint pointer. The midpoint reference matched the filesystem checkpoint, and final state matched reference replay. Import continuation, native resume, full-history backfill, live suffix capture and deduplication passed. The snapshot range cache reopened with zero additional content reads.
 
 The full suite passed 312 tests in 43 files. A subsequent focused suite passed five tests, including a new cancellation injected during the IndexedDB root-write transaction; reopening retained the previous checkpoint. Standalone installation/reproducible build also passed. BrowserSession receipt and viewport integration remain separate work.
+
+
+## Stored text pages through the renderer's range reader
+
+On 2026-09-10, OpenCode `--resume-import` passed three native turns with 26 stored events, six messages and one verified attachment. After recovering persisted browser state, the verifier read first/latest pages of all six text fields through readTextPage, the same bounded reader used by source-backed PagedText, and compared them with reference string paging. Checkpoint identity, native-server restart, detached history recovery, import continuation and publisher deduplication also passed. The reopened snapshot range cache needed no additional content requests.
+
+Full local validation passed 317 tests in 44 files and package verification passed. Browser runtime discovery was retried using its documented recovery flow and returned no connected browsers. Actual React interaction/loading/focus behavior remains unverified; native data-path parity does not establish those checks or complete BrowserSession migration.

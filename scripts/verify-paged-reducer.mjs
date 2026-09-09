@@ -1,3 +1,5 @@
+import { readTextPage } from "../apps/web/dist/text-source.js";
+import { textPage } from "../apps/web/dist/text-page.js";
 import { BrowserPagedState } from "../apps/web/dist/paged-state.js";
 import { createRequire } from "node:module";
 import { BrowserContentStore } from "../apps/web/dist/content-store.js";
@@ -76,6 +78,30 @@ export async function verifyPagedReducer(events, expected, signal) {
       )
     )
       throw new Error("Browser paged reducer differs from reference replay");
+    let pagedTextFields = 0;
+    for (const [name, fields] of [
+      ["messages", ["text"]],
+      ["tools", ["input", "output"]],
+      ["changes", ["patch"]],
+    ]) {
+      for (const [id, original] of expected[name]) {
+        const item = await browser.get(name, id, signal);
+        for (const field of fields) {
+          const source = browser.textSource(item[field]);
+          for (const page of [0, Number.MAX_SAFE_INTEGER])
+            if (
+              !isDeepStrictEqual(
+                await readTextPage(source, page, signal),
+                textPage(original[field], page),
+              )
+            )
+              throw new Error(
+                "Stored text page differs from reference rendering",
+              );
+          pagedTextFields++;
+        }
+      }
+    }
     return {
       events: events.length,
       reopened,
@@ -83,6 +109,7 @@ export async function verifyPagedReducer(events, expected, signal) {
       browserContentReopened: true,
       browserCheckpointRecovered: true,
       identicalContentReferences: true,
+      pagedTextFields,
       storedBytes: store.usage.storedBytes,
     };
   } finally {
