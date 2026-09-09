@@ -20,7 +20,7 @@ export async function publishClaudeRecording(
   await publishNativeRecording(options, {
     agent: "claude",
     nativeSessionId: manifest.nativeSessionId,
-    converterVersion: "claude-history-3",
+    converterVersion: "claude-history-4",
     recordFormat: "native-jsonl",
     follow: async (context) => {
       const consumer = await createClaudeHistoryConsumer(

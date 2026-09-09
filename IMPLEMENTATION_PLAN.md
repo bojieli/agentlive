@@ -923,3 +923,9 @@ Claude native attachment rows include context/reminder records as well as file c
 Embedded plans also update typed plan state with an attachment reference. A file reference alone does not establish activity, so plan status supports `unknown`. Other attachment/reminder forms, goal/task observations, monitor/ledger semantics, binary file forms, and multi-file associations remain required work.
 
 This conversion advances Claude import/live policy identity to `claude-history-3`; earlier converter bindings require explicit migration or a separate publication binding. Do not silently reuse source-effect keys with different normalized content.
+
+### Claude monitor snapshots
+
+Represent recorded comment-monitor and automatic-reaction snapshots as typed `monitor.updated` events with stable per-kind, per-artifact identities. Use their native written/saved timestamps, retain explicit source state and observation flags, and omit account identifiers. Armed comment monitoring is distinct from tool execution; an automatic-reaction ledger does not prove activity, so retain unknown status unless interruption is explicit.
+
+The converter supports the observed version-1 comment snapshots and empty-queue ledger shape. Non-empty or future ledger shapes remain explicit gaps until their contents and semantics are implemented. Monitoring does not activate remote monitors or send reactions. Native provider artifact content still needs authenticated resolution into owned attachments. This changes Claude conversion identity to history 4; older bindings require explicit migration.

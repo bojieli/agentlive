@@ -135,6 +135,7 @@ try {
     messages: state.messages.size,
     tools: state.tools.size,
     tasks: state.tasks.size,
+    monitors: state.monitors.size,
     goals: state.goals.size,
     interactions: state.interactions.size,
     plans: state.plans.size,

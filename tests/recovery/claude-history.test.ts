@@ -512,3 +512,164 @@ it("imports retained file excerpts, edit snippets and plans without reading curr
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("imports monitor-only histories with native timestamps and stable monitor identities", async () => {
+  const { importClaudeRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const { startServer } = await import("../../packages/server/src/http.js");
+  const { initialState, apply, renderTerminalEvent, renderTerminalSnapshot } =
+    await import("../../packages/playback/src/index.js");
+  const root = await mkdtemp(join(tmpdir(), "agentlive-claude-monitors-"));
+  const ownerCredential = "b".repeat(64);
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: ownerCredential,
+    port: 0,
+  });
+  try {
+    const sourcePath = join(root, "monitors.jsonl");
+    const beginning = Date.UTC(2026, 8, 1);
+    const ledger = {
+      everBaselined: true,
+      everHadThreads: false,
+      savedAt: beginning + 2000,
+      stampHighWater: null,
+      threads: [],
+      turnTimestamps: [],
+    };
+    const rows = [
+      {
+        type: "artifact-comment-monitor",
+        v: 1,
+        artifacts: {
+          artifact1: {
+            state: "armed",
+            title: "private-key review",
+            writtenAtMs: beginning,
+          },
+        },
+      },
+      {
+        type: "artifact-comment-monitor",
+        v: 1,
+        artifacts: {
+          artifact1: {
+            state: "armed",
+            title: "updated private-key review",
+            writtenAtMs: beginning + 1000,
+          },
+        },
+      },
+      {
+        type: "artifact-autoreact-ledger",
+        v: 1,
+        accountUuid: "account-never-share",
+        artifacts: { artifact1: ledger },
+      },
+      {
+        type: "artifact-autoreact-ledger",
+        v: 1,
+        artifacts: {
+          artifact1: {
+            ...ledger,
+            interrupted: true,
+            savedAt: beginning + 3000,
+          },
+        },
+      },
+      {
+        type: "artifact-comment-monitor",
+        v: 1,
+        artifacts: {
+          artifact2: {
+            state: "future-state",
+            title: "Future",
+            writtenAtMs: beginning + 4000,
+          },
+        },
+      },
+      {
+        type: "artifact-autoreact-ledger",
+        v: 1,
+        artifacts: {
+          artifact1: { ...ledger, threads: [{ private: "must-not-appear" }] },
+        },
+      },
+    ].map((row) => ({ ...row, sessionId: "native_monitors" }));
+    await writeFile(
+      sourcePath,
+      rows.map((row) => JSON.stringify(row)).join("\n") + "\n",
+    );
+    const manifest = await inspectClaudeHistory(sourcePath);
+    expect(manifest.createdAt).toBe(new Date(beginning).toISOString());
+    const options = {
+      sourcePath,
+      publisherRoot: join(root, "publisher"),
+      serverOrigin: server.url,
+      ownerCredential,
+      title: "Monitors",
+      visibility: "private" as const,
+      secrets: ["private-key"],
+      signal: AbortSignal.timeout(10000),
+    };
+    const imported = await importClaudeRecording(options);
+    expect(imported.report.monitors).toBe(5);
+    expect(imported.report.unsupported).toEqual({
+      "artifact-autoreact-ledger": 1,
+    });
+    const session = await server.store.get(imported.streamId);
+    let state = initialState();
+    let output = "";
+    let serialized = "";
+    const times: number[] = [];
+    for await (const event of session.history(0, session.boundary.sequence)) {
+      const previous = state;
+      state = apply(state, event);
+      output += renderTerminalEvent(
+        event,
+        state,
+        server.url,
+        imported.streamId,
+        previous,
+      );
+      serialized += JSON.stringify(event);
+      if (event.content.kind === "monitor.updated")
+        times.push(event.timelineMs);
+    }
+    expect(times).toEqual([0, 1000, 2000, 3000, 4000]);
+    expect(state.monitors.size).toBe(3);
+    expect(
+      [...state.monitors.values()].find(
+        (value) => value.monitorType === "artifact-autoreact",
+      ),
+    ).toMatchObject({
+      status: "interrupted",
+      baselineEstablished: true,
+      hasObservedThreads: false,
+    });
+    expect(
+      [...state.monitors.values()].find(
+        (value) => value.nativeState === "future-state",
+      )?.status,
+    ).toBe("unknown");
+    expect(output).toContain("Monitor artifact-comments: armed");
+    expect(output).toContain("Monitor artifact-autoreact: interrupted");
+    expect(
+      [...renderTerminalSnapshot(state, server.url, imported.streamId)].join(
+        "",
+      ),
+    ).toContain("updated [REDACTED] review");
+    for (const forbidden of [
+      "private-key",
+      "account-never-share",
+      "must-not-appear",
+    ])
+      expect(serialized).not.toContain(forbidden);
+    const before = session.boundary.sequence;
+    await importClaudeRecording(options);
+    expect(session.boundary.sequence).toBe(before);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

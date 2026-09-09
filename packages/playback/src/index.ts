@@ -31,6 +31,10 @@ export interface RecordingState {
     string,
     Extract<EventContent, { kind: "agent.updated" }>["payload"]
   >;
+  monitors: Map<
+    string,
+    Extract<EventContent, { kind: "monitor.updated" }>["payload"]
+  >;
   tasks: Map<
     string,
     Extract<EventContent, { kind: "task.updated" }>["payload"]
@@ -86,6 +90,7 @@ export function initialState(): RecordingState {
     lifecycle: "open",
     agents: new Map(),
     tasks: new Map(),
+    monitors: new Map(),
     goals: new Map(),
     interactions: new Map(),
     plans: new Map(),
@@ -392,6 +397,11 @@ export function apply(
       );
       break;
     }
+    case "monitor.updated":
+      next.monitors = new Map(state.monitors).set(content.payload.monitorId, {
+        ...content.payload,
+      });
+      break;
     case "task.updated":
       next.tasks = new Map(state.tasks).set(content.payload.taskId, {
         ...content.payload,

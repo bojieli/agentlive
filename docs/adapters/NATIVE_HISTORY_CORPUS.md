@@ -147,3 +147,11 @@ Read-only shape inspection found 340 text-file attachment records, 1,004 edited-
 The refreshed conversion → reducer → event/snapshot renderer pass processed 1,592 files: 1,557 passed and the same 35 failed standalone identity/timing preflight. It emitted 414,506 normalized events, with 71,405 explicit gaps and 1,746 unavailable attachment representations in this resolver-free validation. The increase in unavailable representations includes newly recognized retained bytes that need an artifact resolver; it does not mean those bytes are absent from the native file.
 
 A selected real existing session containing all three new attachment forms passed private HTTP import, replay, retry deduplication, and download verification: 715 source records, 544 producer events, 546 stored events, 33 messages, 127 tools, one plan, and four downloaded attachments verified. Its 177 remaining gaps comprise 143 other attachment records, eight queue operations, six file-history records, three turn-duration records, and 17 agent-name records. No raw session contents were committed.
+
+### Claude artifact monitor observations (2026-09-09)
+
+Shape inspection found 32 version-1 comment-monitor snapshots, all with native state `armed`, and 47 automatic-reaction ledger snapshots with empty thread/turn queues. The latter retain baseline/thread-observation flags and optionally interruption. These now normalize to monitor snapshots; future or non-empty ledger structures remain explicit unsupported records. No account identifier is broadcast and no monitoring/reaction action is performed.
+
+A real existing 325-record session containing both kinds passed private import/replay/retry: 220 producer events, 222 stored events, and two retained monitor identities. Its 39 remaining gaps belong to other attachments, file history, tool references, frame links, turn duration, and queue records. The recorded monitor types no longer appear in its unsupported list.
+
+The refreshed full Claude pass processed 1,593 files: 1,558 passed and the same 35 failed standalone identity/timing preflight. Across passing files it reconstructed 10 monitor identities, emitted 414,531 events, and retained 71,338 explicit gaps and 1,746 unavailable attachment representations in the resolver-free pass. Event and state-snapshot renderings were checked and hashed locally.

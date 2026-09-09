@@ -12,6 +12,7 @@ import {
   type SourceCursor,
   type SourceRecord,
 } from "./jsonl.js";
+import { claudeMonitors } from "./claude-monitors.js";
 import { claudeFileAttachment } from "./claude-file-attachments.js";
 import { chunkContent } from "./chunks.js";
 const hash = (value: string) =>
@@ -52,12 +53,22 @@ export async function inspectClaudeHistory(
         throw new Error("Claude source contains multiple session identities");
       nativeSessionId = row.sessionId;
     }
-    if (
-      row.timestamp &&
-      Number.isFinite(Date.parse(row.timestamp)) &&
-      (!createdAt || Date.parse(row.timestamp) < Date.parse(createdAt))
-    )
-      createdAt = new Date(row.timestamp).toISOString();
+    const timestamps = [
+      ...(row.timestamp ? [row.timestamp] : []),
+      ...(["artifact-comment-monitor", "artifact-autoreact-ledger"].includes(
+        row.type,
+      )
+        ? (claudeMonitors(row, (value) => value) ?? []).map(
+            (value) => value.timestamp,
+          )
+        : []),
+    ];
+    for (const timestamp of timestamps)
+      if (
+        Number.isFinite(Date.parse(timestamp)) &&
+        (!createdAt || Date.parse(timestamp) < Date.parse(createdAt))
+      )
+        createdAt = new Date(timestamp).toISOString();
   }
   if (!nativeSessionId || !createdAt || !boundary)
     throw new Error("Claude source lacks session identity or timestamp");
@@ -111,6 +122,7 @@ export async function createClaudeHistoryConsumer(
     records: 0,
     messages: 0,
     tools: 0,
+    monitors: 0,
     unavailableAttachments: 0,
     availableAttachments: 0,
     omittedReasoning: 0,
@@ -405,6 +417,21 @@ export async function createClaudeHistoryConsumer(
             timestamp,
           );
       }
+    } else if (
+      row.type === "artifact-comment-monitor" ||
+      row.type === "artifact-autoreact-ledger"
+    ) {
+      const observations = claudeMonitors(row, filter);
+      if (!observations) await unsupported(key, row.type, timestamp);
+      else
+        for (const observation of observations) {
+          await emit(
+            key + "/" + observation.key,
+            [observation.content],
+            observation.timestamp,
+          );
+          report.monitors++;
+        }
     } else if (row.type === "attachment") {
       const converted = await claudeFileAttachment(
         row.attachment,

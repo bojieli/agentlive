@@ -140,6 +140,27 @@ function renderContent(
     }
     case "attachment.unavailable":
       return section("Attachment unavailable", content.payload.reason);
+    case "monitor.updated": {
+      const monitor = content.payload;
+      return section(
+        `Monitor ${monitor.monitorType}: ${monitor.status}`,
+        [
+          monitor.title,
+          monitor.sourceReference,
+          monitor.nativeState === undefined
+            ? undefined
+            : "Native state: " + monitor.nativeState,
+          monitor.baselineEstablished === undefined
+            ? undefined
+            : "Baseline established: " + monitor.baselineEstablished,
+          monitor.hasObservedThreads === undefined
+            ? undefined
+            : "Observed threads: " + monitor.hasObservedThreads,
+        ]
+          .filter((value) => value !== undefined)
+          .join("\n"),
+      );
+    }
     case "task.updated":
       return section(
         `Task ${content.payload.taskType}: ${content.payload.status}`,
@@ -297,6 +318,8 @@ export function* renderTerminalSnapshot(
         payload: { artifactId, reason: artifact.reason },
       });
   }
+  for (const payload of state.monitors.values())
+    yield render({ kind: "monitor.updated", payload });
   for (const payload of state.tasks.values())
     yield render({ kind: "task.updated", payload });
   for (const payload of state.goals.values())

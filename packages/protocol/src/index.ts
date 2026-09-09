@@ -58,6 +58,16 @@ export const contentSchema = z.discriminatedUnion("kind", [
     name: z.string().max(500).optional(),
     status: z.enum(["active", "completed", "failed", "interrupted", "unknown"]),
   }),
+  event("monitor.updated", {
+    monitorId: idSchema,
+    monitorType: z.enum(["artifact-comments", "artifact-autoreact"]),
+    sourceReference: z.string().max(1024),
+    title: z.string().max(500),
+    status: z.enum(["armed", "interrupted", "unknown"]),
+    nativeState: z.string().max(500).optional(),
+    baselineEstablished: z.boolean().optional(),
+    hasObservedThreads: z.boolean().optional(),
+  }),
   event("task.updated", {
     taskId: idSchema,
     agentId: idSchema.optional(),

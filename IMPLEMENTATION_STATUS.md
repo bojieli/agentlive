@@ -203,3 +203,11 @@ Claude history and live normalization now convert recorded text-file excerpts, e
 Validation: 149 tests pass, including private downloads, retained bytes, filtering, malformed-shape gaps, references, plan state, reconstructed rendering, and stable retries. The installed Claude live probe passed two native turns, same-session resume, history backfill, live suffix capture, and duplicate-free publisher restart across 26 stored events.
 
 The final full Claude corpus pass converted and rendered 1,557 of 1,592 files; the same 35 lack standalone identity/timing. The selected existing 715-record session passed private import/retry with 546 stored events, four verified attachment downloads, and one typed plan, retaining 177 explicit unsupported gaps. Detailed coverage is recorded in the native-history corpus document.
+
+## Claude monitor snapshot checkpoint — 2026-09-09
+
+Typed monitor state now supports Claude artifact-comment and automatic-reaction snapshots. Replay preserves monitor identity and current state; terminal event and reconstructed-state rendering show status and baseline/thread observations. Native written/saved timestamps are used, and validated monitor-only histories can establish their timestamp boundary without a top-level timestamp. Account identifiers and unsupported ledger contents are not forwarded.
+
+Validation: 150 tests pass, including monitor-only import, native timing, identity reuse, future-state representation, filtering, rejected unknown ledger shape, snapshot rendering, and stable retries. The installed Claude live probe passed two native turns with source-session resume, history backfill, live suffix capture, and duplicate-free publisher restart across 26 stored events.
+
+The full Claude corpus pass converted and rendered 1,558 of 1,593 files, reconstructing 10 monitor identities across the passing histories. The same 35 files lack standalone identity/timing. A selected real session retained two monitor identities through private HTTP import and retry across 222 stored events.

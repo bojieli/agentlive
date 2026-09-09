@@ -101,6 +101,7 @@ for (const config of configurations.filter(
     snapshotBytes: 0,
     messages: 0,
     tools: 0,
+    monitors: 0,
     gaps: 0,
     unavailableArtifacts: 0,
     failureCategories: {},
@@ -193,6 +194,7 @@ for (const config of configurations.filter(
           renderingHash: rendering.digest("hex"),
           messages: state.messages.size,
           tools: state.tools.size,
+          monitors: state.monitors.size,
           gaps: state.gaps.length,
           unavailableArtifacts: [...state.artifacts.values()].filter(
             (artifact) => artifact.reason !== undefined,
@@ -204,6 +206,7 @@ for (const config of configurations.filter(
           "snapshotBytes",
           "messages",
           "tools",
+          "monitors",
           "gaps",
           "unavailableArtifacts",
         ])
