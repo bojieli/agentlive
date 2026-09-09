@@ -376,11 +376,41 @@ try {
   } finally {
     await cached.close();
   }
+  const seekPosition = replay.timelineMs / 2;
+  let seekState = initialState();
+  for await (const event of recording.history(0, final))
+    if (event.timelineMs <= seekPosition) seekState = apply(seekState, event);
+  const expectedSeek = [
+    ...renderTerminalSnapshot(seekState, target.url, streamId, seekPosition),
+  ].join("");
+  const seekAbort = new AbortController();
+  const seekGate = new PlaybackPacer();
+  seekGate.setPaused(true);
+  let seekOutput = "";
+  await watchRecording({
+    serverOrigin: target.url,
+    streamId,
+    credential: password,
+    cacheRoot: join(root, "subscriber"),
+    fromMs: seekPosition,
+    presentation: seekGate,
+    signal: AbortSignal.any([signal, seekAbort.signal]),
+    write: async (text) => {
+      seekOutput += text;
+      if (seekOutput.length >= expectedSeek.length) seekAbort.abort();
+    },
+    onPresented: () => {
+      throw new Error("Seek presented future events while paused");
+    },
+  });
+  if (seekOutput !== expectedSeek)
+    throw new Error("Native viewer seek state differs from its prefix");
   console.log(
     JSON.stringify({
       success: true,
       restoredViewerPosition: true,
       indexedTimelineSeek: true,
+      positionedLiveViewer: true,
       sessionCacheCapacity: 1,
       pausedViewerReceipt: true,
       orderedViewerCatchup: true,

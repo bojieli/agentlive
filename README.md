@@ -217,3 +217,6 @@ Use the same state directory, target server, title, visibility, filtering secret
 
 
 With `watch --resume-view`, playback speed, pause state, and timed/live catch-up mode are saved separately from the event cache and viewing position. Interactive restart shows the saved snapshot even when paused. Noninteractive restart resumes unpaused; an explicit `--speed` overrides saved speed and selects timed playback. `--restart-view` resets both viewing position and playback preferences. Ordinary watch without either flag does not restore or update these preferences.
+
+
+Start a live viewer at a particular recorded time with `agentlive watch --stream <id> --from-ms 30000 --speed 1 --interactive`. The viewer fetches a fixed server history boundary, receives that prefix, displays its state at 30 seconds, then continues with the remaining and newly arriving events. A position beyond the boundary clamps to its latest event. Explicit `--from-ms` overrides a saved viewing position; with `--resume-view`, the selected event position is saved after its snapshot is displayed. Seeking requires the server for the initial boundary, and state reconstruction still uses the terminal viewer’s 64 MiB budget.

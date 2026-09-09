@@ -996,3 +996,12 @@ Store playback speed, pause, and immediate/timed mode as bounded versioned metad
 Subscriber caches expose inclusive `sequenceAt(timelineMs, throughServerSeq)` lookup against a frozen durable prefix. Keep one in-memory timeline anchor per 128 events, binary-search anchors, and verify the short suffix using the checksummed JSONL reader. Equal timestamps resolve to the final eligible sequence, including when they span anchors; a supplied receipt boundary prevents concurrent catch-up from extending the query. Rebuild anchors from JSONL on cache open. Index updates follow durable append, and failed commits cannot advance the index.
 
 Validate monotonic timeline timestamps during commit and recovery; reject regressions without accepting an invalid new receipt. Validate empty/before-first/after-last queries, equal-time spans, fixed prefixes, invalid positions, restart rebuilding, and native recording comparisons. This is the storage lookup needed for viewer seek; state reconstruction, seek controls, and paged snapshots still require implementation.
+
+
+### Initial live-viewer timeline positioning
+
+Expose `watch --from-ms` using the cache’s indexed timeline lookup. Fetch a fixed remote history boundary before starting receipt and reject disagreement with a retained cache’s revision/high-water. Let receipt run independently while presentation waits for that prefix. Clamp requests beyond the boundary to the latest event, select the inclusive event prefix, and reconstruct its state without presenting earlier events as newly received output. Render that snapshot even while playback is paused; later suffix events still obey pause/speed and preserve order.
+
+Explicit positioning overrides a saved presentation cursor. Save the selected cursor only after successful snapshot output when position persistence is enabled. Anchor recorded-time playback at the selected/clamped time; default immediate mode remains immediate. Subsequent receipt cannot extend the initial seek boundary. Initial seek requires remote metadata; ordinary watch retains offline cached presentation. The 64 MiB reconstruction budget remains, and arbitrary in-session seeking plus paged snapshots still require implementation.
+
+Validate zero/interior/beyond-end positions, snapshot isolation from future events while paused, continued receipt and ordered suffix catch-up, terminal controls/seek output, and a real native recording’s reconstructed prefix.

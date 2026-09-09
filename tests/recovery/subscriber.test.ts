@@ -957,3 +957,69 @@ it("seeks cached timelines across equal-time index boundaries and rebuilds on re
     await cache.close();
   }
 });
+
+it.each([0, 2, 9999])(
+  "positions live watch at a frozen history time while receipt continues (from=%s)",
+  async (fromMs) => {
+    const { watchRecording } = await import("../../packages/cli/src/watch.js");
+    const { PlaybackPacer, initialState, apply, renderTerminalSnapshot } =
+      await import("../../packages/playback/src/index.js");
+    const { root, server, session, publish } = await setup();
+    await publish(6);
+    const history = [];
+    for await (const event of session.history(0, session.boundary.sequence))
+      history.push(event);
+    const position = Math.min(fromMs, history.at(-1)!.timelineMs);
+    let expected = initialState();
+    for (const event of history)
+      if (event.timelineMs <= position) expected = apply(expected, event);
+    const snapshot = [
+      ...renderTerminalSnapshot(
+        expected,
+        server.url,
+        session.info.id,
+        position,
+      ),
+    ].join("");
+    const playback = new PlaybackPacer();
+    playback.setPaused(true);
+    const abort = new AbortController();
+    let output = "";
+    let receipt = 0;
+    const presented: number[] = [];
+    const done = watchRecording({
+      serverOrigin: server.url,
+      streamId: session.info.id,
+      cacheRoot: join(root, "seek-view"),
+      signal: abort.signal,
+      fromMs,
+      resumeView: true,
+      presentation: playback,
+      write: async (text) => {
+        output += text;
+      },
+      onReceipt: (seq) => {
+        receipt = seq;
+      },
+      onPresented: (seq) => {
+        presented.push(seq);
+      },
+    });
+    runs.push({ abort, done });
+    await expect.poll(() => output).toBe(snapshot);
+    expect(presented).toEqual([]);
+    await publish(2);
+    await expect.poll(() => receipt).toBe(session.boundary.sequence);
+    expect(output).toBe(snapshot);
+    playback.setPaused(false);
+    await expect.poll(() => presented.at(-1)).toBe(receipt);
+    expect(presented).toEqual(
+      Array.from(
+        { length: receipt - expected.appliedSeq },
+        (_, index) => expected.appliedSeq + index + 1,
+      ),
+    );
+    abort.abort();
+    await done;
+  },
+);
