@@ -1270,3 +1270,10 @@ Share TextContent page/manifest encoding, validation, bounded range reads and im
 The browser backend persists namespaced immutable blobs with atomic global quota accounting, rejects corrupt stored bytes, serializes a bounded queue and drains cancellation before database close. Version changes and the clear-saved-history action close/delete content storage. Verify cross-backend identity, concurrent quota, pending replacement recovery, corrupt bytes, stalled source shutdown and real native event reduction through both backends with identical checkpoint references.
 
 Keep browser working-state publication, snapshot transport/local-content bridging, automatic seeking, asynchronous viewport reads and eviction recovery as required integration work. Do not describe the writable backend alone as a completed paged viewer. See [BROWSER_CONTENT.md](docs/protocol/BROWSER_CONTENT.md).
+
+
+### Atomic browser paged-state publication
+
+BrowserPagedState now serializes bounded event batches into PagedReducer and selects completed roots through BrowserContentStore's IndexedDB compare-and-set checkpoint pointer. Reopen the saved root and continue from its sequence without retaining the event prefix. Validate root binding/boundaries, reject divergent stale writers or backward replacement and permit exact publication retries. Keep latest reduced history separate from paused viewport position.
+
+Only update in-memory state after pointer publication succeeds. Failed/cancelled batches can leave derivative pages but cannot claim a partial prefix. Reopen after an uncertain commit outcome. Verify simultaneous writers, suffix continuation, failed batches, cancellation during the actual pointer transaction and native recording recovery from the persisted pointer. Production BrowserSession receipt/viewport integration, snapshot import, historical checkpoint seeking and eviction recovery remain required.

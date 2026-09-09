@@ -170,3 +170,10 @@ The full suite passed 304 tests in 41 files. A tightened revision-isolation test
 On 2026-09-10, a live Codex app-server run passed with 108 stored events, five messages, one tool and no reported capture gaps. The verifier applied each event through paged reducers backed by filesystem TextStore and BrowserContentStore using fake IndexedDB. Midpoint checkpoints had identical content references. Both stores were closed/reopened, reduction continued and final state matched reference replay. Filesystem paged state/content used 226,413 bytes.
 
 Native restart/resume, deduplication, browser-model restoration, search and seeking passed. The shared snapshot range cache also reopened and reconstructed the recording with zero additional content requests. Full local validation passed 308 tests in 42 files, including filesystem crash/corruption/ownership tests after codec extraction, and standalone package verification passed. This establishes the shared codec and writable browser backend; automatic paged browser working-state publication and actual device validation remain unfinished.
+
+
+## Recovery from the browser's published state pointer
+
+On 2026-09-10, Claude `--resume-import` passed two native turns with 28 stored events, four messages and 16 activity items. The verifier used BrowserPagedState to apply/publish each event, closed it at the midpoint, and reopened by discovering the persisted checkpoint pointer. The midpoint reference matched the filesystem checkpoint, and final state matched reference replay. Import continuation, native resume, full-history backfill, live suffix capture and deduplication passed. The snapshot range cache reopened with zero additional content reads.
+
+The full suite passed 312 tests in 43 files. A subsequent focused suite passed five tests, including a new cancellation injected during the IndexedDB root-write transaction; reopening retained the previous checkpoint. Standalone installation/reproducible build also passed. BrowserSession receipt and viewport integration remain separate work.

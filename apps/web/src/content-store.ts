@@ -1,3 +1,4 @@
+import { PagedReducer } from "@agentlive/playback";
 import {
   TextContent,
   canonicalJson,
@@ -5,6 +6,8 @@ import {
   idSchema,
   ProtocolError,
   type TextReference,
+  snapshotDescriptorSchema,
+  type SnapshotDescriptor,
 } from "@agentlive/protocol";
 import type { CacheBinding } from "./history-cache.js";
 const DATABASE = "agentlive-content-v1",
@@ -32,6 +35,7 @@ export class BrowserContentStore {
     private readonly db: IDBDatabase,
     private readonly scope: string,
     private readonly maxBytes: number,
+    private readonly binding: { streamId: string; revision: string },
   ) {
     this.codec = new TextContent({
       load: (ref, signal) => this.load(ref, signal!),
@@ -54,6 +58,11 @@ export class BrowserContentStore {
       throw new RangeError("Invalid browser content quota");
     const signal = AbortSignal.any([parent, AbortSignal.timeout(10000)]);
     signal.throwIfAborted();
+    binding = {
+      serverOrigin: new URL(binding.serverOrigin).origin,
+      streamId: idSchema.parse(binding.streamId),
+      revision: idSchema.parse(binding.revision),
+    };
     const scope = await hash(
       encoder.encode(
         canonicalJson({
@@ -86,7 +95,12 @@ export class BrowserContentStore {
           request.result.close();
           reject(signal.reason);
         } else
-          resolve(new BrowserContentStore(request.result, scope, maxBytes));
+          resolve(
+            new BrowserContentStore(request.result, scope, maxBytes, {
+              streamId: binding.streamId,
+              revision: binding.revision,
+            }),
+          );
       };
       if (signal.aborted) abort();
     });
@@ -256,6 +270,76 @@ export class BrowserContentStore {
     return this.run(signal, (active) =>
       this.codec.read(ref, offset, length, active),
     );
+  }
+  private checkpoint(value: unknown): SnapshotDescriptor {
+    const parsed = snapshotDescriptorSchema.safeParse(value);
+    if (!parsed.success || parsed.data.format !== "agentlive.paged-state")
+      bad();
+    return parsed.data;
+  }
+  loadCheckpoint(signal?: AbortSignal): Promise<SnapshotDescriptor | null> {
+    return this.run(signal, (active) =>
+      this.transaction("readonly", active, (tx, read, result) => {
+        read(tx.objectStore("meta").get(`root:${this.scope}`), (value) =>
+          result(value === undefined ? null : this.checkpoint(value)),
+        );
+      }),
+    );
+  }
+  /** Atomically choose a completed reducer root. A stale writer must reopen before retrying. */
+  publishCheckpoint(
+    expected: SnapshotDescriptor | null,
+    next: SnapshotDescriptor,
+    signal?: AbortSignal,
+  ): Promise<SnapshotDescriptor> {
+    expected = expected === null ? null : this.checkpoint(expected);
+    next = this.checkpoint(next);
+    return this.run(signal, async (active) => {
+      // Use the codec directly inside store admission; public read would re-enter this queue.
+      const reducer = new PagedReducer({
+        read: (ref, offset, length, signal) =>
+          this.codec.read(ref, offset, length, signal),
+        put: async () => {
+          throw new Error("Checkpoint validation is read-only");
+        },
+        append: async () => {
+          throw new Error("Checkpoint validation is read-only");
+        },
+      });
+      const state = await reducer.open(next.ref, this.binding, active);
+      if (
+        state.appliedSeq !== next.serverSeq ||
+        state.timelineMs !== next.timelineMs
+      )
+        bad();
+      return this.transaction("readwrite", active, (tx, read, result) => {
+        const meta = tx.objectStore("meta"),
+          key = `root:${this.scope}`;
+        read(meta.get(key), (raw) => {
+          const current = raw === undefined ? null : this.checkpoint(raw);
+          if (canonicalJson(current) === canonicalJson(next)) {
+            result(next);
+            return;
+          }
+          if (canonicalJson(current) !== canonicalJson(expected))
+            throw new ProtocolError(
+              "event_conflict",
+              "Browser checkpoint changed in another writer",
+            );
+          if (
+            current &&
+            (next.serverSeq <= current.serverSeq ||
+              next.timelineMs < current.timelineMs)
+          )
+            throw new ProtocolError(
+              "event_conflict",
+              "Browser checkpoint cannot move backward or replace a sequence",
+            );
+          meta.put(next, key);
+          result(next);
+        });
+      });
+    });
   }
   static async clear(factory: IDBFactory, parent: AbortSignal): Promise<void> {
     const signal = AbortSignal.any([parent, AbortSignal.timeout(10000)]);
