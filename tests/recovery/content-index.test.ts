@@ -77,6 +77,12 @@ it("updates one tree path, preserves historical roots and reopens bounded ordere
     const reduced = await index.delete(root, name(551));
     expect(reduced!.count).toBe(1099);
     expect(await index.get(reduced, name(551))).toBeUndefined();
+    reads = 0;
+    expect(await index.rank(reduced, name(1024))).toBe(1023);
+    expect(reads).toBeLessThanOrEqual(4);
+    expect(await index.rank(root, name(1024))).toBe(1024);
+    expect(await index.rank(reduced, name(551))).toBeUndefined();
+    expect(await index.rank(root, "key-99999")).toBeUndefined();
     expect(await index.get(root, name(551))).toEqual(second);
   } finally {
     await current.close();

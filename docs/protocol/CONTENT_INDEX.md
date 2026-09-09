@@ -19,3 +19,6 @@ Keys are strings of at most 512 UTF-16 units, ordered with JavaScript string com
 The caller must supply durable value references, retain the chosen root, and atomically publish it within the recording's revision-bound metadata. The index neither selects between concurrently created roots nor performs deletion/garbage collection. Cancellation can leave unreachable durable nodes, but cannot return a newly changed root after it observes the abort. Existing roots remain usable through their content provider.
 
 This key order does not encode native Map insertion order. The paged Map/reducer layer must add ordering and source-key handling, then integrate the index into snapshots. Current production snapshots and viewers still use their existing state representation; this library is their storage prerequisite, not a new viewer mode or completed scalability gate.
+
+
+`rank(root, key, signal)` returns an existing key's zero-based position or undefined. It follows the key path while summing verified preceding subtree counts; it does not enumerate those rows or load value content. Reopened 1,100-entry coverage checks rank before/after deletion and bounds the lookup to four metadata reads. ActivityIndex uses this operation for row navigation.

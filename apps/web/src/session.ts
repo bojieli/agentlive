@@ -1,5 +1,5 @@
 import { openRecordingHistory, SubscriberClient } from "@agentlive/client";
-import { apply, initialState } from "@agentlive/playback";
+import { apply, initialState, activityMentions } from "@agentlive/playback";
 import {
   BrowserHistoryCache,
   CacheAheadError,
@@ -330,22 +330,9 @@ export class BrowserSession {
         "This browser viewer has reached its 64 MiB recording limit.",
       );
     for (const event of events) {
-      const payload = event.content.payload as Record<string, unknown>;
-      for (const [kind, field] of Object.entries({
-        messages: "messageId",
-        tools: "toolId",
-        changes: "changeId",
-        artifacts: "artifactId",
-        agents: "agentId",
-        tasks: "taskId",
-        goals: "goalId",
-        interactions: "interactionId",
-        plans: "planId",
-        monitors: "monitorId",
-      })) {
-        const id = payload[field];
-        if (typeof id === "string" && !this.objectOrder.has(`${kind}/${id}`))
-          this.objectOrder.set(`${kind}/${id}`, event.serverSeq);
+      for (const { key } of activityMentions(event)) {
+        if (!this.objectOrder.has(key))
+          this.objectOrder.set(key, event.serverSeq);
       }
     }
     for (const event of events) this.events.push(event);

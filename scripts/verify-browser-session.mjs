@@ -128,17 +128,37 @@ export async function verifyBrowserSession(
           }),
         ),
       );
-    const contentStore = await verifyContentStore(viewer.state, signal);
-    const serverSnapshot = await verifyServerSnapshot(
-      serverOrigin,
-      streamId,
-      credential,
-      history.metadata.revision,
-      viewer.state,
-      signal,
+    const verificationMs = {};
+    const measured = async (name, operation) => {
+      const started = performance.now();
+      try {
+        return await operation();
+      } catch (cause) {
+        throw new Error(`Native browser verification failed during ${name}`, {
+          cause,
+        });
+      } finally {
+        verificationMs[name] = Math.round(performance.now() - started);
+      }
+    };
+    const contentStore = await measured("contentStore", () =>
+      verifyContentStore(viewer.state, signal),
     );
-    const pagedReducer = await verifyPagedReducer(events, viewer.state, signal);
+    const serverSnapshot = await measured("serverSnapshot", () =>
+      verifyServerSnapshot(
+        serverOrigin,
+        streamId,
+        credential,
+        history.metadata.revision,
+        viewer.state,
+        signal,
+      ),
+    );
+    const pagedReducer = await measured("pagedReducer", () =>
+      verifyPagedReducer(events, viewer.state, signal),
+    );
     const counts = {
+      verificationMs,
       contentStore,
       pagedReducer,
       serverSnapshot,

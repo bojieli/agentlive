@@ -1291,3 +1291,10 @@ Cancel obsolete source/page requests, hide mismatched results, show loading/erro
 BrowserPagedState now exposes a frozen PagedActivityView. Load a selected activity object and only its directly rendered links; pass immutable text sources into the existing card renderer. Preserve all card families and plan-version references. Page attachment descriptors in groups of at most 32, validating indexed identity/version before exposure.
 
 ActivityFeed accepts the paged view and mounts asynchronous cards with cancellation, boundary checks, stale-result suppression, loading/error states and retry controls. Tests verify metadata isolation, no retained-text reads while loading a card, frozen views after visibility updates, workflow links, version pagination and native metadata/text equivalence. Production BrowserSession receipt, row enumeration, seek/search migration and actual browser interaction remain required.
+
+
+### Persistent activity ordering and position lookup
+
+ActivityIndex now derives seen/visible row trees from canonical events and matching paged reducer state. Preserve first-mention ordering, kind ties, capture-note placement and original position after hide/show. Include attachment descriptors in the shared mention helper used by BrowserSession.
+
+Expose bounded row ranges and direct position lookup using ContentIndex subtree counts. Verify visited paired references, root sequence and binding; preserve old roots on cancellation. Checkpoint/reopen both trees together and compare native ordering and positions with reference activity. Production atomic pairing with browser reducer checkpoints, feed row/navigation queries, paged search and long-session acceptance remain required.

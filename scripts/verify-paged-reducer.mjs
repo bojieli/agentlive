@@ -15,6 +15,9 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { TextStore } from "../packages/storage/dist/index.js";
 import {
+  ActivityIndex,
+  initialActivityIndex,
+  activityMentions,
   PagedReducer,
   initialPagedState,
 } from "../packages/playback/dist/index.js";
@@ -25,7 +28,10 @@ export async function verifyPagedReducer(events, expected, signal) {
     store = await TextStore.open(directory);
     let reducer = new PagedReducer(store),
       state = initialPagedState(),
-      reopened = false;
+      reopened = false,
+      activityIndex = new ActivityIndex(store),
+      activityRoot = initialActivityIndex();
+    const firstMention = new Map();
     const binding = {
       streamId: "native-paged-probe",
       revision: "native-paged-revision",
@@ -38,9 +44,23 @@ export async function verifyPagedReducer(events, expected, signal) {
     browser = await BrowserPagedState.open(factory, browserBinding, signal);
     for (const [index, event] of events.entries()) {
       state = await reducer.apply(state, event, signal);
+      activityRoot = await activityIndex.apply(
+        activityRoot,
+        event,
+        state,
+        reducer,
+        signal,
+      );
+      for (const { key } of activityMentions(event))
+        if (!firstMention.has(key)) firstMention.set(key, event.serverSeq);
       await browser.apply([event], signal);
       if (index === Math.floor(events.length / 2)) {
         const checkpoint = await reducer.checkpoint(state, binding, signal);
+        const activityCheckpoint = await activityIndex.checkpoint(
+          activityRoot,
+          binding,
+          signal,
+        );
         const browserCheckpoint = browser.checkpoint.ref;
         if (!isDeepStrictEqual(browserCheckpoint, checkpoint))
           throw new Error("Browser and filesystem content references differ");
@@ -51,6 +71,12 @@ export async function verifyPagedReducer(events, expected, signal) {
         await store.close();
         store = await TextStore.open(directory);
         reducer = new PagedReducer(store);
+        activityIndex = new ActivityIndex(store);
+        activityRoot = await activityIndex.open(
+          activityCheckpoint,
+          binding,
+          signal,
+        );
         state = await reducer.open(checkpoint, binding, signal);
         reopened = true;
       }
@@ -144,6 +170,34 @@ export async function verifyPagedReducer(events, expected, signal) {
       }
       pagedActivityCards++;
     }
+    const orderedKeys = [];
+    for (
+      let offset = 0;
+      offset < (activityRoot.visible?.count ?? 0);
+      offset += 32
+    )
+      orderedKeys.push(
+        ...(await activityIndex.entries(activityRoot, offset, 32, signal)).map(
+          (row) => row.key,
+        ),
+      );
+    if (
+      !isDeepStrictEqual(
+        orderedKeys,
+        activityRows(
+          expected,
+          (key) => firstMention.get(key) ?? Number.MAX_SAFE_INTEGER,
+        ).map((row) => row.key),
+      )
+    )
+      throw new Error(
+        "Persistent activity order differs from reference viewer",
+      );
+    for (const [position, key] of orderedKeys.entries())
+      if (
+        (await activityIndex.position(activityRoot, key, signal)) !== position
+      )
+        throw new Error("Persistent activity position differs from row order");
     return {
       events: events.length,
       reopened,
@@ -153,6 +207,7 @@ export async function verifyPagedReducer(events, expected, signal) {
       identicalContentReferences: true,
       pagedTextFields,
       pagedActivityCards,
+      indexedActivityRows: orderedKeys.length,
       storedBytes: store.usage.storedBytes,
     };
   } finally {

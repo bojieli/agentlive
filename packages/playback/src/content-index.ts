@@ -259,6 +259,36 @@ export class ContentIndex {
     }
     return undefined;
   }
+  /** Position of an existing key, using subtree counts without enumerating preceding values. */
+  async rank(
+    input: IndexRoot | null,
+    name: string,
+    signal?: AbortSignal,
+  ): Promise<number | undefined> {
+    if (!key(name)) throw new RangeError("Invalid content index key");
+    signal?.throwIfAborted();
+    let span = input === null ? null : copyIndexRoot(input),
+      offset = 0;
+    for (let depth = 0; span; depth++) {
+      if (depth > 64) corrupt();
+      const node = await this.load(span, signal);
+      if (node.kind === "leaf") {
+        const index = node.entries.findIndex(([entry]) => entry === name);
+        return index < 0 ? undefined : offset + index;
+      }
+      span = null;
+      for (const child of node.children) {
+        if (name < child.first) break;
+        if (name <= child.last) {
+          span = child;
+          break;
+        }
+        offset += child.count;
+      }
+    }
+    signal?.throwIfAborted();
+    return undefined;
+  }
   /** Read at most 32 entries in key order without loading value content. */
   async entries(
     input: IndexRoot | null,

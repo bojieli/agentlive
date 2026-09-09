@@ -538,3 +538,12 @@ export {
   PagedSnapshotReader,
   openRecordingSnapshot,
 } from "./paged-snapshot.js";
+
+export {
+  ActivityIndex,
+  initialActivityIndex,
+  activityMentions,
+  type ActivityIndexRoot,
+  type ActivityIdentity,
+  type IndexedActivityKind,
+} from "./activity-index.js";
