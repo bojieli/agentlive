@@ -7,3 +7,5 @@ export type { BlobDescriptor, BlobLimits, StagedBlob } from "./blobs.js";
 export { SubscriberCache } from "./subscriber-cache.js";
 
 export type { PlaybackPreferences } from "./subscriber-cache.js";
+export { TextStore, CONTENT_PAGE_UNITS } from "./text-store.js";
+export type { TextReference } from "./text-store.js";

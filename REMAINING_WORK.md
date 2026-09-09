@@ -14,7 +14,7 @@ The committed checkpoint has 252 passing local tests, successful package install
 - Verify desktop/mobile layout, keyboard/screen-reader behavior, actual browser storage, quota eviction, crashes, suspend/resume, and focus/scroll recovery. No browser is currently connected for these checks.
 - Measure the plan's long-session and memory targets, including an eight-hour/500,000-event seek workload.
 
-Current uncommitted work: TextStore pages/manifests and bounded verified range reads compile. Tests, recovery validation, production playback integration, and HTTP exposure are not yet complete. This is not an implemented paged viewer.
+Content-store foundation: TextStore pages/manifests and bounded verified range reads now have restart, real-process-death, corruption, quota, cancellation, queue, and ownership-drain tests, plus reopened reads of real native-session text. Production paged-reducer/viewer integration, snapshots, safe content collection, and HTTP exposure remain incomplete. This is not an implemented paged viewer.
 
 ## 2. Complete native-agent integration and fidelity — M0/M3
 

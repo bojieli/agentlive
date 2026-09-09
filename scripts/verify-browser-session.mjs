@@ -1,4 +1,5 @@
 /** Exercise the actual browser transport/model against a native probe's recording. */
+import { verifyContentStore } from "./verify-content-store.mjs";
 import { createRequire } from "node:module";
 const require = createRequire(
   new URL("../apps/web/package.json", import.meta.url),
@@ -125,7 +126,9 @@ export async function verifyBrowserSession(
           }),
         ),
       );
+    const contentStore = await verifyContentStore(viewer.state, signal);
     const counts = {
+      contentStore,
       renderedActivityItems: rows.length,
       activitySearchVerified,
       activityMarkupHash: rendered.digest("hex"),
