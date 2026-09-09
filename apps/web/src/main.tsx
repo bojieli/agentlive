@@ -1,3 +1,4 @@
+import { BrowserContentStore } from "./content-store.js";
 import { BrowserSnapshotCache } from "./snapshot-cache.js";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -112,6 +113,10 @@ function App() {
     try {
       await clearSavedHistories(cachePlatform, AbortSignal.timeout(10000));
       await BrowserSnapshotCache.clear(
+        cachePlatform.indexedDB,
+        AbortSignal.timeout(10000),
+      );
+      await BrowserContentStore.clear(
         cachePlatform.indexedDB,
         AbortSignal.timeout(10000),
       );

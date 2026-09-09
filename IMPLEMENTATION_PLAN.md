@@ -1261,3 +1261,12 @@ Validate suffix-only reconstruction after reopen, legacy catalog compatibility, 
 Add optional SnapshotReadCache support to the shared HTTP snapshot client and an IndexedDB BrowserSnapshotCache. Scope keys to normalized server/recording, revision, complete content reference and range. Verify a key/text checksum on local reads, preserve exact UTF-16 ranges, cap retention at 256 ranges of at most 65,536 units, and evict oldest writes atomically with insertion. Selection/publication still authorizes against the server.
 
 Keep crypto outside transactions; bound admission, database work and even uncooperative cache implementations. Treat invalid derivative data as a miss and cache failures as network fallback, while preserving caller cancellation. Clear ranges with saved browser history. Verify persistence, corruption, eviction, clearing, revision isolation, cancellation and live native snapshot recovery after reopening IndexedDB. This supplies the read cache; production BrowserSession paged working state, automatic seeking and complete offline retention remain required.
+
+
+### Portable content codec and writable IndexedDB content
+
+Share TextContent page/manifest encoding, validation, bounded range reads and immutable append between filesystem TextStore and BrowserContentStore. Preserve exact existing filesystem references and crash/ownership semantics. Backend implementations retain checksum verification, admission, quota transactions and durability behavior.
+
+The browser backend persists namespaced immutable blobs with atomic global quota accounting, rejects corrupt stored bytes, serializes a bounded queue and drains cancellation before database close. Version changes and the clear-saved-history action close/delete content storage. Verify cross-backend identity, concurrent quota, pending replacement recovery, corrupt bytes, stalled source shutdown and real native event reduction through both backends with identical checkpoint references.
+
+Keep browser working-state publication, snapshot transport/local-content bridging, automatic seeking, asynchronous viewport reads and eviction recovery as required integration work. Do not describe the writable backend alone as a completed paged viewer. See [BROWSER_CONTENT.md](docs/protocol/BROWSER_CONTENT.md).

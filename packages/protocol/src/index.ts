@@ -382,3 +382,11 @@ export const subscriberMessageSchema = z.discriminatedUnion("type", [
   z.strictObject({ ...requestFields, type: z.literal("unsubscribe") }),
   z.strictObject({ ...requestFields, type: z.literal("heartbeat") }),
 ]);
+
+export {
+  TextContent,
+  validateTextReference,
+  CONTENT_PAGE_UNITS,
+  type TextReference,
+  type TextContentBackend,
+} from "./text-content.js";

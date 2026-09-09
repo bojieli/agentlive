@@ -18,3 +18,8 @@ Each async input chunk is limited to 65,536 units. A text has at most 4,096 page
 Put and append share admission, quota, cancellation and durability handling. They return a reference only after observing successful final manifest installation and checking cancellation. A cancelled or failed operation may leave reusable orphan content. Retrying the same append against the same base yields the same reference and reuses existing bytes. Cancellation never removes or overwrites the base. Actual process-death tests cover interrupted page writes and completed manifests.
 
 References are values, not mutable pointers. The caller must atomically publish the chosen new reference inside its recording/revision-bound state and retain old references needed for playback. Concurrent appends against one base create independent versions; TextStore does not choose a winning version. Snapshot/reducer integration, retention/pins and garbage collection are separate layers.
+
+
+## Portable codec
+
+TextStore now delegates page/manifest validation, streaming paging, append and bounded range reconstruction to the protocol package's TextContent codec. The filesystem backend retains its verified blob reads/writes, directory flushes, queue, close/drain and kernel ownership lock. BrowserContentStore uses the same codec with IndexedDB transactions; reference identity is tested across both backends. See [BROWSER_CONTENT.md](BROWSER_CONTENT.md) for browser capacity and eviction constraints.
