@@ -1005,3 +1005,12 @@ Expose `watch --from-ms` using the cache’s indexed timeline lookup. Fetch a fi
 Explicit positioning overrides a saved presentation cursor. Save the selected cursor only after successful snapshot output when position persistence is enabled. Anchor recorded-time playback at the selected/clamped time; default immediate mode remains immediate. Subsequent receipt cannot extend the initial seek boundary. Initial seek requires remote metadata; ordinary watch retains offline cached presentation. The 64 MiB reconstruction budget remains, and arbitrary in-session seeking plus paged snapshots still require implementation.
 
 Validate zero/interior/beyond-end positions, snapshot isolation from future events while paused, continued receipt and ordered suffix catch-up, terminal controls/seek output, and a real native recording’s reconstructed prefix.
+
+
+### In-session live viewer seeking
+
+Expose arbitrary time requests through PlaybackPacer.seek and completed position notifications through watch onPositioned. Interactive keys [ and ] move by 30 seconds; 0 returns to the beginning and pauses for inspection. Seek against the durable receipt boundary captured when requesting the move, using the sparse timeline index and reconstructing only that prefix. Receipt continues independently and does not reconnect for seeking.
+
+Wake paused/timed presentation waits and waits for additional cache events when a seek arrives. Keep only the latest pending request. Finish accepted output before displaying a replacement snapshot, avoiding overlapping sink writes; process a newer pending request after the active reconstruction/output completes. Use the active target immediately for relative keypresses during snapshot rendering. Keep cancellation separate so quit can still stop a blocked output sink. Preserve pause for programmatic seeks, reset the timing anchor after reconstruction, and persist a selected sequence only after snapshot output succeeds.
+
+Each reconstruction retains the existing 64 MiB event budget; reset that counter when replacing state so repeated seeks do not consume a cumulative budget. Seeking works on cached history during receipt outages and clamps beyond received history. Paged reconstruction, browser/mobile interfaces, and seek support in the standalone replay command remain separate work.

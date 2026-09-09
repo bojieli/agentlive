@@ -1023,3 +1023,127 @@ it.each([0, 2, 9999])(
     await done;
   },
 );
+
+it("seeks backward and forward while paused, coalesces requests, and keeps receipt connected", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { PlaybackPacer } =
+    await import("../../packages/playback/src/index.js");
+  const { root, server, session, publish } = await setup();
+  await publish(6);
+  const retained = [];
+  for await (const event of session.history(0, session.boundary.sequence))
+    retained.push(event);
+  const initialTime = retained[4]!.timelineMs;
+  const playback = new PlaybackPacer();
+  playback.setPaused(true);
+  const abort = new AbortController();
+  let receipt = 0;
+  const positions: { serverSeq: number; timelineMs: number }[] = [];
+  const shown: number[] = [];
+  let connections = 0;
+  const done = watchRecording({
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    cacheRoot: join(root, "reseek"),
+    signal: abort.signal,
+    fromMs: initialTime,
+    presentation: playback,
+    write: async () => {},
+    onReceipt: (seq) => {
+      receipt = seq;
+    },
+    onPositioned: (position) => {
+      positions.push(position);
+    },
+    onPresented: (seq) => {
+      shown.push(seq);
+    },
+    onStatus: (status) => {
+      if (status === "connecting") connections++;
+    },
+  });
+  runs.push({ abort, done });
+  await expect.poll(() => positions.length).toBe(1);
+  const initial = positions[0]!;
+  playback.seek(0);
+  await expect.poll(() => positions.length).toBe(2);
+  expect(positions[1]!.serverSeq).toBeLessThan(initial.serverSeq);
+  playback.seek(9999);
+  await expect.poll(() => positions.length).toBe(3);
+  expect(positions[2]!.serverSeq).toBe(receipt);
+  await publish(2);
+  await expect.poll(() => receipt).toBe(session.boundary.sequence);
+  expect(shown).toEqual([]);
+  playback.seek(0);
+  playback.seek(initialTime);
+  await expect.poll(() => positions.length).toBe(4);
+  expect(positions[3]).toEqual(initial);
+  expect(connections).toBe(1);
+  playback.setPaused(false);
+  await expect.poll(() => shown.at(-1)).toBe(receipt);
+  expect(shown).toEqual(
+    Array.from(
+      { length: receipt - initial.serverSeq },
+      (_, i) => initial.serverSeq + i + 1,
+    ),
+  );
+  abort.abort();
+  await done;
+  const count = positions.length;
+  playback.seek(0);
+  expect(positions.length).toBe(count);
+});
+
+it("finishes an accepted output write before rendering a requested seek snapshot", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { PlaybackPacer } =
+    await import("../../packages/playback/src/index.js");
+  const { root, server, session, publish } = await setup();
+  await publish(4);
+  const playback = new PlaybackPacer();
+  const abort = new AbortController();
+  const entered = deferred();
+  const release = deferred();
+  let receipt = 0,
+    writes = 0,
+    positioned = 0;
+  let writing = false;
+  const done = watchRecording({
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    cacheRoot: join(root, "seek-output"),
+    signal: abort.signal,
+    presentation: playback,
+    write: async () => {
+      expect(writing).toBe(false);
+      writing = true;
+      if (++writes === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      writing = false;
+    },
+    onReceipt: (seq) => {
+      receipt = seq;
+    },
+    onPositioned: () => {
+      positioned++;
+    },
+  });
+  runs.push({ abort, done });
+  try {
+    await entered.promise;
+    playback.setPaused(true);
+    playback.seek(0);
+    await publish(2);
+    await expect.poll(() => receipt).toBe(session.boundary.sequence);
+    expect(positioned).toBe(0);
+    expect(writes).toBe(1);
+    release.resolve();
+    await expect.poll(() => positioned).toBe(1);
+  } finally {
+    release.resolve();
+    abort.abort();
+    await done;
+  }
+});

@@ -5,6 +5,19 @@ export class PlaybackPacer {
   private rate: number;
   private stopped = false;
   private immediatePlayback = false;
+  private seeks = new Set<(timelineMs: number) => void>();
+  /** Request source repositioning; the viewer resets timing after rebuilding state. */
+  seek(timelineMs: number) {
+    if (!Number.isFinite(timelineMs) || timelineMs < 0)
+      throw new RangeError("Invalid seek position");
+    for (const listener of [...this.seeks]) listener(timelineMs);
+  }
+  onSeek(listener: (timelineMs: number) => void) {
+    this.seeks.add(listener);
+    return () => {
+      this.seeks.delete(listener);
+    };
+  }
   private changes = new Set<() => void>();
   onChange(listener: () => void) {
     this.changes.add(listener);

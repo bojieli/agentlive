@@ -72,6 +72,14 @@ for quit_early in (True, False):
         if quit_early:
             os.write(master, b"q")
         else:
+            if watching:
+                output = b""
+                os.write(master, b"[")
+                read_until(b"[0.000s] Playback state")
+                output = b""
+                os.write(master, b"]")
+                read_until(b"[30.000s] Playback state")
+                assert b"SECOND_PTY_MESSAGE" not in output, "Seek displayed future content"
             os.write(master, b"+-l" if watching else b"++++++++++ ")
             read_until(b"SECOND_PTY_MESSAGE")
             if watching:
@@ -98,7 +106,7 @@ for quit_early in (True, False):
             child.wait()
         os.close(master)
         os.close(slave)
-print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "liveCatchup": watching, "quit": True, "terminalRestored": True, "seekState": True, "watchControls": watching, "persistedPreferences": watching}))
+print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "liveCatchup": watching, "quit": True, "terminalRestored": True, "seekState": True, "watchControls": watching, "persistedPreferences": watching, "inSessionSeek": watching}))
 `;
   const result = await promisify(execFile)(
     "python3",

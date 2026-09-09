@@ -220,3 +220,6 @@ With `watch --resume-view`, playback speed, pause state, and timed/live catch-up
 
 
 Start a live viewer at a particular recorded time with `agentlive watch --stream <id> --from-ms 30000 --speed 1 --interactive`. The viewer fetches a fixed server history boundary, receives that prefix, displays its state at 30 seconds, then continues with the remaining and newly arriving events. A position beyond the boundary clamps to its latest event. Explicit `--from-ms` overrides a saved viewing position; with `--resume-view`, the selected event position is saved after its snapshot is displayed. Seeking requires the server for the initial boundary, and state reconstruction still uses the terminal viewer’s 64 MiB budget.
+
+
+During interactive watch, `[` seeks back 30 seconds, `]` seeks forward 30 seconds, and `0` returns to the beginning. These controls pause presentation for inspection; space resumes and `l` catches up live. Seeking uses the currently received cache, so it also works during a network outage once history is cached. Programmatic viewers can call `PlaybackPacer.seek(milliseconds)` for an exact target and observe completion through `onPositioned`. Programmatic seeking preserves the controller’s pause state. Requests beyond received history clamp to its latest event.

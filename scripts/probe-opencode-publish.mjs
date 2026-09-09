@@ -387,6 +387,13 @@ try {
   const seekGate = new PlaybackPacer();
   seekGate.setPaused(true);
   let seekOutput = "";
+  let seekCount = 0;
+  let beginning = initialState();
+  for await (const event of recording.history(0, final))
+    if (event.timelineMs === 0) beginning = apply(beginning, event);
+  const expectedBeginning = [
+    ...renderTerminalSnapshot(beginning, target.url, streamId, 0),
+  ].join("");
   await watchRecording({
     serverOrigin: target.url,
     streamId,
@@ -397,20 +404,29 @@ try {
     signal: AbortSignal.any([signal, seekAbort.signal]),
     write: async (text) => {
       seekOutput += text;
-      if (seekOutput.length >= expectedSeek.length) seekAbort.abort();
+    },
+    onPositioned: () => {
+      seekCount++;
+      if (seekOutput !== (seekCount === 1 ? expectedSeek : expectedBeginning))
+        throw new Error("Native viewer seek state differs from its prefix");
+      if (seekCount === 1) {
+        seekOutput = "";
+        seekGate.seek(0);
+      } else seekAbort.abort();
     },
     onPresented: () => {
       throw new Error("Seek presented future events while paused");
     },
   });
-  if (seekOutput !== expectedSeek)
-    throw new Error("Native viewer seek state differs from its prefix");
+  if (seekCount !== 2)
+    throw new Error("Native viewer did not finish both seeks");
   console.log(
     JSON.stringify({
       success: true,
       restoredViewerPosition: true,
       indexedTimelineSeek: true,
       positionedLiveViewer: true,
+      inSessionSeek: true,
       sessionCacheCapacity: 1,
       pausedViewerReceipt: true,
       orderedViewerCatchup: true,

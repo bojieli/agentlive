@@ -34,6 +34,7 @@ export async function watchRecording(options: {
   onStatus?: (status: SubscriberStatus) => void;
   onReceipt?: (serverSeq: number) => void;
   onPresented?: (serverSeq: number) => void;
+  onPositioned?: (position: { serverSeq: number; timelineMs: number }) => void;
   interactive?: boolean;
   speed?: number;
   fromMs?: number;
@@ -76,6 +77,14 @@ export async function watchRecording(options: {
         ),
       ));
   let state = initialState();
+  let viewedTime = 0;
+  let pendingSeek:
+    { timelineMs: number; through: number | undefined } | undefined;
+  let seekWake = new AbortController();
+  const unsubscribeSeek = presentation?.onSeek((timelineMs) => {
+    pendingSeek = { timelineMs, through: openedCache?.cursor.serverSeq };
+    seekWake.abort(new Error("Viewer position changed"));
+  });
   let bytes = 0;
   let failure: unknown;
   let failed = false;
@@ -104,7 +113,10 @@ export async function watchRecording(options: {
       positionedAt = Math.min(options.fromMs, lastTime);
       saved = await cache.sequenceAt(positionedAt, through);
     }
-    if (saved || positionedAt !== undefined) {
+    const showPosition = async (saved: number, positionedAt?: number) => {
+      if (positionedAt !== undefined) viewedTime = positionedAt;
+      state = initialState();
+      bytes = 0;
       for await (const event of cache.events(0, saved)) {
         signal.throwIfAborted();
         count(event);
@@ -120,39 +132,71 @@ export async function watchRecording(options: {
         await interruptible(write(text, signal), signal);
       }
       if (rememberPosition) await cache.savePresentation(saved);
-    }
+      viewedTime = positionedAt ?? state.timelineMs;
+      presentation?.reset(viewedTime);
+      options.onPositioned?.({ serverSeq: saved, timelineMs: viewedTime });
+    };
+    if (saved || positionedAt !== undefined)
+      await showPosition(saved, positionedAt);
     let anchored = saved > 0 || positionedAt !== undefined;
     if (anchored) presentation?.reset(positionedAt ?? state.timelineMs);
     for (;;) {
       signal.throwIfAborted();
-      const through = cache.cursor.serverSeq;
-      for await (const event of cache.events(state.appliedSeq, through)) {
-        signal.throwIfAborted();
-        if (!anchored) {
-          presentation?.reset(event.timelineMs);
-          anchored = true;
-        }
-        await presentation?.waitUntil(event.timelineMs, signal);
-        count(event);
-        const previous = state;
-        state = apply(state, event);
-        const text = renderTerminalEvent(
-          event,
-          state,
-          origin,
-          options.streamId,
-          previous,
-        );
-        if (text) {
-          await interruptible(write(text, signal), signal);
-          if (rememberPosition) await cache.savePresentation(state.appliedSeq);
-        }
-        options.onPresented?.(state.appliedSeq);
+      if (pendingSeek) {
+        const requested = pendingSeek;
+        pendingSeek = undefined;
+        seekWake = new AbortController();
+        const through = requested.through ?? cache.cursor.serverSeq;
+        let lastTime = 0;
+        if (through)
+          for await (const event of cache.events(through - 1, through))
+            lastTime = event.timelineMs;
+        const position = Math.min(requested.timelineMs, lastTime);
+        const sequence = await cache.sequenceAt(position, through);
+        await showPosition(sequence, position);
+        anchored = true;
+        continue;
       }
-      if (rememberPosition) await cache.savePresentation(state.appliedSeq);
-      await cache.waitForEvents(state.appliedSeq, signal);
+      const navigation = AbortSignal.any([signal, seekWake.signal]);
+      try {
+        const through = cache.cursor.serverSeq;
+        for await (const event of cache.events(state.appliedSeq, through)) {
+          navigation.throwIfAborted();
+          if (!anchored) {
+            presentation?.reset(event.timelineMs);
+            anchored = true;
+          }
+          await presentation?.waitUntil(event.timelineMs, navigation);
+          navigation.throwIfAborted();
+          count(event);
+          const previous = state;
+          state = apply(state, event);
+          const text = renderTerminalEvent(
+            event,
+            state,
+            origin,
+            options.streamId,
+            previous,
+          );
+          if (text) {
+            // Finish an accepted output write before showing a replacement snapshot.
+            await interruptible(write(text, signal), signal);
+            if (rememberPosition)
+              await cache.savePresentation(state.appliedSeq);
+          }
+          viewedTime = state.timelineMs;
+          options.onPresented?.(state.appliedSeq);
+        }
+        if (rememberPosition) await cache.savePresentation(state.appliedSeq);
+        if (pendingSeek) continue;
+        await cache.waitForEvents(state.appliedSeq, navigation);
+      } catch (error) {
+        if (signal.aborted || !pendingSeek || error !== navigation.reason)
+          throw error;
+      }
     }
   };
+
   const createClient = (cache: SubscriberCache) =>
     new SubscriberClient({
       serverOrigin: origin,
@@ -184,7 +228,18 @@ export async function watchRecording(options: {
     for (const key of input.toString("utf8")) {
       if (key === "q" || key === "\u0003") stop.abort();
       else if (key === " ") presentation!.setPaused(!presentation!.paused);
-      else if (key === "l") {
+      else if (key === "[" || key === "]" || key === "0") {
+        presentation!.setPaused(true);
+        presentation!.seek(
+          key === "0"
+            ? 0
+            : Math.max(
+                0,
+                (pendingSeek?.timelineMs ?? viewedTime) +
+                  (key === "[" ? -30_000 : 30_000),
+              ),
+        );
+      } else if (key === "l") {
         presentation!.setImmediate(true);
         presentation!.setPaused(false);
       } else if (key === "+" || key === "=" || key === "-") {
@@ -201,7 +256,7 @@ export async function watchRecording(options: {
   try {
     if (options.interactive) {
       process.stderr.write(
-        "Watch controls: space pause/resume, +/- recorded-time speed, l live catch-up, q quit (receipt continues independently)\n",
+        "Watch controls: space pause/resume, +/- speed, [/] seek 30s, 0 beginning, l live catch-up, q quit (receipt continues independently)\n",
       );
       process.stdin.setRawMode(true);
       process.stdin.on("data", onInput);
@@ -267,6 +322,7 @@ export async function watchRecording(options: {
   } finally {
     stop.abort();
     unsubscribePlayback?.();
+    unsubscribeSeek?.();
     if (options.interactive) {
       process.stdin.off("data", onInput);
       process.stdin.setRawMode(wasRaw);
