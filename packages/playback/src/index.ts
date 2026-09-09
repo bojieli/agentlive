@@ -6,6 +6,7 @@ import {
 } from "@agentlive/protocol";
 
 export interface Message {
+  visible?: boolean;
   agentId?: string;
   id: string;
   role: "user" | "assistant" | "system";
@@ -13,6 +14,7 @@ export interface Message {
   completed: boolean;
 }
 export interface Tool {
+  visible?: boolean;
   agentId?: string;
   id: string;
   name: string;
@@ -52,6 +54,7 @@ export interface RecordingState {
     string,
     {
       filename: string;
+      visible?: boolean;
       pending: boolean;
       reason?: string;
       versions: Map<
@@ -139,17 +142,47 @@ export function apply(
         ...content.payload,
       });
       break;
+    case "object.visibility": {
+      const { objectId, objectType, visible } = content.payload;
+      if (objectType === "message")
+        next.messages = new Map(state.messages).set(objectId, {
+          ...requireItem(state.messages, objectId),
+          visible,
+        });
+      else if (objectType === "tool")
+        next.tools = new Map(state.tools).set(objectId, {
+          ...requireItem(state.tools, objectId),
+          visible,
+        });
+      else
+        next.artifacts = new Map(state.artifacts).set(objectId, {
+          ...requireItem(state.artifacts, objectId),
+          visible,
+        });
+      break;
+    }
     case "message.started": {
       const { messageId, role } = content.payload;
       if (state.messages.has(messageId))
         throw new ProtocolError("event_conflict", "Message already started");
       next.messages = new Map(state.messages).set(messageId, {
         id: messageId,
+        visible: true,
         role,
         ...(content.payload.agentId
           ? { agentId: content.payload.agentId }
           : {}),
         text: "",
+        completed: false,
+      });
+      break;
+    }
+    case "message.reopened": {
+      const current = requireItem(state.messages, content.payload.messageId);
+      if (!current.completed)
+        throw new ProtocolError("event_conflict", "Message is already active");
+      next.messages = new Map(state.messages).set(current.id, {
+        ...current,
         completed: false,
       });
       break;
@@ -254,6 +287,7 @@ export function apply(
         throw new ProtocolError("event_conflict", "Tool already started");
       next.tools = new Map(state.tools).set(toolId, {
         id: toolId,
+        visible: true,
         name,
         ...(content.payload.agentId
           ? { agentId: content.payload.agentId }
@@ -261,6 +295,17 @@ export function apply(
         input,
         output: "",
         status: "running",
+      });
+      break;
+    }
+    case "tool.reopened": {
+      const current = requireItem(state.tools, content.payload.toolId);
+      if (current.status === "running")
+        throw new ProtocolError("event_conflict", "Tool is already active");
+      next.tools = new Map(state.tools).set(current.id, {
+        ...current,
+        status: "running",
+        output: "",
       });
       break;
     }
@@ -299,6 +344,7 @@ export function apply(
       const { artifactId, filename } = content.payload;
       next.artifacts = new Map(state.artifacts).set(artifactId, {
         filename,
+        visible: state.artifacts.get(artifactId)?.visible ?? true,
         pending: true,
         versions: new Map(state.artifacts.get(artifactId)?.versions),
       });
@@ -314,6 +360,7 @@ export function apply(
         );
       next.artifacts = new Map(state.artifacts).set(attachment.artifactId, {
         filename: attachment.filename,
+        visible: old?.visible ?? true,
         pending: false,
         versions: new Map(old?.versions).set(attachment.version, attachment),
       });
@@ -324,6 +371,7 @@ export function apply(
       const old = state.artifacts.get(artifactId);
       next.artifacts = new Map(state.artifacts).set(artifactId, {
         filename: old?.filename ?? artifactId,
+        visible: old?.visible ?? true,
         pending: false,
         reason,
         versions: new Map(old?.versions),

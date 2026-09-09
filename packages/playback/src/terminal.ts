@@ -44,6 +44,18 @@ export function renderTerminalEvent(
         `Agent ${content.payload.status}`,
         content.payload.name ?? content.payload.agentId,
       );
+    case "object.visibility":
+      return section(
+        `${content.payload.objectType}: ${content.payload.visible ? "restored" : "removed"}`,
+      );
+    case "message.reopened":
+      return section(
+        `${state.messages.get(content.payload.messageId)!.role}: resumed`,
+      );
+    case "tool.reopened":
+      return section(
+        `${state.tools.get(content.payload.toolId)!.name}: resumed`,
+      );
     case "message.completed": {
       const message = state.messages.get(content.payload.messageId)!;
       return section(
@@ -200,19 +212,20 @@ export function* renderTerminalPending(
       .map((line) => "  " + line)
       .join("\n")}\n\n`;
   for (const message of state.messages.values())
-    if (!message.completed)
+    if (!message.completed && message.visible !== false)
       yield block(
         `${message.role}: incomplete`,
         message.text || "[No text captured]",
       );
   for (const tool of state.tools.values())
-    if (tool.status === "running")
+    if (tool.status === "running" && tool.visible !== false)
       yield block(
         "Tool incomplete",
         `${tool.name}\nInput:\n${tool.input}\nOutput captured so far:\n${tool.output}`,
       );
   for (const artifact of state.artifacts.values())
-    if (artifact.pending) yield block("Attachment pending", artifact.filename);
+    if (artifact.pending && artifact.visible !== false)
+      yield block("Attachment pending", artifact.filename);
   if (state.replacements.size)
     yield block(
       "Text replacement incomplete",

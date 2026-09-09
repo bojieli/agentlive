@@ -179,3 +179,101 @@ it("shows unfinished messages, tools, and attachments at the selected replay bou
   expect(output).toContain("Attachment pending");
   expect(output).not.toContain("\u001b");
 });
+it("renders resumed objects and restores active state while keeping prior replay states immutable", () => {
+  const events: EventContent[] = [
+    { kind: "message.started", payload: { messageId: "m", role: "assistant" } },
+    { kind: "message.completed", payload: { messageId: "m" } },
+    {
+      kind: "tool.started",
+      payload: { toolId: "t", name: "Shell", input: "run" },
+    },
+    {
+      kind: "tool.completed",
+      payload: { toolId: "t", status: "failed", output: "old error" },
+    },
+    { kind: "message.reopened", payload: { messageId: "m" } },
+    {
+      kind: "message.text.append",
+      payload: { messageId: "m", text: "continuing" },
+    },
+    { kind: "tool.reopened", payload: { toolId: "t" } },
+  ];
+  let state = initialState();
+  let rendered = "";
+  for (const [index, content] of events.entries()) {
+    const event: StoredEvent = {
+      protocolVersion: 1,
+      serverSeq: index + 1,
+      receivedAt: "2026-09-09T00:00:00Z",
+      timelineMs: index,
+      content,
+      origin: { type: "server", operationId: `event${index}` },
+    };
+    const previous = state;
+    state = apply(state, event);
+    rendered += renderTerminalEvent(
+      event,
+      state,
+      "http://localhost",
+      "stream",
+      previous,
+    );
+    if (content.kind === "tool.reopened")
+      expect(previous.tools.get("t")?.output).toBe("old error");
+  }
+  expect(rendered).toContain("assistant: resumed");
+  expect(rendered).toContain("Shell: resumed");
+  expect(state.messages.get("m")).toMatchObject({
+    completed: false,
+    text: "continuing",
+  });
+  expect(state.tools.get("t")).toMatchObject({ status: "running", output: "" });
+  expect(() =>
+    apply(state, {
+      protocolVersion: 1,
+      serverSeq: 8,
+      receivedAt: "2026-09-09T00:00:00Z",
+      timelineMs: 8,
+      content: { kind: "tool.reopened", payload: { toolId: "t" } },
+      origin: { type: "server", operationId: "duplicate" },
+    }),
+  ).toThrow("already active");
+});
+
+it("keeps hidden attachments hidden across pending updates and restores pending presentation", () => {
+  let state = initialState();
+  let seq = 0;
+  const step = (content: EventContent) => {
+    state = apply(state, {
+      protocolVersion: 1,
+      serverSeq: ++seq,
+      receivedAt: "2026-09-09T00:00:00Z",
+      timelineMs: seq,
+      content,
+      origin: { type: "server", operationId: "event" + seq },
+    });
+  };
+  step({
+    kind: "attachment.pending",
+    payload: { artifactId: "a", filename: "image.png" },
+  });
+  step({
+    kind: "object.visibility",
+    payload: { objectType: "attachment", objectId: "a", visible: false },
+  });
+  const hidden = state;
+  step({
+    kind: "attachment.pending",
+    payload: { artifactId: "a", filename: "image-v2.png" },
+  });
+  expect(state.artifacts.get("a")?.visible).toBe(false);
+  expect([...renderTerminalPending(state)].join("")).not.toContain(
+    "image-v2.png",
+  );
+  step({
+    kind: "object.visibility",
+    payload: { objectType: "attachment", objectId: "a", visible: true },
+  });
+  expect([...renderTerminalPending(state)].join("")).toContain("image-v2.png");
+  expect(hidden.artifacts.get("a")?.visible).toBe(false);
+});

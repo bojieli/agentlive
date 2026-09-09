@@ -43,3 +43,11 @@ These synthetic integration tests complement the live-agent transport probes. Th
 The native corpus contains source records larger than a publish batch. Normalizers split large appends and use `text.replacement.started`, ordered `text.replacement.chunk`, and `text.replacement.completed` for large final message text, tool input/output, and file patches. The replacement targets text fields only; it cannot introduce attachment references or server lifecycle operations. Each chunk has a durable event sequence and stable source-effect identity. The reducer preserves the previous value until every declared part is present, then switches to the reconstructed value. It rejects missing/out-of-order chunks and excessive pending replacement data. Subscriber checkpoints must include unfinished replacements alongside their receipt cursor.
 
 The current reference reducer bounds unfinished replacement text to 32 × 1024 × 1024 UTF-16 code units and 16 simultaneous replacements. It still holds completed message/tool state in memory; paged production state remains required. Chunking makes transport/storage records bounded and preserves content, but is not by itself a complete large-history viewer implementation.
+
+## Object reopening and presence
+
+`message.reopened` changes an existing completed message to active while retaining its text. `tool.reopened` changes an existing terminal tool to running, retains its input, and clears its previous terminal output. Reopening an already active object is a protocol conflict; transport retries must be deduplicated before reduction.
+
+`object.visibility` addresses an existing message, tool, or attachment by object type and ID. Setting visibility false preserves its history and attachment versions while excluding it from current pending-work presentation. Setting it true restores the same object. Attachment updates preserve visibility. Legacy events without visibility fields remain visible by default.
+
+OpenCode capture records these transitions durably and reconstructs missing checkpoint state from its journal during upgrade. Source absence is distinct from session ending. Native revert metadata is not yet interpreted; these events currently reflect presence in reconciled snapshots.

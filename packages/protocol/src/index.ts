@@ -127,6 +127,11 @@ export const contentSchema = z.discriminatedUnion("kind", [
     turnId: idSchema,
     status: z.enum(["completed", "failed", "interrupted"]),
   }),
+  event("object.visibility", {
+    objectType: z.enum(["message", "tool", "attachment"]),
+    objectId: idSchema,
+    visible: z.boolean(),
+  }),
   event("message.started", {
     messageId: idSchema,
     role: z.enum(["user", "assistant", "system"]),
@@ -135,6 +140,7 @@ export const contentSchema = z.discriminatedUnion("kind", [
   event("message.text.append", { messageId: idSchema, text }),
   event("message.reconciled", { messageId: idSchema, text }),
   event("message.completed", { messageId: idSchema }),
+  event("message.reopened", { messageId: idSchema }),
   event("text.replacement.started", {
     replacementId: idSchema,
     target: z.enum(["message", "tool.input", "tool.output", "change.patch"]),
@@ -158,6 +164,7 @@ export const contentSchema = z.discriminatedUnion("kind", [
   event("tool.arguments.append", { toolId: idSchema, text }),
   event("tool.arguments.ready", { toolId: idSchema, input: text }),
   event("tool.output.append", { toolId: idSchema, text }),
+  event("tool.reopened", { toolId: idSchema }),
   event("tool.completed", {
     toolId: idSchema,
     status: z.enum(["completed", "failed", "interrupted"]),

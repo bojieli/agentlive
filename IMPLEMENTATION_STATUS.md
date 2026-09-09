@@ -151,3 +151,11 @@ Validation: all 129 tests across 22 files pass with formatting and TypeScript on
 Native inventory update: OpenCode session listing is workspace-scoped. Refreshed exports from this repository and the synthetic workspace total 12 files; all 12 passed converter/reducer/terminal rendering (129 simulated events, 11,997 rendered bytes, one unavailable artifact in resolver-free validation). Raw exports and rendered test transcripts remain local and ignored. The history import converter is now `opencode-export-2`; old pinned imports still need explicit migration.
 
 Remaining attachment scope: remote/provider-authenticated artifacts, percent-encoded or other data-URL encodings, HTML dependency bundles and previews, detecting changed local bytes without a changed native reference, other agents' remaining native attachment types, and independent upload dependencies that do not stall conversion during an outage. Local copies without an original source hash remain labeled current-file rather than original historical bytes.
+
+## Object lifecycle checkpoint — 2026-09-09
+
+Message/tool reopening and explicit object visibility now preserve identity through resumed work and source removal/restoration. Playback clears old terminal tool output on reopening, retains historical content and attachment versions, and excludes hidden objects from pending presentation. OpenCode upgrades earlier capture checkpoints against the durable journal before source reconciliation.
+
+Validation: 134 tests across 22 files pass with Node 26.8.1, including restart while hidden, restoration without duplicate starts, legacy completion/presence repair, and hidden attachment updates. These are deterministic recovery tests; native revert metadata and the full native object matrix remain unfinished.
+
+The refreshed full local corpus replay passed 512/512 Codex, 1,556/1,591 Claude, 460/460 Kimi, and 12/12 discovered OpenCode exports. The 35 Claude failures lack standalone identity/timing and require parent-session association. Explicit unsupported gaps remain; detailed counts are in the native-history corpus document. No raw histories or rendered transcript text were committed.

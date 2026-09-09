@@ -165,7 +165,7 @@ it("finishes a staged large revision after a lost journal acknowledgment before 
     result.events.filter((event) => event.content.kind === "message.started"),
   ).toHaveLength(1);
 });
-it("reports removal once and refuses changed policy or missing durable state", async () => {
+it("persists removal and restoration without duplicating objects and refuses changed policy", async () => {
   const journal = await setup();
   const capture = await OpenCodeCapture.open(journal);
   captures.push(capture);
@@ -178,8 +178,29 @@ it("reports removal once and refuses changed policy or missing durable state", a
   const before = journal.capturedThrough;
   await capture.accept(empty);
   expect(journal.capturedThrough).toBe(before);
-  expect((await replay(journal)).state.gaps).toHaveLength(1);
+  const removed = await replay(journal);
+  expect(removed.state.gaps).toHaveLength(0);
+  expect([...removed.state.messages.values()][0]).toMatchObject({
+    visible: false,
+    text: "retained",
+  });
   await capture.close();
+  captures.pop();
+  const restored = await OpenCodeCapture.open(journal);
+  captures.push(restored);
+  await restored.accept(snapshot("retained", true));
+  const result = await replay(journal);
+  expect([...result.state.messages.values()][0]).toMatchObject({
+    visible: true,
+    text: "retained",
+  });
+  expect(
+    result.events.filter((e) => e.content.kind === "message.started"),
+  ).toHaveLength(1);
+  expect(
+    result.events.filter((e) => e.content.kind === "object.visibility"),
+  ).toHaveLength(2);
+  await restored.close();
   captures.pop();
   await expect(OpenCodeCapture.open(journal, ["changed-key"])).rejects.toThrow(
     "filtering policy changed",
@@ -324,7 +345,13 @@ it("captures live attachment versions and reuses announced versions after restar
     const before = journal.capturedThrough;
     await capture.accept(withFile(original));
     expect(journal.capturedThrough).toBe(before);
+    await capture.accept(snapshot("files", true));
+    expect(
+      [...(await replay(journal)).state.artifacts.values()][0]?.visible,
+    ).toBe(false);
+    await capture.accept(withFile(original));
     const result = await replay(journal);
+    expect([...result.state.artifacts.values()][0]?.visible).toBe(true);
     expect(
       result.events.filter(
         (event) => event.content.kind === "attachment.available",
@@ -354,3 +381,113 @@ it("captures live attachment versions and reuses announced versions after restar
     await server.close();
   }
 }, 20000);
+it("reopens completed messages and tools without duplicating their identities", async () => {
+  const journal = await setup();
+  let capture = await OpenCodeCapture.open(journal);
+  captures.push(capture);
+  await capture.accept(snapshot("first completion", true, "completed"));
+  const first = (await replay(journal)).state;
+  await capture.close();
+  captures.pop();
+  capture = await OpenCodeCapture.open(journal);
+  captures.push(capture);
+  await capture.accept(snapshot("continued partial", false, "running"));
+  let result = await replay(journal);
+  expect([...first.messages.values()][0]?.completed).toBe(true);
+  expect([...first.tools.values()][0]?.output).toBe("done token_abcdef");
+  expect([...result.state.messages.values()][0]).toMatchObject({
+    completed: false,
+    text: "continued partial",
+  });
+  expect([...result.state.tools.values()][0]).toMatchObject({
+    status: "running",
+    output: "",
+  });
+  expect(result.state.gaps).toHaveLength(0);
+  const before = journal.capturedThrough;
+  await capture.accept(snapshot("continued partial", false, "running"));
+  expect(journal.capturedThrough).toBe(before);
+  await capture.accept(snapshot("second completion", true, "completed"));
+  result = await replay(journal);
+  expect(result.state.messages.size).toBe(1);
+  expect(result.state.tools.size).toBe(1);
+  expect(
+    result.events.filter((event) => event.content.kind === "message.reopened"),
+  ).toHaveLength(1);
+  expect(
+    result.events.filter((event) => event.content.kind === "tool.reopened"),
+  ).toHaveLength(1);
+  expect([...result.state.messages.values()][0]?.completed).toBe(true);
+});
+it("upgrades a legacy checkpoint whose gap left replay completion stale", async () => {
+  const { createHash } = await import("node:crypto");
+  const { writeFile } = await import("node:fs/promises");
+  const digest = (value: unknown) =>
+    createHash("sha256").update(JSON.stringify(value)).digest("hex");
+  const journal = await setup();
+  let capture = await OpenCodeCapture.open(journal);
+  captures.push(capture);
+  await capture.accept(snapshot("finished", true));
+  await capture.close();
+  captures.pop();
+  const id = digest("msg1");
+  const statePath = join(journal.directory, "opencode-live", "state.json");
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  delete state.lifecycleVersion;
+  state.entities[id].completed = false;
+  // Match the next source fingerprint to prove lifecycle repair does not depend on text changing.
+  const { canonicalJson } =
+    await import("../../packages/protocol/src/index.js");
+  state.entities[id].fingerprint = createHash("sha256")
+    .update(
+      canonicalJson({ role: "assistant", text: "finished", complete: false }),
+    )
+    .digest("hex");
+  await writeFile(statePath, JSON.stringify(state));
+  capture = await OpenCodeCapture.open(journal);
+  captures.push(capture);
+  await capture.accept(snapshot("finished", false));
+  const result = await replay(journal);
+  expect([...result.state.messages.values()][0]?.completed).toBe(false);
+  expect(
+    result.events.filter((event) => event.content.kind === "message.reopened"),
+  ).toHaveLength(1);
+});
+
+it("repairs legacy removal checkpoints from the durable event history", async () => {
+  const { writeFile } = await import("node:fs/promises");
+  const journal = await setup();
+  let capture = await OpenCodeCapture.open(journal);
+  captures.push(capture);
+  await capture.accept(snapshot("retained", true, "completed"));
+  await capture.close();
+  captures.pop();
+  const path = join(journal.directory, "opencode-live", "state.json");
+  const checkpoint = JSON.parse(await readFile(path, "utf8"));
+  delete checkpoint.presentationVersion;
+  for (const entity of Object.values(checkpoint.entities) as {
+    present: boolean;
+    objectType?: string;
+  }[]) {
+    entity.present = false;
+    delete entity.objectType;
+  }
+  await writeFile(path, JSON.stringify(checkpoint));
+  capture = await OpenCodeCapture.open(journal);
+  captures.push(capture);
+  await capture.accept(
+    parseOpenCodeSnapshot({
+      info: { id: "ses_test", time: { created: 1 } },
+      messages: [],
+    }),
+  );
+  let result = await replay(journal);
+  expect([...result.state.messages.values()][0]?.visible).toBe(false);
+  expect([...result.state.tools.values()][0]?.visible).toBe(false);
+  await capture.accept(snapshot("retained", true, "completed"));
+  result = await replay(journal);
+  expect([...result.state.messages.values()][0]?.visible).toBe(true);
+  expect([...result.state.tools.values()][0]?.visible).toBe(true);
+  expect(result.state.tools.size).toBe(1);
+  expect(result.state.gaps).toHaveLength(0);
+});

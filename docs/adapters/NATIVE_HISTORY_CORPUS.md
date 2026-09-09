@@ -113,3 +113,16 @@ Kimi approval requests, approval-result audits, question requests, and recorded 
 During import, a plan file within configured roots is captured only if its bytes match the recorded source hash. Text is filtered before upload, and plan state links to the announced immutable attachment version. Missing/inaccessible/mismatched files remain unavailable. Server publication and replay reject plan references to unannounced versions. The synthetic integration test verifies a downloaded filtered plan and retry after source deletion. The Kimi converter identity is now history 3; earlier import versions require explicit reconciliation.
 
 The normalized Kimi corpus pass succeeded for all 458 files, producing 98,061 events with 9,667 gaps and seven unavailable plan attachments in the resolver-free validation run. A real recording containing interaction and plan events passed private import/replay/render/retry: 424 source records, 302 producer events, 304 stored events, 39 messages, 49 tools, six tasks, one interaction, and one plan. Its plan artifact was unavailable; 65 remaining gaps cover runtime, telemetry, tool-store, and turn lifecycle records. This does not establish full interaction semantics for the other agents, multi-file relationships, live operator control, or browser behavior.
+
+### Reopening and visibility regression pass (2026-09-09)
+
+After adding reopened-object and presence transitions, the read-only conversion → reducer → terminal pass was repeated against every file discovered by the configured local roots:
+
+| Source | Files | Passed | Failed | Normalized events | Explicit gaps | Unavailable artifacts |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Codex, including archived histories | 512 | 512 | 0 | 267,758 | 1,488 | 1,467 |
+| Claude, including nested histories | 1,591 | 1,556 | 35 | 409,111 | 72,730 | 409 |
+| Kimi wire histories | 460 | 460 | 0 | 98,117 | 9,686 | 7 |
+| OpenCode exports from discovered workspaces | 12 | 12 | 0 | 129 | 0 | 1 |
+
+The 35 Claude failures still report missing standalone session identity or timestamp; parent-session association remains required. The validator correctly exits nonzero for those failures. Passing files may contain explicit unsupported gaps and unavailable attachments; this is not complete semantic coverage or attachment-download validation. OpenCode discovery is workspace scoped, not a claim of exhaustive discovery of every unknown workspace. Local reports are refreshed in ignored `probe-results/native-replay-validation`; transcript rendering is hashed and discarded.

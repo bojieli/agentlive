@@ -22,6 +22,7 @@ import { chunkContent } from "./chunks.js";
 const hash = (value: unknown) =>
   createHash("sha256").update(canonicalJson(value)).digest("hex");
 const entitySchema = z.strictObject({
+  objectType: z.enum(["message", "tool", "attachment"]).optional(),
   generation: z.number().int().positive().safe(),
   availableVersions: z.array(z.number().int().positive()).default([]),
   identity: z.string(),
@@ -31,6 +32,8 @@ const entitySchema = z.strictObject({
 });
 const stateSchema = z.strictObject({
   version: z.literal(1),
+  lifecycleVersion: z.literal(1).optional(),
+  presentationVersion: z.literal(1).optional(),
   nativeSessionId: z.string(),
   filterHash: z.string(),
   createdAt: z.number().int().nonnegative().optional(),
@@ -91,6 +94,8 @@ export class OpenCodeCapture {
           );
         state = {
           version: 1,
+          lifecycleVersion: 1,
+          presentationVersion: 1,
           nativeSessionId: journal.identity.nativeSessionId,
           filterHash,
           elapsedMs: 0,
@@ -114,11 +119,79 @@ export class OpenCodeCapture {
         artifacts,
       );
       await capture.recover();
+      await capture.upgradeLifecycle();
       return capture;
     } catch (error) {
       await lock.release();
       throw error;
     }
+  }
+  private async upgradeLifecycle() {
+    if (
+      this.state.lifecycleVersion === 1 &&
+      this.state.presentationVersion === 1
+    )
+      return;
+    const entities = { ...this.state.entities };
+    const seen = new Set<string>();
+    for await (const event of this.journal.pending(0)) {
+      const content = event.content;
+      let id: string | undefined;
+      let completed: boolean | undefined;
+      let objectType: "message" | "tool" | "attachment" | undefined;
+      let present: boolean | undefined;
+      if (
+        ["message.started", "message.completed", "message.reopened"].includes(
+          content.kind,
+        )
+      ) {
+        id = (content.payload as { messageId: string }).messageId;
+        completed = content.kind === "message.completed";
+        objectType = "message";
+        if (content.kind === "message.started") present = true;
+      } else if (
+        ["tool.started", "tool.completed", "tool.reopened"].includes(
+          content.kind,
+        )
+      ) {
+        id = (content.payload as { toolId: string }).toolId;
+        completed = content.kind === "tool.completed";
+        objectType = "tool";
+        if (content.kind === "tool.started") present = true;
+      }
+      if (
+        content.kind === "attachment.pending" ||
+        content.kind === "attachment.available"
+      ) {
+        id =
+          content.kind === "attachment.pending"
+            ? content.payload.artifactId
+            : content.payload.attachment.artifactId;
+        objectType = "attachment";
+        if (!seen.has(id)) present = true;
+      } else if (content.kind === "object.visibility") {
+        id = content.payload.objectId;
+        objectType = content.payload.objectType;
+        present = content.payload.visible;
+      }
+      if (id && entities[id]) {
+        entities[id] = {
+          ...entities[id]!,
+          ...(completed === undefined ? {} : { completed }),
+          ...(present === undefined ? {} : { present }),
+          ...(objectType ? { objectType } : {}),
+        };
+        seen.add(id);
+      }
+    }
+    const next = {
+      ...this.state,
+      lifecycleVersion: 1 as const,
+      presentationVersion: 1 as const,
+      entities,
+    };
+    await atomicJson(join(this.directory, "state.json"), next);
+    this.state = next;
   }
   private filter(text: string, complete: boolean) {
     const filter = new StreamingRedactor(this.secrets);
@@ -180,11 +253,27 @@ export class OpenCodeCapture {
     if (previous && previous.identity !== identity)
       throw new Error("OpenCode source object identity changed");
     const fingerprint = hash(desired);
-    if (previous?.fingerprint === fingerprint && previous.present === present)
+    if (
+      previous?.fingerprint === fingerprint &&
+      previous.present === present &&
+      previous.completed === complete
+    )
       return;
     if (!previous && Object.keys(this.state.entities).length >= 50000)
       throw new Error("OpenCode capture entity limit reached");
     const raw = await content(previous);
+    let objectType = previous?.objectType;
+    if (!objectType)
+      for (const event of raw) {
+        if (event.kind === "message.started") objectType = "message";
+        else if (event.kind === "tool.started") objectType = "tool";
+        else if (event.kind === "attachment.pending") objectType = "attachment";
+      }
+    if (previous && !previous.present && present && objectType)
+      raw.unshift({
+        kind: "object.visibility",
+        payload: { objectType, objectId: id, visible: true },
+      });
     const repeated = new Set(
       raw
         .filter(
@@ -229,6 +318,7 @@ export class OpenCodeCapture {
         generation: (previous?.generation ?? 0) + 1,
         fingerprint,
         identity,
+        ...(objectType ? { objectType } : {}),
         availableVersions,
         completed: complete,
         present,
@@ -337,9 +427,10 @@ export class OpenCodeCapture {
             : []),
           ...(previous?.completed && !complete
             ? [
-                gap(
-                  "OpenCode reopened a completed message; retained completion state requires reconciliation",
-                ),
+                {
+                  kind: "message.reopened",
+                  payload: { messageId: id },
+                } as EventContent,
               ]
             : []),
           { kind: "message.reconciled", payload: { messageId: id, text } },
@@ -409,9 +500,10 @@ export class OpenCodeCapture {
                   ]),
               ...(previous?.completed && !finished
                 ? [
-                    gap(
-                      "OpenCode restarted a completed tool; retained terminal state requires reconciliation",
-                    ),
+                    {
+                      kind: "tool.reopened",
+                      payload: { toolId: partId },
+                    } as EventContent,
                   ]
                 : []),
               ...(finished
@@ -519,11 +611,23 @@ export class OpenCodeCapture {
           { removed: true },
           previous.completed,
           snapshot.info.time.created,
-          () => [
-            gap(
-              "OpenCode removed a previously captured object; its historical events remain retained",
-            ),
-          ],
+          () =>
+            previous.objectType
+              ? [
+                  {
+                    kind: "object.visibility",
+                    payload: {
+                      objectType: previous.objectType,
+                      objectId: id,
+                      visible: false,
+                    },
+                  },
+                ]
+              : [
+                  gap(
+                    "OpenCode removed an unsupported source object; its historical events remain retained",
+                  ),
+                ],
           false,
         );
     }
