@@ -837,3 +837,9 @@ Keep explicit remaining acceptance work: live attach for Claude/Kimi/OpenCode; f
 `watch` now stores received events in a locked checksummed JSONL cache keyed by server origin and recording ID, with immutable revision metadata. Treat the recovered contiguous durable prefix as the subscriber receipt cursor. Reconstruct playback state from that prefix before reconnecting, validate a received batch before append, and acknowledge receipt only after persistence. Output failures may occur after durable receipt; recovery replays the cached events. Do not promise exactly-once display across process crashes.
 
 Production acceptance still requires paged playback state/snapshots, independent playback and receipt cursors with pause/speed/seek, browser/mobile clients, bounded retention policy, token rendering, and full artifact previews. The current terminal reference implementation's explicit memory budget must be replaced by paged state before claiming support for arbitrarily large retained sessions.
+
+### Claude retained-history live integration checkpoint
+
+Claude Code now follows complete native JSONL records through the same durable publisher/network pipeline as Codex. Import and follow share a stateful consumer; a tool result appended after reconnect resolves the tool captured during backfill. Reject newly introduced foreign session identity before converting that record. Keep source receipt progress distinct from remote producer acknowledgments, and verify both boundaries in real native resume probes.
+
+This covers one retained native file per publisher binding. Multi-file parent/subagent association, automatic installation/discovery, richer native object mappings, token stream capture, artifact dependency independence, and import/live lifecycle migration remain required for production completion.

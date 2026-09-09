@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 import { startServer } from "@agentlive/server";
 import {
   publishCodexRecording,
+  publishClaudeRecording,
   importClaudeRecording,
   importCodexRecording,
   importKimiRecording,
@@ -19,7 +20,7 @@ const help = `AgentLive — record and share coding-agent sessions
 Commands:
   agentlive serve [--host 127.0.0.1] [--port 7331]
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
-  agentlive publish --agent codex --source <file> [--record-format structured|legacy]
+  agentlive publish --agent <codex|claude> --source <file> [--record-format structured|legacy]
   agentlive watch --stream <recording-id> [--server <origin>] [--anonymous]
   agentlive replay --stream <recording-id> [--server <origin>] [--anonymous]
 
@@ -238,30 +239,36 @@ async function main() {
       : {}),
   };
   if (command === "publish") {
-    if (agent !== "codex")
-      throw new Error("Live file publishing currently supports Codex only");
+    if (agent !== "codex" && agent !== "claude")
+      throw new Error(
+        "Live file publishing currently supports Codex and Claude only",
+      );
+    if (agent !== "codex" && values["record-format"])
+      throw new Error("Record format applies only to Codex");
     const recordFormat = values["record-format"] ?? "structured";
     if (recordFormat !== "structured" && recordFormat !== "legacy")
       throw new Error("Record format must be structured or legacy");
-    await publishCodexRecording({
-      ...options,
-      recordFormat,
-      onReady: (recording) => {
-        process.stdout.write(
-          JSON.stringify({ event: "publishing", ...recording }) + "\n",
-        );
+    await (agent === "claude" ? publishClaudeRecording : publishCodexRecording)(
+      {
+        ...options,
+        recordFormat,
+        onReady: (recording) => {
+          process.stdout.write(
+            JSON.stringify({ event: "publishing", ...recording }) + "\n",
+          );
+        },
+        onStatus: (status) => {
+          process.stdout.write(
+            JSON.stringify({ event: "publisher-status", status }) + "\n",
+          );
+        },
+        onCaughtUp: async () => {
+          process.stdout.write(
+            JSON.stringify({ event: "source-caught-up" }) + "\n",
+          );
+        },
       },
-      onStatus: (status) => {
-        process.stdout.write(
-          JSON.stringify({ event: "publisher-status", status }) + "\n",
-        );
-      },
-      onCaughtUp: async () => {
-        process.stdout.write(
-          JSON.stringify({ event: "source-caught-up" }) + "\n",
-        );
-      },
-    });
+    );
     return;
   }
   const result =

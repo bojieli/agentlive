@@ -7,7 +7,11 @@ import {
   type InlineArtifactCapture,
   type CapturedAttachment,
 } from "@agentlive/publisher";
-import { readJsonlSource, type SourceCursor } from "./jsonl.js";
+import {
+  readJsonlSource,
+  type SourceCursor,
+  type SourceRecord,
+} from "./jsonl.js";
 import { chunkContent } from "./chunks.js";
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
@@ -29,13 +33,14 @@ export interface ClaudeHistoryManifest {
 export async function inspectClaudeHistory(
   path: string,
   signal?: AbortSignal,
+  tail: "parse" | "defer" = "parse",
 ): Promise<ClaudeHistoryManifest> {
   let nativeSessionId: string | undefined,
     createdAt: string | undefined,
     boundary: SourceCursor | undefined,
     records = 0;
   for await (const record of readJsonlSource(path, {
-    tail: "parse",
+    tail,
     ...(signal ? { signal } : {}),
   })) {
     const row = rowSchema.parse(record.value);
@@ -64,6 +69,36 @@ export async function captureClaudeHistory(
   sink: ClaudeCaptureSink,
   secrets: readonly string[] = [],
   signal?: AbortSignal,
+  resolveInline?: (input: InlineArtifactCapture) => Promise<CapturedAttachment>,
+) {
+  const validate = async () => {
+    for await (const _ of readJsonlSource(path, {
+      after: manifest.boundary,
+      through: manifest.boundary.offset,
+      ...(signal ? { signal } : {}),
+    }))
+      void _;
+  };
+  await validate();
+  const consumer = await createClaudeHistoryConsumer(
+    manifest,
+    sink,
+    secrets,
+    resolveInline,
+  );
+  for await (const record of readJsonlSource(path, {
+    through: manifest.boundary.offset,
+    tail: "parse",
+    ...(signal ? { signal } : {}),
+  }))
+    await consumer.accept(record);
+  await validate();
+  return consumer.report;
+}
+export async function createClaudeHistoryConsumer(
+  manifest: ClaudeHistoryManifest,
+  sink: ClaudeCaptureSink,
+  secrets: readonly string[] = [],
   resolveInline?: (input: InlineArtifactCapture) => Promise<CapturedAttachment>,
 ) {
   if (
@@ -123,12 +158,6 @@ export async function captureClaudeHistory(
       timestamp,
     );
   };
-  for await (const _ of readJsonlSource(path, {
-    after: manifest.boundary,
-    through: manifest.boundary.offset,
-    ...(signal ? { signal } : {}),
-  }))
-    void _;
   await emit(
     "session",
     [
@@ -143,12 +172,10 @@ export async function captureClaudeHistory(
     ],
     manifest.createdAt,
   );
-  for await (const record of readJsonlSource(path, {
-    through: manifest.boundary.offset,
-    tail: "parse",
-    ...(signal ? { signal } : {}),
-  })) {
+  const accept = async (record: SourceRecord) => {
     const row = rowSchema.parse(record.value);
+    if (row.sessionId && row.sessionId !== manifest.nativeSessionId)
+      throw new Error("Claude source contains multiple session identities");
     report.records++;
     const key = hash(row.uuid ?? record.cursor.prefixHash);
     const timestamp =
@@ -437,12 +464,6 @@ export async function captureClaudeHistory(
         `${row.type}${typeof row.subtype === "string" ? `/${row.subtype}` : ""}`,
         timestamp,
       );
-  }
-  for await (const _ of readJsonlSource(path, {
-    after: manifest.boundary,
-    through: manifest.boundary.offset,
-    ...(signal ? { signal } : {}),
-  }))
-    void _;
-  return report;
+  };
+  return { accept, report };
 }

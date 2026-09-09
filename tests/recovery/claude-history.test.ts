@@ -255,3 +255,136 @@ it("imports inline Claude images as downloadable historical attachments and reje
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("publishes Claude retained tool state and follows a partial result across restart", async () => {
+  const { publishClaudeRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const { startServer } = await import("../../packages/server/src/http.js");
+  const { initialState, apply } =
+    await import("../../packages/playback/src/index.js");
+  const { appendFile } = await import("node:fs/promises");
+  const root = await mkdtemp(join(tmpdir(), "agentlive-claude-follow-"));
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: "b".repeat(64),
+    port: 0,
+  });
+  const sourcePath = join(root, "native.jsonl");
+  const row = (uuid: string, type: string, content: unknown) =>
+    JSON.stringify({
+      uuid,
+      type,
+      sessionId: "claude_live",
+      timestamp: "2026-09-09T00:00:00Z",
+      message: { content },
+    });
+  await writeFile(
+    sourcePath,
+    row("start", "assistant", [
+      {
+        type: "tool_use",
+        id: "tool1",
+        name: "Bash",
+        input: { command: "echo safe" },
+      },
+    ]) + "\n",
+  );
+  let streamId = "";
+  const settings = {
+    sourcePath,
+    publisherRoot: join(root, "publisher"),
+    serverOrigin: server.url,
+    ownerCredential: "b".repeat(64),
+    title: "Claude live test",
+    visibility: "private" as const,
+  };
+  const attach = async (
+    expectedStatus: string,
+    append?: () => Promise<void>,
+  ) => {
+    const controller = new AbortController();
+    let failure: unknown;
+    let captured = 0;
+    const running = publishClaudeRecording({
+      ...settings,
+      signal: controller.signal,
+      onReady: (recording) => {
+        if (streamId) expect(recording.streamId).toBe(streamId);
+        streamId = recording.streamId;
+      },
+      onCaughtUp: async (boundary) => {
+        captured = boundary.producerEvents;
+        await append?.();
+      },
+    }).catch((error) => {
+      failure = error;
+    });
+    try {
+      await expect
+        .poll(
+          async () => {
+            if (failure) throw failure;
+            if (!streamId || !captured) return false;
+            const session = await server.store.get(streamId);
+            let state = initialState();
+            let through = 0;
+            for await (const event of session.history(
+              0,
+              session.boundary.sequence,
+            )) {
+              state = apply(state, event);
+              if (event.origin.type === "publisher")
+                through = event.origin.event.producerSeq;
+            }
+            return (
+              through >= captured &&
+              state.tools.size === 1 &&
+              [...state.tools.values()][0]?.status === expectedStatus
+            );
+          },
+          { timeout: 10000 },
+        )
+        .toBe(true);
+    } finally {
+      controller.abort();
+      await running;
+    }
+    if (failure) throw failure;
+  };
+  try {
+    await attach("running");
+    const result = row("result", "user", [
+      {
+        type: "tool_result",
+        tool_use_id: "tool1",
+        is_error: true,
+        content: "Subscription credits exhausted",
+      },
+    ]);
+    await appendFile(sourcePath, result.slice(0, 40));
+    await attach("failed", async () => {
+      await appendFile(sourcePath, result.slice(40) + "\n");
+    });
+    const before = (await server.store.get(streamId)).boundary.sequence;
+    await attach("failed");
+    expect((await server.store.get(streamId)).boundary.sequence).toBe(before);
+    await appendFile(
+      sourcePath,
+      JSON.stringify({
+        sessionId: "other_session",
+        type: "user",
+        message: { content: "must not publish" },
+      }) + "\n",
+    );
+    await expect(
+      publishClaudeRecording({
+        ...settings,
+        signal: AbortSignal.timeout(5000),
+      }),
+    ).rejects.toThrow("multiple session identities");
+    expect((await server.store.get(streamId)).boundary.sequence).toBe(before);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30000);

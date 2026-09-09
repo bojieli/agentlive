@@ -107,7 +107,7 @@ npx --yes pnpm@12.3.4 agentlive publish --agent codex --source /path/to/session.
 
 Start `serve` first using the same state directory. Publishing defaults to private visibility. Use `--record-format legacy` for older histories without structured item records. Stop with Ctrl-C and run the same command to resume the same recording; it stays open, and pending captured events remain on disk. The initial retained history is included. Source catch-up and remote delivery are separate states: `source-caught-up` reports local conversion, while publisher status reports network progress.
 
-This command currently supports Codex only. Initial recording creation needs connectivity; an existing binding can capture text while disconnected. Attachment upload can pause conversion until connectivity returns. Switching an ended import into a live recording still requires an explicit migration that is not yet implemented.
+This command currently supports Codex and Claude Code. Initial recording creation needs connectivity; an existing binding can capture text while disconnected. Attachment upload can pause conversion until connectivity returns. Switching an ended import into a live recording still requires an explicit migration that is not yet implemented.
 
 A read-only native transport/restart probe is available:
 
@@ -124,3 +124,17 @@ npx --yes pnpm@12.3.4 agentlive watch --stream <recording-id>
 Use `--anonymous` for recordings that permit anonymous reads, or the existing owner credential options for private recordings. The local subscriber cache stores checksummed JSONL under `<state-dir>/subscriber`; it contains received recording content, but does not store the connection credential. Restarting displays the cached prefix and then reconnects from its durable receipt cursor. Cached history can render while the server is offline. Reconnection never silently switches to a different recording revision.
 
 This is the terminal reference viewer: completed messages, tools, and supported state updates render as they arrive. Token-by-token presentation, interactive playback controls, and paged state remain unfinished. It currently enforces a 64 MiB event budget for in-memory playback and a separate 512 MiB durable cache limit. Cache reconstruction replays history from the beginning; storage pagination and snapshots remain in the plan.
+
+Claude Code uses the same durable publication path:
+
+```sh
+npx --yes pnpm@12.3.4 agentlive publish --agent claude --source /path/to/session.jsonl
+```
+
+It backfills retained messages and tool state, then follows complete appended records. Partial trailing writes remain deferred until the next append. Restarting reconstructs tool state before processing new results. Native inline images/documents use the existing attachment spool; unsupported native objects retain explicit capture gaps. This single-file adapter does not yet merge parent/subagent files or expose token deltas absent from the native history.
+
+Run an explicit integration test against the installed Claude CLI (creates a new synthetic session and resumes it through the native CLI):
+
+```sh
+node scripts/probe-claude-publish.mjs
+```

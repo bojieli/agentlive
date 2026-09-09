@@ -60,3 +60,7 @@ export {
   publishCodexRecording,
   type CodexPublishOptions,
 } from "./publish-codex.js";
+export {
+  publishClaudeRecording,
+  type ClaudePublishOptions,
+} from "./publish-claude.js";
