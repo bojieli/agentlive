@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
+  ContentIndex,
   createSnapshot,
   SnapshotReader,
 } from "../packages/playback/dist/index.js";
@@ -25,6 +26,12 @@ export async function verifyContentStore(state, signal) {
       revision: "native-probe-revision",
     };
     const snapshotRef = await createSnapshot(state, binding, store, signal);
+    const contentIndex = new ContentIndex(store);
+    const fieldKey = (index) => `field-${String(index).padStart(10, "0")}`;
+    const indexRoot = await contentIndex.build(
+      references.map((ref, index) => [fieldKey(index), ref]),
+      signal,
+    );
     const storedBytes = store.usage.storedBytes;
     await store.close();
     store = await TextStore.open(root);
@@ -37,8 +44,16 @@ export async function verifyContentStore(state, signal) {
     const restored = await snapshot.materialize(16 * 1024 * 1024, signal);
     if (!isDeepStrictEqual(restored, state))
       throw new Error("Native snapshot differs after reopening");
+    const reopenedIndex = new ContentIndex(store);
     let units = 0;
     for (const [index, ref] of references.entries()) {
+      if (
+        !isDeepStrictEqual(
+          await reopenedIndex.get(indexRoot, fieldKey(index), signal),
+          ref,
+        )
+      )
+        throw new Error("Native content index differs after reopening");
       for (let offset = 0; offset < ref.units; offset += 30113) {
         const count = Math.min(30113, ref.units - offset);
         if (
@@ -57,6 +72,8 @@ export async function verifyContentStore(state, signal) {
       storedBytes,
       reopened: true,
       snapshotVerified: true,
+      indexedFields: references.length,
+      indexReopened: true,
     };
   } finally {
     try {

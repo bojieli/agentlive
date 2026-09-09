@@ -120,3 +120,10 @@ On 2026-09-09, Claude `--resume-import` passed again with two native turns, 28 s
 
 
 After the UTF-16 range validation fix, a fresh Kimi Code probe passed two native turns with 35 stored events, seven messages and 19 rendered activity items. The shared snapshot client reconstructed the server snapshot through 39 bounded content requests and matched the native reference state strictly. Native resume, history backfill, live suffix capture, publisher deduplication, activity search and browser-model restoration passed. This adds a second native-agent integration to the shared-client evidence without retaining its text.
+
+
+## Persistent key index on native content
+
+On 2026-09-09, OpenCode `--resume-import` passed three native turns with 26 stored events, six messages and one verified attachment. The shared content verifier bulk-built an immutable key index for six captured text references, closed and reopened TextStore, and verified each lookup before comparing its bounded text reads. Text fields contained 824 UTF-16 units; combined text, snapshot and index storage used 12,537 bytes. The production snapshot client also reconstructed the recording through 28 content reads and matched reference state.
+
+Native-server restart, detached history recovery, publisher restart deduplication, live converter migration, imported-session continuation, attachment checks, seeking and browser-model restoration passed. Only aggregate evidence is retained. This checks the index against native content in a private temporary store; production reduction and snapshot metadata do not yet use the new index.

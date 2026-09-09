@@ -516,3 +516,8 @@ export type {
   SnapshotValue,
   SnapshotEntry,
 } from "./snapshot.js";
+export {
+  ContentIndex,
+  type IndexRoot,
+  type IndexEntry,
+} from "./content-index.js";
