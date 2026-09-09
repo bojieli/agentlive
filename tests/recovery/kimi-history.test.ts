@@ -296,3 +296,164 @@ it("imports Kimi wire text and failed tools with agent identity, filtering and s
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("preserves Kimi goal, task and approval state across live publisher restart", async () => {
+  const { publishKimiRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const { appendFile } = await import("node:fs/promises");
+  const root = await mkdtemp(join(tmpdir(), "agentlive-kimi-follow-"));
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: "b".repeat(64),
+    port: 0,
+  });
+  const sourcePath = join(root, "wire.jsonl");
+  const time = Date.parse("2026-09-09T00:00:00Z");
+  const rows = [
+    { type: "metadata", protocol_version: "1.5", created_at: time },
+    {
+      type: "goal.create",
+      time,
+      goalId: "goal1",
+      objective: "Finish workload",
+    },
+    {
+      type: "task.started",
+      time,
+      info: {
+        taskId: "task1",
+        kind: "process",
+        status: "running",
+        description: "Monitor",
+      },
+    },
+    {
+      type: "interaction.request",
+      time,
+      id: "approval1",
+      kind: "approval",
+      request: { toolName: "Shell", action: "Run command" },
+    },
+  ];
+  await writeFile(
+    sourcePath,
+    rows.map((row) => JSON.stringify(row)).join("\n") + "\n",
+  );
+  const settings = {
+    sourcePath,
+    publisherRoot: join(root, "publisher"),
+    serverOrigin: server.url,
+    ownerCredential: "b".repeat(64),
+    title: "Kimi live",
+    visibility: "private" as const,
+    nativeIdentity: { nativeSessionId: "kimi_live", agentId: "root" },
+  };
+  let streamId = "";
+  async function attach(resolved: boolean) {
+    const controller = new AbortController();
+    let failure: unknown;
+    let captured = 0;
+    const running = publishKimiRecording({
+      ...settings,
+      signal: controller.signal,
+      onReady: (recording) => {
+        if (streamId) expect(recording.streamId).toBe(streamId);
+        streamId = recording.streamId;
+      },
+      onCaughtUp: async (boundary) => {
+        captured = boundary.producerEvents;
+      },
+    }).catch((error) => {
+      failure = error;
+    });
+    try {
+      await expect
+        .poll(
+          async () => {
+            if (failure) throw failure;
+            if (!captured || !streamId) return false;
+            const session = await server.store.get(streamId);
+            let state = initialState();
+            let through = 0;
+            for await (const event of session.history(
+              0,
+              session.boundary.sequence,
+            )) {
+              state = apply(state, event);
+              if (event.origin.type === "publisher")
+                through = event.origin.event.producerSeq;
+            }
+            return (
+              through >= captured &&
+              state.goals.size === 1 &&
+              state.tasks.size === 1 &&
+              state.interactions.size === 1 &&
+              [...state.goals.values()][0]?.status ===
+                (resolved ? "complete" : "active") &&
+              [...state.tasks.values()][0]?.status ===
+                (resolved ? "completed" : "running") &&
+              [...state.interactions.values()][0]?.status ===
+                (resolved ? "resolved" : "pending")
+            );
+          },
+          { timeout: 10000 },
+        )
+        .toBe(true);
+    } finally {
+      controller.abort();
+      await running;
+    }
+    if (failure) throw failure;
+  }
+  try {
+    await attach(false);
+    await appendFile(
+      sourcePath,
+      [
+        {
+          type: "goal.update",
+          time: time + 1,
+          status: "complete",
+          turnsUsed: 2,
+        },
+        {
+          type: "task.terminated",
+          time: time + 2,
+          info: {
+            taskId: "task1",
+            kind: "process",
+            status: "completed",
+            description: "Monitor",
+          },
+          outputTail: "Finished",
+        },
+        {
+          type: "interaction.resolved",
+          time: time + 3,
+          id: "approval1",
+          response: { decision: "approved", scope: "once" },
+        },
+      ]
+        .map((row) => JSON.stringify(row))
+        .join("\n") + "\n",
+    );
+    await attach(true);
+    const before = (await server.store.get(streamId)).boundary.sequence;
+    await attach(true);
+    expect((await server.store.get(streamId)).boundary.sequence).toBe(before);
+    await appendFile(
+      sourcePath,
+      JSON.stringify({
+        type: "metadata",
+        protocol_version: "1.5",
+        created_at: time + 1,
+      }) + "\n",
+    );
+    await expect(
+      publishKimiRecording({ ...settings, signal: AbortSignal.timeout(5000) }),
+    ).rejects.toThrow("conflicting metadata");
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 30000);

@@ -3,7 +3,11 @@ import { basename, dirname, resolve } from "node:path";
 import { z } from "zod";
 import { canonicalJson, type EventContent } from "@agentlive/protocol";
 import { PublisherJournal, StreamingRedactor } from "@agentlive/publisher";
-import { readJsonlSource, type SourceCursor } from "./jsonl.js";
+import {
+  readJsonlSource,
+  type SourceCursor,
+  type SourceRecord,
+} from "./jsonl.js";
 import type { FileArtifactResolver } from "./artifact-types.js";
 import { chunkContent } from "./chunks.js";
 const hash = (value: string) =>
@@ -20,6 +24,7 @@ export async function inspectKimiHistory(
   path: string,
   signal?: AbortSignal,
   identity?: { nativeSessionId: string; agentId: string },
+  tail: "parse" | "defer" = "parse",
 ): Promise<KimiHistoryManifest> {
   const components = resolve(path).split(/[\\/]/);
   const session = components.findLast((part) =>
@@ -33,7 +38,7 @@ export async function inspectKimiHistory(
     boundary: SourceCursor | undefined,
     records = 0;
   for await (const record of readJsonlSource(path, {
-    tail: "parse",
+    tail,
     ...(signal ? { signal } : {}),
   })) {
     const row = object.parse(record.value);
@@ -61,6 +66,36 @@ export async function captureKimiHistory(
   sink: KimiCaptureSink,
   secrets: readonly string[] = [],
   signal?: AbortSignal,
+  resolveArtifact?: FileArtifactResolver,
+) {
+  const validate = async () => {
+    for await (const _ of readJsonlSource(path, {
+      after: manifest.boundary,
+      through: manifest.boundary.offset,
+      ...(signal ? { signal } : {}),
+    }))
+      void _;
+  };
+  await validate();
+  const consumer = await createKimiHistoryConsumer(
+    manifest,
+    sink,
+    secrets,
+    resolveArtifact,
+  );
+  for await (const record of readJsonlSource(path, {
+    through: manifest.boundary.offset,
+    tail: "parse",
+    ...(signal ? { signal } : {}),
+  }))
+    await consumer.accept(record);
+  await validate();
+  return consumer.report;
+}
+export async function createKimiHistoryConsumer(
+  manifest: KimiHistoryManifest,
+  sink: KimiCaptureSink,
+  secrets: readonly string[] = [],
   resolveArtifact?: FileArtifactResolver,
 ) {
   if (
@@ -177,12 +212,6 @@ export async function captureKimiHistory(
     );
     report.messages++;
   };
-  for await (const _ of readJsonlSource(path, {
-    after: manifest.boundary,
-    through: manifest.boundary.offset,
-    ...(signal ? { signal } : {}),
-  }))
-    void _;
   await emit(
     "session",
     [
@@ -206,12 +235,18 @@ export async function captureKimiHistory(
     ],
     manifest.createdAt,
   );
-  for await (const record of readJsonlSource(path, {
-    through: manifest.boundary.offset,
-    tail: "parse",
-    ...(signal ? { signal } : {}),
-  })) {
+  const accept = async (record: SourceRecord) => {
     const row = object.parse(record.value);
+    z.string().parse(row.type);
+    if (row.type === "metadata") {
+      z.enum(["1.4", "1.5"]).parse(row.protocol_version);
+      if (
+        new Date(
+          z.number().int().nonnegative().parse(row.created_at),
+        ).toISOString() !== manifest.createdAt
+      )
+        throw new Error("Kimi history has conflicting metadata");
+    }
     report.records++;
     const timestamp =
       row.time === undefined
@@ -731,12 +766,6 @@ export async function captureKimiHistory(
       ].includes(String(row.type))
     )
       await gap(key, String(row.type), timestamp);
-  }
-  for await (const _ of readJsonlSource(path, {
-    after: manifest.boundary,
-    through: manifest.boundary.offset,
-    ...(signal ? { signal } : {}),
-  }))
-    void _;
-  return report;
+  };
+  return { accept, report };
 }

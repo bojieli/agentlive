@@ -843,3 +843,9 @@ Production acceptance still requires paged playback state/snapshots, independent
 Claude Code now follows complete native JSONL records through the same durable publisher/network pipeline as Codex. Import and follow share a stateful consumer; a tool result appended after reconnect resolves the tool captured during backfill. Reject newly introduced foreign session identity before converting that record. Keep source receipt progress distinct from remote producer acknowledgments, and verify both boundaries in real native resume probes.
 
 This covers one retained native file per publisher binding. Multi-file parent/subagent association, automatic installation/discovery, richer native object mappings, token stream capture, artifact dependency independence, and import/live lifecycle migration remain required for production completion.
+
+### Kimi retained-wire live integration checkpoint
+
+Kimi's single-agent wire log now uses the shared durable publishing path and the same stateful consumer as import. Reconstruct goal/task/interaction/plan maps during retained backfill before accepting appended state changes. Validate metadata consistency on live records as well as initial inspection. For moved wire files require explicit native session and agent identity; for native files derive identity from their session directory.
+
+Production completion still requires coordinating all relevant agent logs within one native session rather than treating one wire file as the entire session. The current converter identity prevents accidental mixing but does not implement multi-file merging. Native session discovery must account for canonical workspace paths, as verified by the macOS Kimi CLI probe.

@@ -107,7 +107,7 @@ npx --yes pnpm@12.3.4 agentlive publish --agent codex --source /path/to/session.
 
 Start `serve` first using the same state directory. Publishing defaults to private visibility. Use `--record-format legacy` for older histories without structured item records. Stop with Ctrl-C and run the same command to resume the same recording; it stays open, and pending captured events remain on disk. The initial retained history is included. Source catch-up and remote delivery are separate states: `source-caught-up` reports local conversion, while publisher status reports network progress.
 
-This command currently supports Codex and Claude Code. Initial recording creation needs connectivity; an existing binding can capture text while disconnected. Attachment upload can pause conversion until connectivity returns. Switching an ended import into a live recording still requires an explicit migration that is not yet implemented.
+This command currently supports Codex, Claude Code, and Kimi Code. Initial recording creation needs connectivity; an existing binding can capture text while disconnected. Attachment upload can pause conversion until connectivity returns. Switching an ended import into a live recording still requires an explicit migration that is not yet implemented.
 
 A read-only native transport/restart probe is available:
 
@@ -137,4 +137,19 @@ Run an explicit integration test against the installed Claude CLI (creates a new
 
 ```sh
 node scripts/probe-claude-publish.mjs
+```
+
+Kimi Code can publish one retained agent wire log:
+
+```sh
+npx --yes pnpm@12.3.4 agentlive publish --agent kimi \
+  --source /path/to/session_ID/agents/main/wire.jsonl
+```
+
+The adapter derives native identity from the session directory. For a moved wire file, provide both `--native-session <id>` and `--native-agent <name>`. Goals, tasks, recorded interactions, and plans share the same stateful conversion used by historical import. A binding currently follows one agent file; combining the main agent and subagent files remains unfinished.
+
+The installed Kimi CLI integration test creates a synthetic session, discovers it through `kimi session list`, resumes it natively while publishing, and checks publisher restart:
+
+```sh
+node scripts/probe-kimi-publish.mjs
 ```

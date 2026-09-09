@@ -8,6 +8,7 @@ import { startServer } from "@agentlive/server";
 import {
   publishCodexRecording,
   publishClaudeRecording,
+  publishKimiRecording,
   importClaudeRecording,
   importCodexRecording,
   importKimiRecording,
@@ -20,7 +21,7 @@ const help = `AgentLive — record and share coding-agent sessions
 Commands:
   agentlive serve [--host 127.0.0.1] [--port 7331]
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
-  agentlive publish --agent <codex|claude> --source <file> [--record-format structured|legacy]
+  agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
   agentlive watch --stream <recording-id> [--server <origin>] [--anonymous]
   agentlive replay --stream <recording-id> [--server <origin>] [--anonymous]
 
@@ -239,36 +240,48 @@ async function main() {
       : {}),
   };
   if (command === "publish") {
-    if (agent !== "codex" && agent !== "claude")
+    if (agent !== "codex" && agent !== "claude" && agent !== "kimi")
       throw new Error(
-        "Live file publishing currently supports Codex and Claude only",
+        "Live file publishing currently supports Codex, Claude, and Kimi only",
       );
     if (agent !== "codex" && values["record-format"])
       throw new Error("Record format applies only to Codex");
     const recordFormat = values["record-format"] ?? "structured";
     if (recordFormat !== "structured" && recordFormat !== "legacy")
       throw new Error("Record format must be structured or legacy");
-    await (agent === "claude" ? publishClaudeRecording : publishCodexRecording)(
-      {
-        ...options,
-        recordFormat,
-        onReady: (recording) => {
-          process.stdout.write(
-            JSON.stringify({ event: "publishing", ...recording }) + "\n",
-          );
-        },
-        onStatus: (status) => {
-          process.stdout.write(
-            JSON.stringify({ event: "publisher-status", status }) + "\n",
-          );
-        },
-        onCaughtUp: async () => {
-          process.stdout.write(
-            JSON.stringify({ event: "source-caught-up" }) + "\n",
-          );
-        },
+    await (
+      agent === "claude"
+        ? publishClaudeRecording
+        : agent === "kimi"
+          ? publishKimiRecording
+          : publishCodexRecording
+    )({
+      ...options,
+      recordFormat,
+      ...(values["native-session"] && values["native-agent"]
+        ? {
+            nativeIdentity: {
+              nativeSessionId: values["native-session"],
+              agentId: values["native-agent"],
+            },
+          }
+        : {}),
+      onReady: (recording) => {
+        process.stdout.write(
+          JSON.stringify({ event: "publishing", ...recording }) + "\n",
+        );
       },
-    );
+      onStatus: (status) => {
+        process.stdout.write(
+          JSON.stringify({ event: "publisher-status", status }) + "\n",
+        );
+      },
+      onCaughtUp: async () => {
+        process.stdout.write(
+          JSON.stringify({ event: "source-caught-up" }) + "\n",
+        );
+      },
+    });
     return;
   }
   const result =

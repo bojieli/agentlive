@@ -64,3 +64,7 @@ export {
   publishClaudeRecording,
   type ClaudePublishOptions,
 } from "./publish-claude.js";
+export {
+  publishKimiRecording,
+  type KimiPublishOptions,
+} from "./publish-kimi.js";

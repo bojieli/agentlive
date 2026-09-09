@@ -36,7 +36,7 @@ export interface NativeFollowContext {
 export async function publishNativeRecording(
   options: NativePublishOptions,
   adapter: {
-    agent: "codex" | "claude";
+    agent: "codex" | "claude" | "kimi";
     nativeSessionId: string;
     converterVersion: string;
     recordFormat: string;
