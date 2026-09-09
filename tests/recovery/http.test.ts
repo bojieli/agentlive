@@ -767,7 +767,7 @@ it("lists owner recordings in bounded pages without evicting active sessions or 
 
 it("publishes revision-bound snapshots and serves verified content only to authorized readers", async () => {
   const { server, base, streamId, revision } = await setup("private");
-  const { SnapshotReader } =
+  const { openRecordingSnapshot } =
     await import("../../packages/playback/src/index.js");
   const headers = {
     authorization: `Bearer ${writeSecret}`,
@@ -841,8 +841,8 @@ it("publishes revision-bound snapshots and serves verified content only to autho
       return (await response.json()).text;
     },
   };
-  const snapshot = await SnapshotReader.open(
-    descriptor.ref,
+  const snapshot = await openRecordingSnapshot(
+    descriptor,
     { streamId, revision },
     content,
   );
@@ -930,12 +930,10 @@ it("loads exact Unicode text ranges through the shared snapshot client", async (
         session.info.serverSeq,
         AbortSignal.timeout(5000),
       );
-      const fields = await reader.entries(reader.manifest.state, 0, 32);
-      const messages = fields.find(([key]) => key === "messages")![1];
-      const message = (await reader.entries(messages, 0, 1))[0]![1];
-      const contents = (await reader.entries(message, 0, 32)).find(
-        ([key]) => key === "text",
-      )![1];
+      expect(reader).toHaveProperty("format", "agentlive.paged-state");
+      if (!("format" in reader) || reader.format !== "agentlive.paged-state")
+        throw new Error("Expected paged snapshot");
+      const contents = (await reader.get("messages", "message"))!.text;
       expect(await reader.text(contents, 16383, 1)).toBe("\ud83e");
       expect(await reader.text(contents, 16384, 3)).toBe("\udd8a\ud800t");
       expect(await reader.text(contents, 16380, 9)).toBe(

@@ -230,7 +230,8 @@ try {
   if (
     snapshotManifest.streamId !== imported.streamId ||
     snapshotManifest.revision !== metadata.revision ||
-    snapshotManifest.serverSeq !== metadata.serverSeq ||
+    snapshotManifest.format !== "agentlive.paged-state" ||
+    snapshotManifest.state.appliedSeq !== metadata.serverSeq ||
     content.text.length !== ref.units
   )
     throw new Error(

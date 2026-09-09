@@ -10,7 +10,7 @@ Callers serialize updates, retain content-store ownership through accepted I/O, 
 
 `checkpoint` writes a `format: "agentlive.paged-state"`, version 1, reducer-version 1 envelope bound to stream ID and revision. `open` validates this envelope and root metadata; referenced objects are validated as visited. Pending replacements preserve their chunks, aggregate text reference, target and length, so reduction can continue after a checkpoint reopen. Checkpoints do not imply that all referenced content has been eagerly audited.
 
-This format is distinct from the initial `SnapshotReader` format. Production server publication and browser/terminal dispatch must be integrated explicitly; substituting one root for the other is invalid.
+This format is distinct from the initial `SnapshotReader` format. Server publication now writes paged descriptors and the shared client dispatches explicitly through `openRecordingSnapshot`; descriptors without a format retain the legacy codec. Browser/terminal automatic snapshot use remains required. Substituting one root for the other is invalid.
 
 ## Bounds and limitations
 
@@ -18,7 +18,7 @@ Each encoded event is limited to 1 MiB. Object metadata is limited to 2 Mi UTF-1
 
 `materialize` is an equivalence-testing helper with a default 16 Mi-unit accounting budget. It reconstructs ordinary reference state and must not be used as the production large-session viewer. Object-range loading can precede budget accounting. Production views must read objects and text ranges directly.
 
-Per-event immutable writes currently retain historical nodes. Batching, content pins/collection, production snapshot scheduling and the long-session performance suite remain required.
+Per-event immutable writes currently retain historical nodes. Batching, content pins/collection, automatic snapshot scheduling and the long-session performance suite remain required.
 
 ## Evidence
 

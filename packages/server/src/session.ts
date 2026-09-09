@@ -175,7 +175,7 @@ export class RecordingSession {
     this.snapshotBoundary(through);
     return this.snapshots.build(
       through,
-      () => this.history(0, through),
+      (after) => this.history(after, through),
       signal,
     );
   }

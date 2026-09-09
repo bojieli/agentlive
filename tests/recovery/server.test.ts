@@ -448,7 +448,7 @@ it("attempts log cleanup even when attachment cleanup fails and does not repeat 
 
 it("retains published snapshot boundaries across appends and server reopen", async () => {
   const { root, store, input, session, lease } = await setup();
-  const { SnapshotReader, initialState, apply } =
+  const { openRecordingSnapshot, initialState, apply } =
     await import("../../packages/playback/src/index.js");
   await session.append(lease, [
     event(session.info.id, 1),
@@ -468,8 +468,8 @@ it("retains published snapshot boundaries across appends and server reopen", asy
   expect(await recovered.selectSnapshot(recovered.info.serverSeq)).toEqual(
     snapshot,
   );
-  const reader = await SnapshotReader.open(
-    snapshot.ref,
+  const reader = await openRecordingSnapshot(
+    snapshot,
     { streamId: id, revision },
     {
       put: async () => {

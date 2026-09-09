@@ -5,7 +5,6 @@ import { z } from "zod";
 import { TextStore, atomicJson, syncDirectory } from "@agentlive/storage";
 import {
   ProtocolError,
-  canonicalJson,
   idSchema,
   cursorSchema,
   type StoredEvent,
@@ -13,10 +12,9 @@ import {
   type SnapshotDescriptor,
 } from "@agentlive/protocol";
 import {
-  apply,
-  initialState,
-  createSnapshot,
-  SnapshotReader,
+  PagedReducer,
+  initialPagedState,
+  openRecordingSnapshot,
   type ContentReference,
   type SnapshotBinding,
 } from "@agentlive/playback";
@@ -135,8 +133,8 @@ export class RecordingSnapshots {
     }
   }
   private async verify(entry: SnapshotDescriptor, signal?: AbortSignal) {
-    const reader = await SnapshotReader.open(
-      entry.ref,
+    const reader = await openRecordingSnapshot(
+      entry,
       this.binding,
       await this.store(),
       signal,
@@ -165,7 +163,7 @@ export class RecordingSnapshots {
   }
   build(
     through: number,
-    history: () => AsyncIterable<StoredEvent>,
+    history: (after: number) => AsyncIterable<StoredEvent>,
     signal?: AbortSignal,
   ): Promise<SnapshotDescriptor> {
     cursorSchema.parse(through);
@@ -177,10 +175,18 @@ export class RecordingSnapshots {
       const entries = await this.catalog();
       const existing = entries.find((entry) => entry.serverSeq === through);
       if (existing) return this.verify(existing, combined);
-      // Transitional reference builder. Paged reduction will remove this input ceiling.
-      let state = initialState();
-      let bytes = 0;
-      for await (const event of history()) {
+      const store = await this.store(),
+        reducer = new PagedReducer(store);
+      const previous = entries.findLast(
+        (entry) =>
+          entry.serverSeq < through && entry.format === "agentlive.paged-state",
+      );
+      let state = initialPagedState();
+      if (previous) {
+        await this.verify(previous, combined);
+        state = await reducer.open(previous.ref, this.binding, combined);
+      }
+      for await (const event of history(state.appliedSeq)) {
         combined.throwIfAborted();
         if (
           event.serverSeq !== state.appliedSeq + 1 ||
@@ -188,24 +194,22 @@ export class RecordingSnapshots {
         )
           throw new ProtocolError(
             "corrupt_storage",
-            "Snapshot history is not the requested contiguous prefix",
+            "Snapshot history is not the requested contiguous suffix",
           );
-        bytes += Buffer.byteLength(canonicalJson(event));
-        if (bytes > 64 * 1024 * 1024)
-          throw new ProtocolError(
-            "retry_later",
-            "Snapshot reference builder exceeds 64 MiB history limit",
-          );
-        state = apply(state, event);
+        state = await reducer.apply(state, event, combined);
       }
       if (state.appliedSeq !== through)
         throw new ProtocolError(
           "corrupt_storage",
           "Snapshot history prefix is incomplete",
         );
-      const store = await this.store();
-      const ref = await createSnapshot(state, this.binding, store, combined);
-      const entry = { serverSeq: through, timelineMs: state.timelineMs, ref };
+      const ref = await reducer.checkpoint(state, this.binding, combined);
+      const entry: SnapshotDescriptor = {
+        format: "agentlive.paged-state",
+        serverSeq: through,
+        timelineMs: state.timelineMs,
+        ref,
+      };
       await this.verify(entry, combined);
       combined.throwIfAborted();
       const next = [...entries, entry]

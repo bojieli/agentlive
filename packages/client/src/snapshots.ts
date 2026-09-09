@@ -7,11 +7,14 @@ import {
   snapshotContentReferenceSchema,
   type SnapshotDescriptor,
 } from "@agentlive/protocol";
-import { SnapshotReader, type ContentReference } from "@agentlive/playback";
+import {
+  openRecordingSnapshot,
+  type ContentReference,
+} from "@agentlive/playback";
 import { originOf, request } from "./http.js";
 export interface OpenedSnapshot {
   descriptor: SnapshotDescriptor;
-  reader: SnapshotReader;
+  reader: Awaited<ReturnType<typeof openRecordingSnapshot>>;
 }
 /** Session-scoped, bounded HTTP transport. Readers share their opening operation's lifetime signal. */
 export class RecordingSnapshotClient {
@@ -122,8 +125,8 @@ export class RecordingSnapshotClient {
         "sequence_gap",
         "Snapshot response is outside the requested boundary",
       );
-    const reader = await SnapshotReader.open(
-      descriptor.ref,
+    const reader = await openRecordingSnapshot(
+      descriptor,
       { streamId: this.streamId, revision: this.revision },
       {
         put: async () => {

@@ -10,13 +10,14 @@ Snapshots are derived acceleration data. The JSONL event log remains authoritati
 {"revision":"recording-revision","throughServerSeq":1200}
 ```
 
-The sequence must be within the committed history. The server reconstructs exactly that prefix, persists the content tree, then atomically publishes its catalog descriptor. Appends may continue while the snapshot builds. A successful response has status 201:
+The sequence must be within the committed history. The server opens the latest earlier paged checkpoint when available, reduces only the remaining contiguous event suffix, persists the new root, then atomically publishes its catalog descriptor. Without a paged checkpoint it reduces the requested prefix from the JSONL history. Appends may continue while the snapshot builds. A successful response has status 201:
 
 ```json
 {
   "streamId":"recording-id",
   "revision":"recording-revision",
   "snapshot":{
+    "format":"agentlive.paged-state",
     "serverSeq":1200,
     "timelineMs":45000,
     "ref":{"hash":"64 lowercase hexadecimal characters","byteSize":123,"units":456}
@@ -40,11 +41,11 @@ Load a selected snapshot at its exact sequence, then request contiguous events s
 
 Uses the recording's read-access policy and its isolated TextStore. Supply the complete content reference and a range within its decoded UTF-16 units. A read is limited to 65,536 units. The server verifies stored identity and length before returning `{"text":"…"}`; JSON preserves lone surrogate units when a range splits a pair. The endpoint serves decoded ranges, not cryptographic range proofs for independent verification against an untrusted server. Use the authenticated same-origin transport and HTTPS deployment policy.
 
-`SnapshotReader` consumes these references, reading metadata pages of at most 32,768 units and container ranges of at most 32 entries. Full `materialize` is a bounded reference/testing helper, not a production long-history loading strategy.
+`openRecordingSnapshot` dispatches by the descriptor format. Descriptors without a format retain the original `SnapshotReader` codec. New `agentlive.paged-state` descriptors use `PagedSnapshotReader`, which exposes named object lookup/ranges and text-reference range reads. Mismatched formats are rejected without fallback. Paged object metadata is capped at 2 Mi UTF-16 units and read in chunks of at most 65,536 units; object ranges contain at most 32 entries. Full `materialize` is a bounded reference/testing helper, not a production long-history loading strategy.
 
 ## Current limits and lifecycle
 
-- The reference builder admits up to 64 MiB of cumulative encoded events. This does not establish a 64 MiB heap bound; scalable generation requires the paged reducer.
+- Snapshot generation uses the persistent paged reducer and no longer imposes the transitional 64 MiB cumulative-history limit. TextStore capacity and per-event/object limits still apply. Per-event write amplification, batching, collection and measured long-session bounds remain required.
 - Each recording admits at most 16 snapshot operations and uses a default 512 MiB encoded TextStore quota.
 - Catalogs retain the highest 128 snapshot sequences. Older descriptors and interrupted builds can leave content on disk; no content is deleted yet. Safe pins, retention and collection remain unfinished.
 - Snapshot catalog/content operations are serialized per recording. Event publishing uses its separate existing queue.
@@ -64,8 +65,14 @@ try {
   const selected = await snapshots.select(targetSequence, sessionSignal);
   if (selected) {
     const { descriptor, reader } = selected;
-    const fields = await reader.entries(reader.manifest.state, 0, 32, sessionSignal);
-    // Resolve selected containers/text lazily; continue events after descriptor.serverSeq.
+    if ("format" in reader && reader.format === "agentlive.paged-state") {
+      const messages = await reader.entries("messages", 0, 32, sessionSignal);
+      // Load selected message.text references with reader.text(ref, offset, length).
+    } else {
+      const fields = await reader.entries(reader.manifest.state, 0, 32, sessionSignal);
+      // Resolve legacy containers through the original snapshot reader.
+    }
+    // Continue events strictly after descriptor.serverSeq.
   }
 } finally {
   snapshots.close();
@@ -77,3 +84,10 @@ try {
 Each operation makes one attempt, with a 30-second deadline per HTTP request and at most 16 concurrent requests per client. Retain the revision/target when retrying a network failure. Binding changes and corruption require explicit recovery, not silent fallback to another recording. Responses are bounded before parsing: 4 KiB for selections/publications, and six bytes per requested UTF-16 unit plus 4 KiB for content. Aborting or rejecting an oversized response does not wait indefinitely for the underlying stream's cancellation callback.
 
 This client does not yet replace browser or terminal replay reconstruction with paged state, and its materialization helper remains for bounded verification.
+
+
+### Reader formats
+
+The shared client returns a reader whose `manifest` supplies the verified recording boundary and whose `materialize` helper supports bounded equivalence checks. For paged descriptors, narrow the reader using its `format` property before calling `get("messages", messageId)` or `entries("messages", offset, limit)`. Message text and tool input/output are content references; pass a reference to `text(ref, offset, length)` to load a bounded range. The paged reader's `state` accessor returns a detached root copy for subsequent local reduction; mutating it does not change the reader.
+
+Old catalog entries remain selectable and readable. Building a new boundary after a legacy checkpoint replays authoritative history into paged state; it does not materialize and convert the legacy snapshot. Retrying an existing legacy boundary returns that same descriptor.

@@ -149,3 +149,12 @@ On 2026-09-09, the shared native verifier began applying captured events through
 The retained-history validator now supports `--paged`. All 12 retained OpenCode exports passed, covering 129 canonical events and 29 messages, including checkpoint reopen and strict equivalence. One unavailable artifact remains explicitly represented. This is a subset of the larger reference-only local-history corpus; it does not establish all-agent paged corpus coverage. Temporary native content is removed; only aggregate evidence is retained.
 
 After long-reference indexing and artifact descriptor validation were tightened, the full local check passed 297 tests in 39 files and standalone package verification passed. A fresh live Codex probe passed with 109 events, five messages, one tool and no gaps; paged reduction used 229,866 bytes and matched reference state after checkpoint reopen. Native restart/resume and deduplication passed. The 12-file OpenCode paged corpus also passed again.
+
+
+## Production paged server snapshots
+
+On 2026-09-09, a live Kimi Code run passed after server snapshot publication switched to paged event reduction. Two native turns produced 35 stored events, seven messages and 19 activity items. The shared client loaded the explicitly tagged paged checkpoint through 69 content requests and reconstructed state equal to reference replay. Native resume, full-history backfill, live suffix capture, publisher restart deduplication, search and browser-model restoration passed. The separate paged reducer verifier also passed checkpoint reopen with 88,785 bytes of stored state/content.
+
+Standalone package verification passed with the paged snapshot manifest, isolated installation, reproducible rebuild, publication/selection, history import/replay and clean shutdown. Browser/terminal automatic paged seeking remains unfinished; this establishes the production server and shared transport path.
+
+The final isolated full check passed 299 tests in 40 files. An earlier run concurrent with package/native disk work timed out the existing 60-second large snapshot-map test and encountered cleanup while its work was still running; the isolated rerun passed without changing test workload or deadline. Migration coverage includes legacy catalogs, suffix-only rebuild after restart, failed-build catalog preservation and explicit format/boundary rejection.

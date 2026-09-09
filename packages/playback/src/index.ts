@@ -532,3 +532,8 @@ export {
   type PagedContent,
   type PagedRecordingState,
 } from "./paged-reducer.js";
+
+export {
+  PagedSnapshotReader,
+  openRecordingSnapshot,
+} from "./paged-snapshot.js";

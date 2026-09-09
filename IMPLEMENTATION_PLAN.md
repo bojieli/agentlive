@@ -1245,3 +1245,12 @@ Apply every canonical event family through `PagedReducer`, preserving reference 
 Publish only completed roots under caller-owned serialization and durable atomic publication. Cancellation can leave unreferenced content but cannot mutate the prior root. The versioned `agentlive.paged-state` checkpoint is distinct from the initial snapshot codec; server catalogs, client dispatch and viewers require explicit integration. See [PAGED_STATE.md](docs/protocol/PAGED_STATE.md) for API bounds and recovery semantics.
 
 Validate every event kind against reference state after each application, reopen mid-replacement, retain old roots after cancellation, reject invalid transitions and artifact identity/version mismatches, and compare real native histories after checkpoint recovery. Production paged snapshot generation, browser/terminal adoption, browser content persistence, batching, pins/collection and long-session measurements remain required.
+
+
+### Production paged snapshot generation and format dispatch
+
+Server snapshot publication now reduces JSONL history through PagedReducer and publishes an explicitly tagged `agentlive.paged-state` descriptor. Resume from the latest earlier paged checkpoint using only its contiguous suffix, including after server restart. Remove the transitional cumulative 64 MiB history cap; retain event/object/content quotas and do not claim measured large-session performance before acceptance tests.
+
+The shared snapshot client uses `openRecordingSnapshot` to dispatch validated descriptors. Missing format means the original codec, preserving existing catalog reads and exact-boundary retries. Paged readers expose lazy object lookup/ranges and text reads with a detached state-root accessor. Reject descriptor/manifest boundary or format mismatches without speculative fallback. Failed builds leave the last published catalog intact.
+
+Validate suffix-only reconstruction after reopen, legacy catalog compatibility, incomplete suffix rejection, immutable reader roots, format/boundary mismatches, authorized HTTP Unicode range reads, packaged snapshot generation, and actual native-agent publication/reconstruction. Browser/terminal automatic snapshot seeking, browser content storage, batching, collection and performance acceptance remain required.
