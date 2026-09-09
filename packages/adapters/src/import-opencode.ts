@@ -14,7 +14,7 @@ export async function importOpenCodeRecording(options: OpenCodeImportOptions) {
   );
   return importNativeRecording(options, {
     agent: "opencode",
-    converterVersion: "opencode-export-2",
+    converterVersion: "opencode-export-3",
     source,
     capture: (journal, secrets, artifacts) =>
       captureOpenCodeHistory(

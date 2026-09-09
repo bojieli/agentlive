@@ -109,7 +109,7 @@ export async function publishOpenCodeRecording(
     const identity = {
       artifactRoots: roots,
       version: 1,
-      converterVersion: "opencode-live-1",
+      converterVersion: "opencode-live-2",
       title: options.title,
       visibility: options.visibility,
       filterFingerprint: createHash("sha256")

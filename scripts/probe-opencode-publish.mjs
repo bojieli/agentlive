@@ -139,7 +139,7 @@ async function prompt(marker, attachFile = false) {
               type: "file",
               mime: "text/plain",
               filename: "probe.txt",
-              url: `data:text/plain;base64,${Buffer.from("Synthetic attachment probe-private-key").toString("base64")}`,
+              url: `data:text/plain;charset=utf-8,${encodeURIComponent("Synthetic attachment probe-private-key")}`,
             },
           ]
         : []),

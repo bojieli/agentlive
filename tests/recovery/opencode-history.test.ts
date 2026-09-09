@@ -153,6 +153,14 @@ it("imports inline and local artifacts, links tool attachments, and retries afte
                 mime: "text/plain",
                 filename: "note.txt",
               }),
+              part("percent1", {
+                type: "file",
+                url:
+                  "data:text/plain;charset=utf-8," +
+                  encodeURIComponent("percent ☃ private-key +"),
+                mime: "text/plain",
+                filename: "percent.txt",
+              }),
               part("local1", {
                 type: "file",
                 url: pathToFileURL(file).href.replace(".html", ".%68tml"),
@@ -170,7 +178,10 @@ it("imports inline and local artifacts, links tool attachments, and retries afte
                     {
                       id: "tool_file",
                       type: "file",
-                      url: inline("tool private-key"),
+                      url: inline("tool private-key").replace(
+                        ";base64",
+                        ";charset=utf-8;base64",
+                      ),
                       mime: "text/plain",
                       filename: "tool.txt",
                     },
@@ -199,7 +210,7 @@ it("imports inline and local artifacts, links tool attachments, and retries afte
       signal: AbortSignal.timeout(10000),
     };
     const imported = await importOpenCodeRecording(options);
-    expect(imported.report.availableAttachments).toBe(3);
+    expect(imported.report.availableAttachments).toBe(4);
     expect(imported.report.unavailableAttachments).toBe(1);
     const session = await server.store.get(imported.streamId);
     let state = initialState();
@@ -228,9 +239,10 @@ it("imports inline and local artifacts, links tool attachments, and retries afte
         "<h1>[REDACTED] report</h1>",
         "inline [REDACTED]",
         "tool [REDACTED]",
+        "percent ☃ [REDACTED] +",
       ].sort(),
     );
-    expect(state.references.size).toBe(3);
+    expect(state.references.size).toBe(4);
     const before = session.boundary.sequence;
     await rm(file);
     await importOpenCodeRecording(options);

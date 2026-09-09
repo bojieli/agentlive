@@ -955,3 +955,12 @@ Anchor a fresh viewer at its first event. Restored viewers reconstruct their sav
 ### Interactive cancellation during viewer join
 
 Install watch and replay terminal controls before their initial network requests. Watch installs controls before initializing the subscriber cache and fetching session metadata. Route keyboard cancellation into the same signal used by the metadata request and both running loops. Quit and Ctrl-C must restore terminal settings and release cache ownership even if a metadata response never starts or stalls mid-body. Initialization errors still propagate when cancellation was not requested. Validate actual stalled HTTP responses, reopening the same cache after cancellation, and real PTY input during join. Synchronous cache recovery is still not preemptible.
+
+
+### Embedded OpenCode attachment encodings
+
+Use a shared bounded decoder for import and live capture of data URLs. Decode percent escapes as octets (including binary bytes), preserve literal plus signs, and support canonical base64 with percent-escaped alphabet characters. Accept omitted media type as text/plain and optional UTF-8/US-ASCII charset declarations. Validate recognized text as UTF-8 before it enters filtering; explicit US-ASCII also rejects high bytes. Preserve the existing UTF-8 treatment of text with no charset declaration. Unsupported charset/parameter forms, malformed escaping, media-type conflicts, and oversized data remain explicit unavailable outcomes.
+
+Limits: 1 KiB header boundary, 32 MiB encoded payload, 24 MiB decoded bytes. Copy into the durable attachment spool, upload, and announce server-owned references through the existing path. Never publish the raw inline URL. Grammar is based on [RFC 2397](https://www.rfc-editor.org/rfc/rfc2397), with deliberately restricted parameters and text encodings compatible with the filtering pipeline.
+
+This changes conversion identity to opencode-export-3 and opencode-live-2. Older bindings are rejected rather than silently reinterpreted; automatic migration remains required. Validate percent-encoded Unicode with filtering, binary octets, escaped base64, invalid inputs, download integrity, retry after source deletion, and real native capture.

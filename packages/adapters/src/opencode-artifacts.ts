@@ -1,3 +1,4 @@
+import { decodeArtifactDataUrl } from "./data-url.js";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { basename } from "node:path";
@@ -58,44 +59,15 @@ export async function openCodeFileEvents(options: {
       if ("attachment" in result) attachment = result.attachment;
       else reason = result.reason;
     } else if (descriptor.url.startsWith("data:")) {
-      const comma = descriptor.url.indexOf(",");
-      const header = descriptor.url.slice(5, comma);
-      const match = /^([a-zA-Z0-9.+-]+\/[a-zA-Z0-9.+-]+);base64$/.exec(header);
-      if (
-        comma >= 0 &&
-        match &&
-        match[1]!.length <= 128 &&
-        (!descriptor.mime ||
-          descriptor.mime.toLowerCase() === match[1]!.toLowerCase())
-      ) {
-        const encoded = descriptor.url.slice(comma + 1);
-        if (
-          encoded.length <= 32 * 1024 * 1024 &&
-          encoded.length % 4 === 0 &&
-          /^[A-Za-z0-9+/]*={0,2}$/.test(encoded)
-        ) {
-          const bytes = Buffer.from(encoded, "base64");
-          if (bytes.toString("base64") === encoded) {
-            const mediaType = match[1]!.toLowerCase();
-            attachment = await options.resolvers.resolveInline({
-              artifactId: options.artifactId,
-              sourceKey,
-              bytes,
-              filename:
-                basename(descriptor.filename).slice(0, 255) || "attachment",
-              mediaType,
-              text:
-                mediaType.startsWith("text/") ||
-                [
-                  "application/json",
-                  "application/javascript",
-                  "application/xml",
-                  "image/svg+xml",
-                ].includes(mediaType),
-              historical: true,
-            });
-          }
-        }
+      const decoded = decodeArtifactDataUrl(descriptor.url, descriptor.mime);
+      if (decoded) {
+        attachment = await options.resolvers.resolveInline({
+          artifactId: options.artifactId,
+          sourceKey,
+          ...decoded,
+          filename: basename(descriptor.filename).slice(0, 255) || "attachment",
+          historical: true,
+        });
       }
       if (!attachment)
         reason =
