@@ -20,7 +20,16 @@ export async function verifyContentStore(state, signal) {
       ...[...state.tools.values()].flatMap((tool) => [tool.input, tool.output]),
       ...[...state.changes.values()].map((change) => change.patch),
     ];
-    for (const text of fields) references.push(await store.put(text, signal));
+    for (const text of fields) {
+      const split = Math.floor(text.length / 2);
+      const prefix = await store.put(text.slice(0, split), signal);
+      const ref = await store.append(prefix, text.slice(split), signal);
+      if (!isDeepStrictEqual(ref, await store.put(text, signal)))
+        throw new Error(
+          "Incremental native text reference differs from complete write",
+        );
+      references.push(ref);
+    }
     const binding = {
       streamId: "native-probe",
       revision: "native-probe-revision",
@@ -73,6 +82,7 @@ export async function verifyContentStore(state, signal) {
       reopened: true,
       snapshotVerified: true,
       indexedFields: references.length,
+      appendedFields: references.length,
       indexReopened: true,
     };
   } finally {

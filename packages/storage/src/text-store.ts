@@ -189,75 +189,144 @@ export class TextStore {
     source: string | AsyncIterable<string>,
     signal?: AbortSignal,
   ): Promise<TextReference> {
-    signal = signal
+    const combined = signal
+      ? AbortSignal.any([signal, this.sourceStop.signal])
+      : this.sourceStop.signal;
+    return this.run(() => this.write(source, combined));
+  }
+  /** Reuse completed pages and rewrite only a partial tail plus new content. */
+  append(
+    ref: TextReference,
+    source: string | AsyncIterable<string>,
+    signal?: AbortSignal,
+  ): Promise<TextReference> {
+    ref = { ...ref };
+    const combined = signal
       ? AbortSignal.any([signal, this.sourceStop.signal])
       : this.sourceStop.signal;
     return this.run(async () => {
-      signal?.throwIfAborted();
-      const input =
-        typeof source === "string"
-          ? (async function* () {
-              for (
-                let offset = 0;
-                offset < source.length;
-                offset += CONTENT_PAGE_UNITS
-              )
-                yield source.slice(offset, offset + CONTENT_PAGE_UNITS);
-            })()
-          : source;
-      const iterator = input[Symbol.asyncIterator]();
-      const pages: TextReference[] = [];
-      let pending = "",
-        units = 0,
-        complete = false;
-      let inputChunks = 0;
-      const flush = async (text: string) => {
-        if (pages.length >= MAX_PAGES)
+      const manifest = await this.manifest(ref, combined);
+      return this.write(source, combined, { ref, manifest });
+    });
+  }
+  private async write(
+    source: string | AsyncIterable<string>,
+    signal: AbortSignal,
+    initial?: { ref: TextReference; manifest: Manifest },
+  ): Promise<TextReference> {
+    signal?.throwIfAborted();
+    const input =
+      typeof source === "string"
+        ? (async function* () {
+            for (
+              let offset = 0;
+              offset < source.length;
+              offset += CONTENT_PAGE_UNITS
+            )
+              yield source.slice(offset, offset + CONTENT_PAGE_UNITS);
+          })()
+        : source;
+    const iterator = input[Symbol.asyncIterator]();
+    const pages: TextReference[] = initial ? [...initial.manifest.pages] : [];
+    let pending = "",
+      units = initial?.manifest.units ?? 0,
+      complete = false;
+    let inputChunks = 0,
+      extended = false;
+    const flush = async (text: string) => {
+      if (pages.length >= MAX_PAGES)
+        throw new ProtocolError(
+          "invalid_request",
+          "Text exceeds content page limit",
+        );
+      pages.push(await this.save(text, text.length, signal));
+    };
+    try {
+      while (true) {
+        if (++inputChunks % 256 === 0)
+          await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        const item = await next(iterator, signal);
+        if (item.done) {
+          complete = true;
+          break;
+        }
+        if (typeof item.value !== "string" || item.value.length > 65536)
+          throw new ProtocolError(
+            "invalid_request",
+            "Content input chunks must be strings of at most 65536 units",
+          );
+        units += item.value.length;
+        if (units > MAX_PAGES * CONTENT_PAGE_UNITS)
           throw new ProtocolError(
             "invalid_request",
             "Text exceeds content page limit",
           );
-        pages.push(await this.save(text, text.length, signal));
-      };
-      try {
-        while (true) {
-          if (++inputChunks % 256 === 0)
-            await new Promise<void>((resolve) => setTimeout(resolve, 0));
-          const item = await next(iterator, signal);
-          if (item.done) {
-            complete = true;
-            break;
-          }
-          if (typeof item.value !== "string" || item.value.length > 65536)
-            throw new ProtocolError(
-              "invalid_request",
-              "Content input chunks must be strings of at most 65536 units",
-            );
-          units += item.value.length;
-          if (units > MAX_PAGES * CONTENT_PAGE_UNITS)
-            throw new ProtocolError(
-              "invalid_request",
-              "Text exceeds content page limit",
-            );
-          pending += item.value;
-          while (pending.length >= CONTENT_PAGE_UNITS) {
-            await flush(pending.slice(0, CONTENT_PAGE_UNITS));
-            pending = pending.slice(CONTENT_PAGE_UNITS);
+        if (item.value.length && !extended) {
+          extended = true;
+          if (initial && initial.manifest.units % CONTENT_PAGE_UNITS) {
+            const tail = pages.pop()!;
+            pending = await this.page(tail, signal);
           }
         }
-        if (pending.length) await flush(pending);
-        return await this.save(
-          { version: 1, units, pages } satisfies Manifest,
-          units,
-          signal,
-        );
-      } finally {
-        if (!complete && iterator.return)
-          void Promise.resolve()
-            .then(() => iterator.return!())
-            .catch(() => {});
+        pending += item.value;
+        while (pending.length >= CONTENT_PAGE_UNITS) {
+          await flush(pending.slice(0, CONTENT_PAGE_UNITS));
+          pending = pending.slice(CONTENT_PAGE_UNITS);
+        }
       }
-    });
+      if (initial && !extended) {
+        await syncDirectory(this.blobs.directory);
+        signal?.throwIfAborted();
+        return initial.ref;
+      }
+      if (pending.length) await flush(pending);
+      const result = await this.save(
+        { version: 1, units, pages } satisfies Manifest,
+        units,
+        signal,
+      );
+      signal?.throwIfAborted();
+      return result;
+    } finally {
+      if (!complete && iterator.return)
+        void Promise.resolve()
+          .then(() => iterator.return!())
+          .catch(() => {});
+    }
+  }
+  private async manifest(
+    ref: TextReference,
+    signal?: AbortSignal,
+  ): Promise<Manifest> {
+    validReference(ref, MAX_PAGES * CONTENT_PAGE_UNITS);
+    const manifest = decode(await this.load(ref, signal)) as Manifest;
+    if (
+      !manifest ||
+      Object.keys(manifest).sort().join(",") !== "pages,units,version" ||
+      manifest.version !== 1 ||
+      manifest.units !== ref.units ||
+      !Array.isArray(manifest.pages) ||
+      manifest.pages.length !== Math.ceil(ref.units / CONTENT_PAGE_UNITS)
+    )
+      throw new ProtocolError("corrupt_storage", "Invalid text manifest");
+    for (const [index, page] of manifest.pages.entries()) {
+      validReference(page, CONTENT_PAGE_UNITS);
+      if (
+        page.units !==
+        Math.min(CONTENT_PAGE_UNITS, ref.units - index * CONTENT_PAGE_UNITS)
+      )
+        throw new ProtocolError("corrupt_storage", "Invalid text page length");
+    }
+    return manifest;
+  }
+  private async page(
+    ref: TextReference,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    const text = decode(await this.load(ref, signal));
+    if (typeof text !== "string" || text.length !== ref.units)
+      throw new ProtocolError("corrupt_storage", "Invalid text page");
+    return text;
   }
   read(
     ref: TextReference,
@@ -279,35 +348,13 @@ export class TextStore {
         length > ref.units - offset
       )
         throw new RangeError("Invalid content range");
-      const manifest = decode(await this.load(ref, signal)) as Manifest;
-      if (
-        !manifest ||
-        Object.keys(manifest).sort().join(",") !== "pages,units,version" ||
-        manifest.version !== 1 ||
-        manifest.units !== ref.units ||
-        !Array.isArray(manifest.pages) ||
-        manifest.pages.length !== Math.ceil(ref.units / CONTENT_PAGE_UNITS)
-      )
-        throw new ProtocolError("corrupt_storage", "Invalid text manifest");
-      for (const [index, page] of manifest.pages.entries()) {
-        validReference(page, CONTENT_PAGE_UNITS);
-        if (
-          page.units !==
-          Math.min(CONTENT_PAGE_UNITS, ref.units - index * CONTENT_PAGE_UNITS)
-        )
-          throw new ProtocolError(
-            "corrupt_storage",
-            "Invalid text page length",
-          );
-      }
+      const manifest = await this.manifest(ref, signal);
       let result = "";
       for (let position = offset; position < offset + length;) {
         signal?.throwIfAborted();
         const index = Math.floor(position / CONTENT_PAGE_UNITS);
         const page = manifest.pages[index]!;
-        const text = decode(await this.load(page, signal));
-        if (typeof text !== "string" || text.length !== page.units)
-          throw new ProtocolError("corrupt_storage", "Invalid text page");
+        const text = await this.page(page, signal);
         const start = position % CONTENT_PAGE_UNITS;
         const count = Math.min(page.units - start, offset + length - position);
         result += text.slice(start, start + count);
