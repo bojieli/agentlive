@@ -20,7 +20,7 @@ import { ownerCredential, validateSecret } from "./credentials.js";
 const help = `AgentLive — record and share coding-agent sessions
 
 Commands:
-  agentlive serve [--host 127.0.0.1] [--port 7331]
+  agentlive serve [--host 127.0.0.1] [--port 7331] [--max-cached-sessions 128]
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
   agentlive publish --agent opencode --native-server <origin> --native-session <id>
@@ -104,6 +104,7 @@ async function main() {
       "owner-file": { type: "string" },
       host: { type: "string" },
       port: { type: "string" },
+      "max-cached-sessions": { type: "string" },
       agent: { type: "string" },
       source: { type: "string" },
       server: { type: "string" },
@@ -127,7 +128,7 @@ async function main() {
     "state-dir",
     "owner-file",
     ...(command === "serve"
-      ? ["host", "port"]
+      ? ["host", "port", "max-cached-sessions"]
       : command === "replay" || command === "watch"
         ? [
             "server",
@@ -161,6 +162,9 @@ async function main() {
     values["owner-file"] ?? join(stateDir, "owner.json"),
   );
   if (command === "serve") {
+    const maxCachedSessions = Number(values["max-cached-sessions"] ?? 128);
+    if (!Number.isSafeInteger(maxCachedSessions) || maxCachedSessions < 1)
+      throw new Error("--max-cached-sessions must be a positive integer");
     const port = Number(values.port ?? 7331);
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535)
       throw new Error("Port must be an integer from 0 to 65535");
@@ -172,6 +176,7 @@ async function main() {
       directory: join(stateDir, "server"),
       ownerSecret: secret,
       host: values.host ?? "127.0.0.1",
+      maxCachedSessions,
       port,
     });
     try {

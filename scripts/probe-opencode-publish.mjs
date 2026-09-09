@@ -112,6 +112,7 @@ const target = await startServer({
   directory: join(root, "server"),
   ownerSecret: password,
   port: 0,
+  maxCachedSessions: 1,
 });
 let streamId;
 let captured = 0;
@@ -314,6 +315,7 @@ try {
     JSON.stringify({
       success: true,
       restoredViewerPosition: true,
+      sessionCacheCapacity: 1,
       pausedViewerReceipt: true,
       orderedViewerCatchup: true,
       nativeTurns: 3,

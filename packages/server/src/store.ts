@@ -36,19 +36,30 @@ export class RecordingStore {
   private queue: Promise<unknown> = Promise.resolve();
   private closed = false;
   private readonly requests = new Map<string, { id: string; digest: string }>();
-  private readonly sessions = new Map<string, RecordingSession>();
+  private readonly sessions = new Map<
+    string,
+    { session: RecordingSession; users: number; touched: number }
+  >();
+  private clock = 0;
   private constructor(
     readonly directory: string,
     private readonly lock: FileLock,
+    private readonly maximum: number,
   ) {}
-  static async open(directory: string): Promise<RecordingStore> {
+  static async open(
+    directory: string,
+    options: { maxCachedSessions?: number } = {},
+  ): Promise<RecordingStore> {
+    const maximum = options.maxCachedSessions ?? 128;
+    if (!Number.isSafeInteger(maximum) || maximum < 1)
+      throw new RangeError("Invalid session cache capacity");
     const lock = await FileLock.acquire(join(directory, ".server.lock"));
     try {
       await mkdir(join(directory, "sessions"), {
         recursive: true,
         mode: 0o700,
       });
-      const store = new RecordingStore(directory, lock);
+      const store = new RecordingStore(directory, lock, maximum);
       for (const entry of await readdir(join(directory, "sessions"), {
         withFileTypes: true,
       })) {
@@ -125,6 +136,7 @@ export class RecordingStore {
           "precondition_failed",
           "New creation request timestamp is outside its acceptance window",
         );
+      await this.makeRoom();
       const id = randomUUID();
       const directory = join(this.directory, "sessions", id);
       const temporary = join(
@@ -188,12 +200,17 @@ export class RecordingStore {
   }
   private async load(id: string): Promise<RecordingSession> {
     const existing = this.sessions.get(id);
-    if (existing) return existing;
+    if (existing) {
+      existing.users++;
+      existing.touched = ++this.clock;
+      return existing.session;
+    }
+    await this.makeRoom();
     try {
       const session = await RecordingSession.open(
         join(this.directory, "sessions", id),
       );
-      this.sessions.set(id, session);
+      this.sessions.set(id, { session, users: 1, touched: ++this.clock });
       return session;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT")
@@ -201,6 +218,35 @@ export class RecordingStore {
       throw error;
     }
   }
+  private async makeRoom(): Promise<void> {
+    if (this.sessions.size < this.maximum) return;
+    const idle = [...this.sessions.entries()]
+      .filter(([, entry]) => entry.users === 0)
+      .sort(([, a], [, b]) => a.touched - b.touched)[0];
+    if (!idle)
+      throw new ProtocolError("retry_later", "All cached sessions are in use");
+    const [id, entry] = idle;
+    this.sessions.delete(id);
+    try {
+      await entry.session.close();
+    } catch (error) {
+      this.closed = true;
+      throw error;
+    }
+  }
+  get cacheSize(): number {
+    return this.sessions.size;
+  }
+  /** Release exactly one ownership acquired by get/create; idle sessions become evictable. */
+  release(session: RecordingSession): void {
+    const entry = this.sessions.get(session.info.id);
+    if (!entry && this.closed) return;
+    if (!entry || entry.session !== session || entry.users === 0)
+      throw new Error("Session ownership is not held");
+    entry.users--;
+    entry.touched = ++this.clock;
+  }
+  /** Caller owns the returned session until release, including across async operations. */
   get(id: string): Promise<RecordingSession> {
     idSchema.parse(id);
     return this.serial(() => this.load(id));
@@ -210,7 +256,7 @@ export class RecordingStore {
     await this.queue;
     try {
       await Promise.all(
-        [...this.sessions.values()].map((session) => session.close()),
+        [...this.sessions.values()].map(({ session }) => session.close()),
       );
     } finally {
       this.sessions.clear();

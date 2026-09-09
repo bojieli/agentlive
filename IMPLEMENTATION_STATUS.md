@@ -211,3 +211,11 @@ Typed monitor state now supports Claude artifact-comment and automatic-reaction 
 Validation: 150 tests pass, including monitor-only import, native timing, identity reuse, future-state representation, filtering, rejected unknown ledger shape, snapshot rendering, and stable retries. The installed Claude live probe passed two native turns with source-session resume, history backfill, live suffix capture, and duplicate-free publisher restart across 26 stored events.
 
 The full Claude corpus pass converted and rendered 1,558 of 1,593 files, reconstructing 10 monitor identities across the passing histories. The same 35 files lack standalone identity/timing. A selected real session retained two monitor identities through private HTTP import and retry across 222 stored events.
+
+## Bounded session cache checkpoint — 2026-09-09
+
+RecordingStore now bounds resident sessions (default 128), tracks acquired ownership, and evicts least-recently-used idle entries. All-owned capacity returns `retry_later`. HTTP requests, uploads, WebSocket publishers/subscribers, failed handshakes, unsubscribe, and socket cleanup release ownership at their operation boundaries. Programmatic get/create callers must pair each acquisition with `store.release(session)`.
+
+The server CLI accepts `--max-cached-sessions`. Evicted sessions reconstruct durable revision and producer history when reopened. Immutable download handles remain readable across eviction. Validation: 153 tests pass, covering active ownership, capacity rejection, reopened history, publisher/subscriber cleanup, failed handshakes, and a 4 MiB download across eviction. Total server memory is not yet bounded because the creation index and individual session state still have separate scaling work.
+
+The installed OpenCode publication/viewer probe also passed with session-cache capacity set to one: three native turns, native-server restart, same-session continuation, detached-history recovery, duplicate-free publisher restart, paused viewer receipt, ordered catch-up, restored presentation position, 24 stored events, and one verified attachment download.

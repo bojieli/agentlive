@@ -344,3 +344,50 @@ it("rejects plan links to attachment versions that have not been announced", asy
   });
   expect(session.boundary.sequence).toBe(before);
 });
+
+it("bounds cached sessions, retains owned sessions and reopens evicted durable history", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-bounded-store-"));
+  roots.push(root);
+  const store = await RecordingStore.open(root, { maxCachedSessions: 2 });
+  stores.push(store);
+  const input = request();
+  const a = await store.create(input);
+  const aId = a.info.id;
+  const resumed = await a.resume(input.writeSecret, {
+    publisherId: input.publisherId,
+    producerEpoch: input.producerEpoch,
+    attempt: 1,
+    revision: a.info.revision,
+  });
+  await a.append(resumed.lease, [event(aId, 1)]);
+  const b = await store.create({ ...input, requestId: "b" });
+  const again = await store.get(aId);
+  expect(again).toBe(a);
+  store.release(again);
+  await expect(
+    store.create({ ...input, requestId: "c" }),
+  ).rejects.toMatchObject({ code: "retry_later" });
+  store.release(b);
+  const c = await store.create({ ...input, requestId: "c" });
+  expect(store.cacheSize).toBe(2);
+  expect(a.boundary.sequence).toBe(2);
+  store.release(a);
+  store.release(c);
+  const bRestored = await store.get(b.info.id);
+  expect(bRestored).not.toBe(b);
+  store.release(bRestored);
+  const aRestored = await store.get(aId);
+  expect(aRestored).not.toBe(a);
+  expect(aRestored.boundary.sequence).toBe(2);
+  expect(aRestored.info.revision).toBe(a.info.revision);
+  const resumedAfterEviction = await aRestored.resume(input.writeSecret, {
+    publisherId: input.publisherId,
+    producerEpoch: input.producerEpoch,
+    attempt: 2,
+    revision: aRestored.info.revision,
+  });
+  expect(resumedAfterEviction.ack.throughProducerSeq).toBe(1);
+  store.release(aRestored);
+  expect(() => store.release(aRestored)).toThrow("ownership");
+  expect(store.cacheSize).toBe(2);
+});

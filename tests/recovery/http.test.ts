@@ -21,10 +21,15 @@ afterEach(async () => {
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
-async function setup(visibility = "public") {
+async function setup(visibility = "public", maxCachedSessions = 128) {
   const directory = await mkdtemp(join(tmpdir(), "agentlive-http-test-"));
   roots.push(directory);
-  const server = await startServer({ directory, ownerSecret, port: 0 });
+  const server = await startServer({
+    directory,
+    ownerSecret,
+    port: 0,
+    maxCachedSessions,
+  });
   servers.push(server);
   const input = {
     requestId: "create_1",
@@ -255,8 +260,8 @@ it("protects private history and uses a single-use scoped browser ticket", async
   expect((await anonymous.next()).code).toBe("forbidden");
 });
 it("uploads immutable attachments and serves them only after their event commits", async () => {
-  const { server, base, streamId, revision } = await setup();
-  const bytes = Buffer.from("synthetic attachment");
+  const { server, base, streamId, revision, input } = await setup("public", 1);
+  const bytes = Buffer.alloc(4 * 1024 * 1024, 42);
   const hash = createHash("sha256").update(bytes).digest("hex");
   const uploaded = await fetch(base + "/attachments", {
     method: "POST",
@@ -293,7 +298,30 @@ it("uploads immutable attachments and serves them only after their event commits
   expect((await pub.next()).type).toBe("ack");
   const download = await fetch(base + "/attachments/" + hash);
   expect(download.headers.get("content-disposition")).toContain("attachment");
-  expect(await download.text()).toBe(bytes.toString());
+  pub.ws.close();
+  await expect
+    .poll(async () => {
+      const response = await fetch(server.url + "/api/v1/streams", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer " + ownerSecret,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          ...input,
+          requestId: "evict-after-download-open",
+        }),
+      });
+      await response.arrayBuffer();
+      return response.status;
+    })
+    .toBe(201);
+  expect(server.store.cacheSize).toBe(1);
+  expect(
+    createHash("sha256")
+      .update(Buffer.from(await download.arrayBuffer()))
+      .digest("hex"),
+  ).toBe(hash);
 });
 it("rejects malformed protocol messages and invalid history bounds", async () => {
   const { server, base, revision } = await setup();
@@ -377,4 +405,90 @@ it("downloads a fixed recording boundary while the publisher continues appending
   for await (const event of history.events) events.push(event);
   expect(history.metadata.serverSeq).toBe(2);
   expect(events.map((event) => event.serverSeq)).toEqual([1, 2]);
+});
+
+it("holds active publisher ownership and releases failed handshakes under cache pressure", async () => {
+  const { server, streamId, revision, input, base } = await setup("public", 1);
+  const pub = await publisher(server, streamId, revision, 1);
+  const create = () =>
+    fetch(server.url + "/api/v1/streams", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer " + ownerSecret,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ ...input, requestId: "another" }),
+    });
+  const blocked = await create();
+  expect(blocked.status).toBe(503);
+  expect((await blocked.json()).error.code).toBe("retry_later");
+  pub.send({
+    type: "batch",
+    protocolVersion: 1,
+    requestId: "still-active",
+    events: [event(streamId, 1)],
+  });
+  expect((await pub.next()).type).toBe("ack");
+  pub.ws.close();
+  let another = "";
+  await expect
+    .poll(async () => {
+      const response = await create();
+      const value = await response.json();
+      if (response.status === 201) another = value.streamId;
+      return response.status;
+    })
+    .toBe(201);
+  expect(server.store.cacheSize).toBe(1);
+  const bad = connect(server.url + "/api/v1/publish", "c".repeat(64));
+  await bad.next();
+  bad.send({
+    type: "resume",
+    protocolVersion: 1,
+    requestId: "bad",
+    streamId,
+    revision,
+    publisherId: input.publisherId,
+    producerEpoch: input.producerEpoch,
+    attempt: 2,
+  });
+  expect((await bad.next()).type).toBe("error");
+  expect((await fetch(server.url + "/api/v1/streams/" + another)).status).toBe(
+    200,
+  );
+  expect((await fetch(base)).status).toBe(200);
+  expect(server.store.cacheSize).toBe(1);
+});
+
+it("keeps a subscribed session resident until explicit unsubscribe", async () => {
+  const { server, streamId, revision, input } = await setup("public", 1);
+  const sub = connect(server.url + "/api/v1/watch");
+  await sub.next();
+  sub.send({
+    type: "subscribe",
+    protocolVersion: 1,
+    requestId: "sub",
+    streamId,
+    revision,
+    afterServerSeq: 0,
+  });
+  expect((await sub.next()).type).toBe("subscribed");
+  const create = () =>
+    fetch(server.url + "/api/v1/streams", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer " + ownerSecret,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ ...input, requestId: "next-session" }),
+    });
+  const response = await create();
+  expect(response.status).toBe(503);
+  await response.arrayBuffer();
+  sub.send({ type: "unsubscribe", protocolVersion: 1, requestId: "unsub" });
+  expect((await sub.next()).type).toBe("unsubscribed");
+  const next = await create();
+  expect(next.status).toBe(201);
+  await next.arrayBuffer();
+  expect(server.store.cacheSize).toBe(1);
 });

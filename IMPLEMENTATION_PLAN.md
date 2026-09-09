@@ -929,3 +929,11 @@ This conversion advances Claude import/live policy identity to `claude-history-3
 Represent recorded comment-monitor and automatic-reaction snapshots as typed `monitor.updated` events with stable per-kind, per-artifact identities. Use their native written/saved timestamps, retain explicit source state and observation flags, and omit account identifiers. Armed comment monitoring is distinct from tool execution; an automatic-reaction ledger does not prove activity, so retain unknown status unless interruption is explicit.
 
 The converter supports the observed version-1 comment snapshots and empty-queue ledger shape. Non-empty or future ledger shapes remain explicit gaps until their contents and semantics are implemented. Monitoring does not activate remote monitors or send reactions. Native provider artifact content still needs authenticated resolution into owned attachments. This changes Claude conversion identity to history 4; older bindings require explicit migration.
+
+### Bounded resident session ownership
+
+Bound the number of resident session objects independently of the number of retained session directories. Store get/create operations acquire ownership; callers release it when their asynchronous work ends. HTTP handlers release request ownership, and publisher/subscriber sockets retain ownership until detach, unsubscribe, or failed-handshake cleanup. Cleanup waits for queued socket work before releasing its session.
+
+Evict the least recently used idle session before opening another. If every resident session is owned, return retryable capacity pressure rather than closing active sessions. Reopening reconstructs durable revision, producer state, and history. Immutable attachment downloads retain their own file handles and survive session-cache eviction. The default capacity is 128 and the server CLI exposes `--max-cached-sessions`.
+
+This bounds resident session objects/file stores, not total server memory: the creation-request directory index, per-session state size, active work, and retention policies still require their own scalability limits and operational evidence.

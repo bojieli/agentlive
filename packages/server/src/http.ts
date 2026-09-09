@@ -32,6 +32,7 @@ export interface ServerOptions {
   port?: number;
   publicOrigin?: string;
   maxConnections?: number;
+  maxCachedSessions?: number;
   maxSocketBytes?: number;
 }
 const digest = (value: string) => createHash("sha256").update(value).digest();
@@ -113,8 +114,16 @@ const integer = (value: string | undefined, fallback?: number): number => {
 export async function startServer(options: ServerOptions) {
   if (!/^[a-f0-9]{64}$/.test(options.ownerSecret))
     throw new Error("Owner secret must be 32 random bytes encoded as hex");
-  const store = await RecordingStore.open(options.directory);
-  const app = new Hono<{ Bindings: HttpBindings }>();
+  const store = await RecordingStore.open(
+    options.directory,
+    options.maxCachedSessions === undefined
+      ? {}
+      : { maxCachedSessions: options.maxCachedSessions },
+  );
+  const app = new Hono<{
+    Bindings: HttpBindings;
+    Variables: { session: RecordingSession };
+  }>();
   const ownerHash = digest(options.ownerSecret);
   const isOwner = (secret: string) =>
     !!secret && timingSafeEqual(digest(secret), ownerHash);
@@ -163,6 +172,28 @@ export async function startServer(options: ServerOptions) {
       statusFor(failure.code),
     );
   });
+  app.use("/api/v1/streams/:id", async (c, next) => {
+    const session = await store.get(c.req.param("id")!);
+    c.set("session", session);
+    try {
+      await next();
+    } finally {
+      store.release(session);
+    }
+  });
+  app.use("/api/v1/streams/:id/*", async (c, next) => {
+    if (c.get("session")) {
+      await next();
+      return;
+    }
+    const session = await store.get(c.req.param("id")!);
+    c.set("session", session);
+    try {
+      await next();
+    } finally {
+      store.release(session);
+    }
+  });
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/readyz", (c) => c.json({ ready: !closing }));
   app.post("/api/v1/streams", async (c) => {
@@ -172,13 +203,17 @@ export async function startServer(options: ServerOptions) {
       .omit({ ownerId: true })
       .parse(await boundedJson(c.req.raw));
     const session = await store.create({ ...input, ownerId: "local" });
-    return c.json(
-      { streamId: session.info.id, revision: session.info.revision },
-      201,
-    );
+    try {
+      return c.json(
+        { streamId: session.info.id, revision: session.info.revision },
+        201,
+      );
+    } finally {
+      store.release(session);
+    }
   });
   app.get("/api/v1/streams/:id", async (c) => {
-    const session = await store.get(c.req.param("id"));
+    const session = c.get("session");
     readable(session, token(c.req.header("authorization")));
     const {
       id,
@@ -202,7 +237,7 @@ export async function startServer(options: ServerOptions) {
     });
   });
   app.get("/api/v1/streams/:id/events", async (c) => {
-    const session = await store.get(c.req.param("id"));
+    const session = c.get("session");
     readable(session, token(c.req.header("authorization")));
     if (c.req.query("revision") !== session.info.revision)
       throw new ProtocolError("revision_changed", "History revision changed");
@@ -234,7 +269,7 @@ export async function startServer(options: ServerOptions) {
     return c.body(lines.join(""));
   });
   app.post("/api/v1/streams/:id/attachments", async (c) => {
-    const session = await store.get(c.req.param("id"));
+    const session = c.get("session");
     const secret = token(c.req.header("authorization"));
     session.authorize(secret);
     const descriptor = {
@@ -262,7 +297,7 @@ export async function startServer(options: ServerOptions) {
     }
   });
   app.get("/api/v1/streams/:id/attachments/:hash/status", async (c) => {
-    const session = await store.get(c.req.param("id"));
+    const session = c.get("session");
     const available = await session.attachmentStatus(
       token(c.req.header("authorization")),
       { hash: c.req.param("hash"), byteSize: integer(c.req.query("byteSize")) },
@@ -270,7 +305,7 @@ export async function startServer(options: ServerOptions) {
     return c.json({ available });
   });
   app.get("/api/v1/streams/:id/attachments/:hash", async (c) => {
-    const session = await store.get(c.req.param("id"));
+    const session = c.get("session");
     readable(session, token(c.req.header("authorization")));
     const hash = hashSchema.parse(c.req.param("hash"));
     const file = await session.openAttachment(hash);
@@ -295,7 +330,7 @@ export async function startServer(options: ServerOptions) {
   });
   for (const action of ["end", "reopen"] as const)
     app.post(`/api/v1/streams/:id/${action}`, async (c) => {
-      const session = await store.get(c.req.param("id"));
+      const session = c.get("session");
       const input = z
         .strictObject({
           operationId: idSchema,
@@ -333,12 +368,12 @@ export async function startServer(options: ServerOptions) {
     const input = z
       .strictObject({ visibility: z.enum(["public", "unlisted", "private"]) })
       .parse(await boundedJson(c.req.raw));
-    const session = await store.get(c.req.param("id"));
+    const session = c.get("session");
     await session.shareEnded(input.visibility);
     return c.json({ visibility: session.info.visibility });
   });
   app.post("/api/v1/streams/:id/watch-ticket", async (c) => {
-    const session = await store.get(c.req.param("id"));
+    const session = c.get("session");
     readable(session, token(c.req.header("authorization")));
     for (const [key, ticket] of tickets)
       if (ticket.expires < Date.now()) tickets.delete(key);
@@ -388,11 +423,18 @@ export async function startServer(options: ServerOptions) {
       socket.send(serialized);
     };
     let heartbeat: ReturnType<typeof setInterval> | undefined;
+    const releaseSession = () => {
+      if (session) store.release(session);
+      session = undefined;
+      lease = undefined;
+    };
     const cleanup = () => {
+      if (ended) return;
       ended = true;
       clearInterval(heartbeat);
       unsubscribe?.();
       unsubscribe = undefined;
+      void queue.then(releaseSession, releaseSession);
     };
     return {
       onOpen(_event: Event, ws: WSContext<WebSocketLike>) {
@@ -421,6 +463,7 @@ export async function startServer(options: ServerOptions) {
           .then(async () => {
             if (ended) return;
             let requestId: string | undefined;
+            let acquired: RecordingSession | undefined;
             try {
               const raw = JSON.parse(data);
               requestId =
@@ -437,10 +480,11 @@ export async function startServer(options: ServerOptions) {
                       "invalid_request",
                       "Use a fresh socket for a new publishing lease",
                     );
-                  const target = await store.get(message.streamId);
+                  const target = (acquired = await store.get(message.streamId));
                   const result = await target.resume(secret, message);
                   if (ended) return;
                   session = target;
+                  acquired = undefined;
                   lease = result.lease;
                   send({
                     type: "resumed",
@@ -466,13 +510,14 @@ export async function startServer(options: ServerOptions) {
                 if (message.type === "unsubscribe") {
                   unsubscribe?.();
                   unsubscribe = undefined;
-                  session = undefined;
+                  releaseSession();
                   send({ type: "unsubscribed", protocolVersion: 1, requestId });
                   return;
                 }
                 unsubscribe?.();
                 unsubscribe = undefined;
-                const target = await store.get(message.streamId);
+                releaseSession();
+                const target = (acquired = await store.get(message.streamId));
                 if (ticketStream !== target.info.id) readable(target, secret);
                 if (message.revision !== target.info.revision)
                   throw new ProtocolError(
@@ -517,6 +562,7 @@ export async function startServer(options: ServerOptions) {
                   return;
                 }
                 session = target;
+                acquired = undefined;
                 unsubscribe = subscribedSession.unsubscribe;
 
                 send({
@@ -540,6 +586,8 @@ export async function startServer(options: ServerOptions) {
                 message: failure.message,
                 details: failure.details,
               });
+            } finally {
+              if (acquired) store.release(acquired);
             }
           })
           .finally(() => {
