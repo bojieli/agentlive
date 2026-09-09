@@ -110,6 +110,21 @@ it("runs local serve/import across processes with private credentials and restar
     });
     expect(replay.stdout).toContain("CLI test message");
     expect(replay.stdout).toContain("Recording ended");
+    const timed = await exec(
+      process.execPath,
+      [...replayArgs, "--speed", "1024"],
+      {
+        env,
+        maxBuffer: 1024 * 1024,
+      },
+    );
+    expect(timed.stdout).toBe(replay.stdout);
+    await expect(
+      exec(process.execPath, [...replayArgs, "--speed", "0"], { env }),
+    ).rejects.toThrow();
+    await expect(
+      exec(process.execPath, [...replayArgs, "--interactive"], { env }),
+    ).rejects.toThrow();
     await expect(
       exec(process.execPath, [...replayArgs, "--anonymous"], {
         env,

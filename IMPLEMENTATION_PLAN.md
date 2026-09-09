@@ -891,3 +891,9 @@ OpenCode snapshot capture now implements message/tool reopening and presence tra
 Bind every local-file outcome, including unavailable results, to a canonical request fingerprint covering artifact/source identity, resolved source path, historical provenance/hash, allowed roots, and filtering policy. Validate that binding before returning a cached outcome. Serialize resolver requests and copy caller inputs before queuing so concurrent conflicting requests cannot overwrite a stable result.
 
 Earlier successful flat outcomes can migrate only after their attachment matches the durable spool binding. Earlier unavailable outcomes contain no request identity and cannot be silently trusted; report the missing migration evidence explicitly. A conflicting spool binding after a crash between capture and outcome persistence is a source conflict, not an unavailable file. Complete explicit migration/reconciliation for unverifiable legacy outcomes as part of the broader converter/policy migration gate.
+
+### Timed terminal history playback
+
+Connect presentation timing to recorded timeline positions through a monotonic, interruptible pacer. Preserve immediate transcript output for scripts; expose explicit speed and interactive pause/resume controls for history replay. Rebase rate changes at the current presentation position and exclude paused wall time. Cancellation must wake long or paused waits and restore terminal state.
+
+The terminal history command now supports these controls. This does not complete the viewer gate: seeking requires source repositioning plus reducer reconstruction/redraw, and live pause must leave subscriber receipt and durable caching independent from presentation. Complete those paths, browser/mobile viewers, paged state, and source-clock fidelity before claiming full physical-time playback.

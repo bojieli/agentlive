@@ -47,7 +47,7 @@ npx --yes pnpm@12.3.4 agentlive replay --stream <recording-id>
 npx --yes pnpm@12.3.4 agentlive replay --stream <recording-id> --server https://example.test --anonymous
 ```
 
-Replay downloads a fixed history boundary and prints timestamped messages, tools, file changes, attachment links, and capture gaps. Terminal control characters are escaped. This reference command prints immediately and caps normalized events at 64 MiB; playback-speed controls, paged state, and live watch remain unfinished. Private replay uses the same owner credential options as import.
+Replay downloads a fixed history boundary and prints timestamped messages, tools, file changes, attachment links, and capture gaps. Terminal control characters are escaped. By default it prints immediately. Add `--speed 2` for timing at twice the recorded speed, or `--interactive` for terminal controls: space pauses/resumes, `+`/`-` changes speed, and `q` quits. Timed replay starts at the first event and preserves subsequent recorded gaps. It caps normalized events at 64 MiB; seeking, paged state, and interactive live playback remain unfinished. Private replay uses the same owner credential options as import.
 
 These commands run from the source checkout. Clean standalone installation, automatic native-session discovery, live publishing commands, and interactive terminal/browser viewers remain release requirements.
 

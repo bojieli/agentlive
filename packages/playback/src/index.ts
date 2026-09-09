@@ -495,3 +495,4 @@ export {
   renderTerminalEvent,
   renderTerminalPending,
 } from "./terminal.js";
+export { PlaybackPacer } from "./pacer.js";

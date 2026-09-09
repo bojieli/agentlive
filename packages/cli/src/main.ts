@@ -25,7 +25,7 @@ Commands:
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
   agentlive publish --agent opencode --native-server <origin> --native-session <id>
   agentlive watch --stream <recording-id> [--server <origin>] [--anonymous]
-  agentlive replay --stream <recording-id> [--server <origin>] [--anonymous]
+  agentlive replay --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive]
 
 Shared options:
   --state-dir <directory>  Persistent state (default: ~/.agentlive)
@@ -91,6 +91,8 @@ async function main() {
     args,
     options: {
       help: { type: "boolean" },
+      speed: { type: "string" },
+      interactive: { type: "boolean" },
       "resume-import": { type: "boolean" },
       "record-format": { type: "string" },
       stream: { type: "string" },
@@ -124,7 +126,12 @@ async function main() {
     ...(command === "serve"
       ? ["host", "port"]
       : command === "replay" || command === "watch"
-        ? ["server", "stream", "anonymous"]
+        ? [
+            "server",
+            "stream",
+            "anonymous",
+            ...(command === "replay" ? ["speed", "interactive"] : []),
+          ]
         : [
             ...(command === "publish"
               ? ["record-format", "resume-import", "native-server"]
@@ -185,6 +192,12 @@ async function main() {
   if (command === "replay" || command === "watch") {
     if (!values.stream)
       throw new Error("Replay and watch require --stream <recording-id>");
+    const speed = values.speed === undefined ? undefined : Number(values.speed);
+    if (
+      speed !== undefined &&
+      (!Number.isFinite(speed) || speed <= 0 || speed > 1024)
+    )
+      throw new Error("--speed must be greater than zero and at most 1024");
     const credential = values.anonymous
       ? undefined
       : process.env.AGENTLIVE_OWNER_SECRET
@@ -193,6 +206,8 @@ async function main() {
     if (credential) secrets.push(credential);
     await (command === "watch" ? watchRecording : replayRecording)({
       cacheRoot: join(stateDir, "subscriber"),
+      ...(speed === undefined ? {} : { speed }),
+      ...(values.interactive ? { interactive: true } : {}),
       serverOrigin: values.server ?? "http://127.0.0.1:7331",
       streamId: values.stream,
       ...(credential ? { credential } : {}),

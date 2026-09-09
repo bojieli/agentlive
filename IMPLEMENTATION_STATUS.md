@@ -167,3 +167,9 @@ Local artifact outcomes now pin canonical request and capture-policy fingerprint
 Older successful outcomes upgrade against their durable attachment binding, including after deletion of the original source file. Older unavailable outcomes have no verifiable request identity and still need explicit migration/reconciliation; they are not silently rebound. Validation: all 138 tests across 23 files pass on Node 26.8.1, including real HTTP upload/download and successful legacy migration.
 
 The installed OpenCode live publication probe also passed after this change: three native turns, native-server restart under the same session, history recovered after publisher detachment, duplicate-free publisher restart, 24 stored events, and one downloaded attachment verified to contain the filtered text. Raw probe data remains ignored and local.
+
+## Timed terminal replay checkpoint — 2026-09-09
+
+History replay now accepts `--speed <factor>` and `--interactive`. Interactive keys are space for pause/resume, +/- for speed, and q to quit. The reusable monotonic pacer handles speed rebasing, paused time, long timer intervals, cancellation, and explicit position reset. Immediate output remains the default. Seeking and independent live playback controls remain unfinished.
+
+Validation: 142 tests across 24 files pass, including clock-controlled timing tests and cross-process CLI output equivalence between immediate and accelerated replay. A real local PTY probe (`node scripts/probe-interactive-replay.mjs`) verifies raw input, pause/resume, speed changes, successful quit/completion, and exact terminal-setting restoration using an imported synthetic Claude-format recording. This is terminal/transport evidence, not a new live-agent run. The PTY harness drains output throughout child shutdown to avoid blocking synchronous terminal writes; Python is a probe-only dependency.
