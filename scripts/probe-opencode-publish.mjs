@@ -1,7 +1,8 @@
 #!/usr/bin/env node
+import { PublisherJournal } from "../packages/publisher/dist/index.js";
 /** Real native server restart and offline-history catch-up using supported OpenCode APIs. */
 import { spawn } from "node:child_process";
-import { mkdtemp, realpath } from "node:fs/promises";
+import { mkdtemp, realpath, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -228,8 +229,23 @@ try {
   attach();
   const baseline = await until("AGENTLIVE_DETACHED_OK");
   await detach();
+  const legacyJournal = await PublisherJournal.open(join(root, "publisher"), {
+    serverOrigin: target.url,
+    agent: "opencode",
+    nativeSessionId: nativeId,
+  });
+  const manifestPath = join(legacyJournal.directory, "publish.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.converterVersion = "opencode-live-1";
+  await writeFile(manifestPath, JSON.stringify(manifest));
+  await legacyJournal.close();
   attach();
   const final = await until("AGENTLIVE_DETACHED_OK");
+  if (
+    JSON.parse(await readFile(manifestPath, "utf8")).converterVersion !==
+    "opencode-live-2"
+  )
+    throw new Error("Live converter migration did not commit");
   if (final !== baseline)
     throw new Error("Publisher restart duplicated retained history");
   const recording = await target.store.get(streamId);
@@ -324,6 +340,7 @@ try {
       sameNativeSession: true,
       detachedHistoryRecovered: true,
       publisherRestartDeduplicated: true,
+      liveConverterMigration: true,
       storedEvents: final,
       verifiedAttachments,
     }),

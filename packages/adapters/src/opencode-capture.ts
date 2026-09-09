@@ -34,6 +34,7 @@ const stateSchema = z.strictObject({
   version: z.literal(1),
   lifecycleVersion: z.literal(1).optional(),
   presentationVersion: z.literal(1).optional(),
+  attachmentEncodingVersion: z.literal(2).optional(),
   nativeSessionId: z.string(),
   filterHash: z.string(),
   createdAt: z.number().int().nonnegative().optional(),
@@ -96,6 +97,7 @@ export class OpenCodeCapture {
           version: 1,
           lifecycleVersion: 1,
           presentationVersion: 1,
+          attachmentEncodingVersion: 2,
           nativeSessionId: journal.identity.nativeSessionId,
           filterHash,
           elapsedMs: 0,
@@ -120,11 +122,38 @@ export class OpenCodeCapture {
       );
       await capture.recover();
       await capture.upgradeLifecycle();
+      await capture.upgradeAttachmentEncoding();
       return capture;
     } catch (error) {
       await lock.release();
       throw error;
     }
+  }
+  private async upgradeAttachmentEncoding() {
+    if (this.state.attachmentEncodingVersion === 2) return;
+    const entities = { ...this.state.entities };
+    for (const [id, entity] of Object.entries(entities)) {
+      if (
+        entity.objectType === "attachment" &&
+        !entity.availableVersions.length
+      )
+        entities[id] = {
+          ...entity,
+          fingerprint: hash({
+            previous: entity.fingerprint,
+            attachmentEncodingVersion: 2,
+          }),
+        };
+    }
+    const next = {
+      ...this.state,
+      attachmentEncodingVersion: 2 as const,
+      entities,
+    };
+    if (Buffer.byteLength(canonicalJson(next)) > 16 * 1024 * 1024)
+      throw new Error("OpenCode capture state limit reached during migration");
+    await atomicJson(join(this.directory, "state.json"), next);
+    this.state = next;
   }
   private async upgradeLifecycle() {
     if (

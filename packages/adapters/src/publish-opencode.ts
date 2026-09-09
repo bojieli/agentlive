@@ -119,16 +119,18 @@ export async function publishOpenCodeRecording(
     const manifestPath = join(journal.directory, "publish.json");
     try {
       const previous = JSON.parse(await readFile(manifestPath, "utf8"));
-      const { artifactRoots: _, ...legacyIdentity } = identity;
-      if (
-        previous.artifactRoots === undefined &&
-        canonicalJson(previous) === canonicalJson(legacyIdentity)
-      )
-        await atomicJson(manifestPath, identity);
-      else if (canonicalJson(previous) !== canonicalJson(identity))
+      // The v2 decoder only expands inline attachment decoding. Existing journal
+      // entries remain immutable; capture state reconciles unavailable attachments.
+      const compatible = { ...previous };
+      if (compatible.converterVersion === "opencode-live-1")
+        compatible.converterVersion = "opencode-live-2";
+      if (compatible.artifactRoots === undefined) compatible.artifactRoots = [];
+      if (canonicalJson(compatible) !== canonicalJson(identity))
         throw new Error(
           "OpenCode publishing conversion, filtering, artifact or sharing options changed",
         );
+      if (canonicalJson(previous) !== canonicalJson(identity))
+        await atomicJson(manifestPath, identity);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       await atomicJson(manifestPath, identity);

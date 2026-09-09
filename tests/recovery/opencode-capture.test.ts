@@ -338,6 +338,14 @@ it("captures live attachment versions and reuses announced versions after restar
     capture = undefined;
     await artifacts.close();
     artifacts = undefined;
+    const encodingStatePath = join(
+      journal.directory,
+      "opencode-live",
+      "state.json",
+    );
+    const encodingState = JSON.parse(await readFile(encodingStatePath, "utf8"));
+    delete encodingState.attachmentEncodingVersion;
+    await writeFile(encodingStatePath, JSON.stringify(encodingState));
     // Simulate the previous flat outcome format before restarting without the source file.
     const { readdir } = await import("node:fs/promises");
     const outcomes = join(settings.directory, "outcomes");
@@ -502,4 +510,67 @@ it("repairs legacy removal checkpoints from the durable event history", async ()
   expect([...result.state.tools.values()][0]?.visible).toBe(true);
   expect(result.state.tools.size).toBe(1);
   expect(result.state.gaps).toHaveLength(0);
+});
+
+it("upgrades unavailable attachment checkpoints without rewriting history and resumes migration after restart", async () => {
+  const { writeFile } = await import("node:fs/promises");
+  const { createHash } = await import("node:crypto");
+  const journal = await setup();
+  const source = snapshot("retained", true);
+  source.messages[0]!.parts.push({
+    id: "inline-upgrade",
+    sessionID: "ses_test",
+    messageID: "msg1",
+    type: "file",
+    mime: "text/plain",
+    filename: "note.txt",
+    url: "data:text/plain;charset=utf-8,now%20available",
+  });
+  let capture = await OpenCodeCapture.open(journal, []);
+  captures.push(capture);
+  await capture.accept(source);
+  const before = (await replay(journal)).events;
+  expect(
+    before.some((event) => event.content.kind === "attachment.unavailable"),
+  ).toBe(true);
+  await capture.close();
+  const path = join(journal.directory, "opencode-live", "state.json");
+  const legacy = JSON.parse(await readFile(path, "utf8"));
+  delete legacy.attachmentEncodingVersion;
+  await writeFile(path, JSON.stringify(legacy));
+  const resolveInline = vi.fn(async (input) => ({
+    artifactId: input.artifactId,
+    version: 1,
+    hash: createHash("sha256").update(input.bytes).digest("hex"),
+    filename: input.filename,
+    mediaType: input.mediaType,
+    byteSize: input.bytes.length,
+  }));
+  const resolvers = {
+    resolveInline,
+    resolveArtifact: async () => ({ reason: "not a local file" }),
+  };
+  capture = await OpenCodeCapture.open(journal, [], resolvers);
+  captures.push(capture);
+  // Restart after the migration checkpoint commits but before any native snapshot arrives.
+  await capture.close();
+  capture = await OpenCodeCapture.open(journal, [], resolvers);
+  captures.push(capture);
+  await capture.accept(source);
+  const result = await replay(journal);
+  expect(result.events.slice(0, before.length)).toEqual(before);
+  expect(resolveInline).toHaveBeenCalledTimes(1);
+  expect(
+    result.events.filter(
+      (event) => event.content.kind === "attachment.available",
+    ),
+  ).toHaveLength(1);
+  expect(result.state.messages.size).toBe(1);
+  const boundary = journal.capturedThrough;
+  await capture.close();
+  capture = await OpenCodeCapture.open(journal, [], resolvers);
+  captures.push(capture);
+  await capture.accept(source);
+  expect(journal.capturedThrough).toBe(boundary);
+  expect(resolveInline).toHaveBeenCalledTimes(1);
 });

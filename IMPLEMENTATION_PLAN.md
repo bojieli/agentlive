@@ -964,3 +964,12 @@ Use a shared bounded decoder for import and live capture of data URLs. Decode pe
 Limits: 1 KiB header boundary, 32 MiB encoded payload, 24 MiB decoded bytes. Copy into the durable attachment spool, upload, and announce server-owned references through the existing path. Never publish the raw inline URL. Grammar is based on [RFC 2397](https://www.rfc-editor.org/rfc/rfc2397), with deliberately restricted parameters and text encodings compatible with the filtering pipeline.
 
 This changes conversion identity to opencode-export-3 and opencode-live-2. Older bindings are rejected rather than silently reinterpreted; automatic migration remains required. Validate percent-encoded Unicode with filtering, binary octets, escaped base64, invalid inputs, download integrity, retry after source deletion, and real native capture.
+
+
+### Compatible OpenCode live converter migration
+
+Automatically migrate live converter 1 to 2 only when all other persisted publishing settings match: filter fingerprint, title, visibility, artifact roots, and manifest shape. Treat missing legacy roots as an empty set, never as permission to adopt newly supplied roots. Reject unknown converter versions and changed policies without modifying the manifest. Keep the original journal identity, credentials, producer epoch, acknowledgements, and existing events.
+
+After recovering any staged capture intent and legacy object lifecycle metadata, atomically mark attachment encoding version 2. Invalidate only fingerprints of attachment entities that have no successfully announced version. Their next native snapshot produces an ordinary durable revision, potentially making previously unavailable data URLs viewable. Preserve successful attachment fingerprints so upgrade does not recapture historical local bytes or repeat available announcements. If restart occurs between manifest migration, capture migration, and snapshot arrival, reopening repeats only unfinished steps. Existing unavailable events remain in history; new outcomes append after them.
+
+This migration covers live-1 to live-2 only. Historical export converter migration and import-to-live continuation remain separate unfinished requirements.

@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { createServer, type ServerResponse } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { publishOpenCodeRecording } from "../../packages/adapters/src/index.js";
@@ -160,11 +160,37 @@ it("publishes retained OpenCode history, recovers native disconnects, and resume
     controller.abort();
     await running!;
     const baseline = (await server.store.get(streamId)).boundary.sequence;
+    const { PublisherJournal } =
+      await import("../../packages/publisher/src/index.js");
+    const saved = await PublisherJournal.open(options.publisherRoot, {
+      serverOrigin: server.url,
+      agent: "opencode",
+      nativeSessionId: "ses_test",
+    });
+    const manifestPath = join(saved.directory, "publish.json");
+    const previous = JSON.parse(await readFile(manifestPath, "utf8"));
+    previous.converterVersion = "opencode-live-1";
+    await writeFile(manifestPath, JSON.stringify(previous));
+    const identityBefore = {
+      streamId: saved.identity.streamId,
+      writeSecret: saved.identity.writeSecret,
+      producerEpoch: saved.identity.producerEpoch,
+    };
+    await saved.close();
+
     controller = new AbortController();
     captured = 0;
     begin();
     await until("after native reconnect");
     expect((await server.store.get(streamId)).boundary.sequence).toBe(baseline);
+    expect(
+      JSON.parse(await readFile(manifestPath, "utf8")).converterVersion,
+    ).toBe("opencode-live-2");
+    expect(streamId).toBe(identityBefore.streamId);
+    expect(
+      JSON.parse(await readFile(join(saved.directory, "binding.json"), "utf8")),
+    ).toMatchObject(identityBefore);
+
     native.update("continued after publisher restart");
     await until("continued after publisher restart");
     expect(
@@ -174,6 +200,18 @@ it("publishes retained OpenCode history, recovers native disconnects, and resume
     controller.abort();
     await running!;
   }
+  const { PublisherJournal } =
+    await import("../../packages/publisher/src/index.js");
+  const retained = await PublisherJournal.open(options.publisherRoot, {
+    serverOrigin: server.url,
+    agent: "opencode",
+    nativeSessionId: "ses_test",
+  });
+  const policyPath = join(retained.directory, "publish.json");
+  const policy = JSON.parse(await readFile(policyPath, "utf8"));
+  await retained.close();
+  policy.converterVersion = "opencode-live-1";
+  await writeFile(policyPath, JSON.stringify(policy));
   await expect(
     publishOpenCodeRecording({
       ...options,
@@ -181,6 +219,13 @@ it("publishes retained OpenCode history, recovers native disconnects, and resume
       signal: AbortSignal.timeout(5000),
     }),
   ).rejects.toThrow("options changed");
+  expect(JSON.parse(await readFile(policyPath, "utf8"))).toEqual(policy);
+  policy.converterVersion = "opencode-live-unknown";
+  await writeFile(policyPath, JSON.stringify(policy));
+  await expect(
+    publishOpenCodeRecording({ ...options, signal: AbortSignal.timeout(5000) }),
+  ).rejects.toThrow("options changed");
+  expect(JSON.parse(await readFile(policyPath, "utf8"))).toEqual(policy);
 }, 30000);
 
 it("exposes OpenCode publishing through the CLI without a source file or password argument", async () => {
