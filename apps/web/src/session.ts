@@ -135,6 +135,9 @@ export class BrowserSession {
     }
   }
   private task: Promise<void> = Promise.resolve();
+  get view(): import("./paged-activity.js").PagedActivityView | undefined {
+    return undefined;
+  }
   state = initialState();
   time = 0;
   follow = true;

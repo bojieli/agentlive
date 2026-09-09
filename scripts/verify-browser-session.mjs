@@ -1,3 +1,4 @@
+import { verifyPagedSession } from "./verify-paged-session.mjs";
 import { verifyPagedReducer } from "./verify-paged-reducer.mjs";
 import { verifyServerSnapshot } from "./verify-server-snapshot.mjs";
 /** Exercise the actual browser transport/model against a native probe's recording. */
@@ -157,7 +158,13 @@ export async function verifyBrowserSession(
     const pagedReducer = await measured("pagedReducer", () =>
       verifyPagedReducer(events, viewer.state, signal),
     );
+    const productionPagedSession = await measured(
+      "productionPagedSession",
+      () =>
+        verifyPagedSession(serverOrigin, streamId, credential, events, signal),
+    );
     const counts = {
+      productionPagedSession,
       verificationMs,
       contentStore,
       pagedReducer,

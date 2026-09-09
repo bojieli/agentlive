@@ -68,6 +68,9 @@ export class BrowserPagedState {
   private tail: Promise<void> = Promise.resolve();
   private pending = 0;
   private closing: Promise<void> | undefined;
+  private selected:
+    { root: PagedRecordingState; rows: ActivityIndexRoot } | undefined;
+  private selections = new Set<Promise<unknown>>();
   private constructor(
     private readonly content: BrowserContentStore,
     private readonly binding: CacheBinding,
@@ -330,10 +333,119 @@ export class BrowserPagedState {
         : undefined,
     );
   }
+  loadView(signal: AbortSignal) {
+    return this.content.loadView(signal);
+  }
+  saveView(
+    view: import("./history-cache.js").BrowserView,
+    signal: AbortSignal,
+  ) {
+    return this.content.saveView(view, signal);
+  }
+  /** Reconstruct a frozen presentation without changing the durable receipt head. */
+  select(
+    time: number,
+    history: (
+      after: number,
+      through: number,
+      signal: AbortSignal,
+    ) => AsyncIterable<StoredEvent>,
+    parent: AbortSignal,
+    through = this.root.appliedSeq,
+  ): Promise<PagedActivityView> {
+    if (!Number.isFinite(time) || time < 0)
+      return Promise.reject(new RangeError("Invalid playback position"));
+    if (this.closing)
+      return Promise.reject(new Error("Paged state is closing"));
+    if (this.selections.size >= 2)
+      return Promise.reject(
+        new ProtocolError("retry_later", "Playback selection queue is full"),
+      );
+    const signal = AbortSignal.any([parent, this.stop.signal]);
+    const receipt = this.root,
+      receivedRows = this.activityRoot;
+    if (
+      !Number.isSafeInteger(through) ||
+      through < 0 ||
+      through > receipt.appliedSeq
+    )
+      return Promise.reject(
+        new RangeError("Invalid playback receipt boundary"),
+      );
+    const previous = this.selected;
+    const task = (async () => {
+      signal.throwIfAborted();
+      if (!receivedRows)
+        throw new ProtocolError(
+          "precondition_failed",
+          "Activity index requires history rebuild",
+        );
+      let root =
+        receipt.appliedSeq <= through && receipt.timelineMs <= time
+          ? receipt
+          : previous &&
+              previous.root.timelineMs <= time &&
+              previous.root.appliedSeq <= through
+            ? previous.root
+            : initialPagedState();
+      let rows =
+        root === receipt
+          ? receivedRows
+          : root === previous?.root
+            ? previous.rows
+            : initialActivityIndex();
+      if (root.appliedSeq < through) {
+        let boundary = false;
+        for await (const event of cancellableHistory(
+          history(root.appliedSeq, through, signal),
+          signal,
+        )) {
+          if (
+            event.serverSeq !== root.appliedSeq + 1 ||
+            event.serverSeq > through
+          )
+            throw new ProtocolError(
+              "sequence_gap",
+              "Playback history is not contiguous",
+            );
+          if (event.timelineMs > time) {
+            boundary = true;
+            break;
+          }
+          root = await this.reducer.apply(root, event, signal);
+          rows = await this.activityIndex.apply(
+            rows,
+            event,
+            root,
+            this.reducer,
+            signal,
+          );
+        }
+        if (!boundary && root.appliedSeq !== through)
+          throw new ProtocolError(
+            "sequence_gap",
+            "Playback history is incomplete",
+          );
+      }
+      signal.throwIfAborted();
+      this.selected = { root, rows };
+      return new PagedActivityView(
+        this.reducer,
+        root,
+        (ref) => this.textSource(ref),
+        { index: this.activityIndex, root: rows },
+      );
+    })();
+    this.selections.add(task);
+    void task.finally(() => this.selections.delete(task)).catch(() => {});
+    return task;
+  }
   close() {
     if (!this.closing) {
       this.stop.abort(new Error("Paged state is closing"));
-      this.closing = this.tail.then(() => this.content.close());
+      this.closing = Promise.allSettled([this.tail, ...this.selections]).then(
+        () => this.content.close(),
+      );
     }
     return this.closing;
   }

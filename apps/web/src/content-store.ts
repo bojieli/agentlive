@@ -10,7 +10,7 @@ import {
   snapshotContentReferenceSchema,
   type SnapshotDescriptor,
 } from "@agentlive/protocol";
-import type { CacheBinding } from "./history-cache.js";
+import type { BrowserView, CacheBinding } from "./history-cache.js";
 export type BrowserCheckpoint = SnapshotDescriptor & {
   activity?: TextReference;
 };
@@ -372,6 +372,54 @@ export class BrowserContentStore {
         });
       });
     });
+  }
+  private presentation(value: unknown): BrowserView {
+    const v = value as BrowserView;
+    if (
+      !v ||
+      typeof v !== "object" ||
+      Object.keys(v).sort().join(",") !== "mode,serverSeq,speed,timelineMs" ||
+      !Number.isSafeInteger(v.serverSeq) ||
+      v.serverSeq < 0 ||
+      !Number.isFinite(v.timelineMs) ||
+      v.timelineMs < 0 ||
+      !Number.isFinite(v.speed) ||
+      v.speed < 1 / 1024 ||
+      v.speed > 1024 ||
+      !["follow", "paused", "playing"].includes(v.mode)
+    )
+      bad();
+    return { ...v };
+  }
+  loadView(signal: AbortSignal): Promise<BrowserView | undefined> {
+    return this.run(signal, (active) =>
+      this.transaction("readonly", active, (tx, read, result) => {
+        read(tx.objectStore("meta").get(`view:${this.scope}`), (raw) =>
+          result(raw === undefined ? undefined : this.presentation(raw)),
+        );
+      }),
+    );
+  }
+  saveView(input: BrowserView, signal: AbortSignal): Promise<void> {
+    const view = this.presentation(input);
+    return this.run(signal, (active) =>
+      this.transaction("readwrite", active, (tx, read, result) => {
+        const meta = tx.objectStore("meta");
+        read(meta.get(`root:${this.scope}`), (raw) => {
+          const head = raw === undefined ? null : this.checkpoint(raw);
+          if (
+            view.serverSeq > (head?.serverSeq ?? 0) ||
+            view.timelineMs > (head?.timelineMs ?? 0)
+          )
+            throw new ProtocolError(
+              "precondition_failed",
+              "Playback preference exceeds saved receipt",
+            );
+          meta.put(view, `view:${this.scope}`);
+          result(undefined);
+        });
+      }),
+    );
   }
   static async clear(factory: IDBFactory, parent: AbortSignal): Promise<void> {
     const signal = AbortSignal.any([parent, AbortSignal.timeout(10000)]);

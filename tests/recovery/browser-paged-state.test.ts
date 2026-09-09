@@ -375,3 +375,101 @@ it("rejects activity roots from another boundary or revision before atomic publi
     await store.close();
   }
 });
+
+it("keeps receipt progressing during a stalled seek and aborts the seek independently", async () => {
+  const state = await BrowserPagedState.open(
+    new IDBFactory(),
+    binding,
+    signal(),
+  );
+  try {
+    await state.apply(
+      [
+        started(),
+        event(2, {
+          kind: "message.text.append",
+          payload: { messageId: "m", text: "two" },
+        }),
+      ],
+      signal(),
+    );
+    let entered!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const stop = new AbortController();
+    const source = (_after: number, _through: number) => ({
+      [Symbol.asyncIterator]() {
+        return {
+          next() {
+            entered();
+            return new Promise<IteratorResult<StoredEvent>>(() => {});
+          },
+          return() {
+            return new Promise<IteratorResult<StoredEvent>>(() => {});
+          },
+        };
+      },
+    });
+    const selection = state.select(1, source, stop.signal);
+    await reading;
+    await state.apply(
+      [event(3, { kind: "message.completed", payload: { messageId: "m" } })],
+      signal(),
+    );
+    expect(state.checkpoint!.serverSeq).toBe(3);
+    stop.abort(new Error("replace seek"));
+    await expect(selection).rejects.toThrow("replace seek");
+    const latest = await state.select(3, () => history(), signal());
+    expect(latest.sequence).toBe(3);
+    await expect(
+      state.select(0, () => history(), signal()),
+    ).rejects.toMatchObject({ code: "sequence_gap" });
+    expect(state.checkpoint!.serverSeq).toBe(3);
+  } finally {
+    await state.close();
+  }
+});
+
+it("restores an exact paused prefix when later events share its timestamp", async () => {
+  const factory = new IDBFactory();
+  let state = await BrowserPagedState.open(factory, binding, signal());
+  const events = [
+    started(),
+    {
+      ...event(2, {
+        kind: "message.text.append",
+        payload: { messageId: "m", text: "later tie" },
+      }),
+      timelineMs: 1,
+    },
+  ];
+  try {
+    await state.apply(events, signal());
+    await state.saveView(
+      { serverSeq: 1, timelineMs: 1, speed: 2, mode: "paused" },
+      signal(),
+    );
+    await expect(
+      state.saveView(
+        { serverSeq: 3, timelineMs: 1, speed: 2, mode: "paused" },
+        signal(),
+      ),
+    ).rejects.toMatchObject({ code: "precondition_failed" });
+    await state.close();
+    state = await BrowserPagedState.open(factory, binding, signal());
+    const saved = (await state.loadView(signal()))!;
+    const view = await state.select(
+      saved.timelineMs,
+      (after, through) => history(...events.slice(after, through)),
+      signal(),
+      saved.serverSeq,
+    );
+    expect(view.sequence).toBe(1);
+    const row = (await view.rows(0, 1, signal()))[0]!;
+    expect((await view.load(row, signal()))!.texts.text!.units).toBe(0);
+    expect(state.state.appliedSeq).toBe(2);
+  } finally {
+    await state.close();
+  }
+});

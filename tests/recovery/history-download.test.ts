@@ -61,3 +61,39 @@ it("retries a lost page response and isolates the fixed boundary from metadata m
   expect(events.map((event) => event.serverSeq)).toEqual([1, 2]);
   expect(attempts).toBe(2);
 });
+it("downloads a fixed suffix without replaying the preceding prefix", async () => {
+  const urls: string[] = [];
+  const history = await openRecordingHistory({
+    serverOrigin: "http://localhost:7331",
+    streamId: "stream",
+    signal: AbortSignal.timeout(5000),
+    fetch: async (url) => {
+      urls.push(String(url));
+      if (!String(url).includes("/events?"))
+        return Response.json({
+          revision: "revision",
+          serverSeq: 2,
+          title: "Test",
+          lifecycle: "ended",
+        });
+      const parsed = new URL(String(url));
+      expect(parsed.searchParams.get("afterServerSeq")).toBe("1");
+      expect(parsed.searchParams.get("throughServerSeq")).toBe("2");
+      return page([event(2)]);
+    },
+  });
+  expect(
+    (
+      await Array.fromAsync(
+        history.range({ afterServerSeq: 1, throughServerSeq: 2 }),
+      )
+    ).map((item) => item.serverSeq),
+  ).toEqual([2]);
+  expect(await Array.fromAsync(history.range({ afterServerSeq: 2 }))).toEqual(
+    [],
+  );
+  await expect(history.range({ throughServerSeq: 3 }).next()).rejects.toThrow(
+    "captured boundary",
+  );
+  expect(urls).toHaveLength(2);
+});

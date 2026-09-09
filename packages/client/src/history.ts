@@ -43,19 +43,26 @@ export async function openRecordingHistory(options: {
       lifecycle: z.enum(["open", "ended"]),
     })
     .parse(JSON.parse((await get(base)).text));
-  async function* events(): AsyncGenerator<StoredEvent> {
-    let after = 0;
-    while (after < metadata.serverSeq) {
+  async function* events(
+    range: { afterServerSeq?: number; throughServerSeq?: number } = {},
+  ): AsyncGenerator<StoredEvent> {
+    let after = cursorSchema.parse(range.afterServerSeq ?? 0);
+    const through = cursorSchema.parse(
+      range.throughServerSeq ?? metadata.serverSeq,
+    );
+    if (after > through || through > metadata.serverSeq)
+      throw new RangeError("History range exceeds its captured boundary");
+    options.signal.throwIfAborted();
+    while (after < through) {
       const url = new URL(base + "/events");
       url.searchParams.set("revision", metadata.revision);
-      url.searchParams.set("throughServerSeq", String(metadata.serverSeq));
+      url.searchParams.set("throughServerSeq", String(through));
       url.searchParams.set("afterServerSeq", String(after));
       url.searchParams.set("limit", "500");
       const { response, text } = await get(url.toString());
       if (
         response.headers.get("x-agentlive-revision") !== metadata.revision ||
-        response.headers.get("x-agentlive-through") !==
-          String(metadata.serverSeq) ||
+        response.headers.get("x-agentlive-through") !== String(through) ||
         !text.endsWith("\n")
       )
         throw new ProtocolError(
@@ -68,7 +75,7 @@ export async function openRecordingHistory(options: {
         .map((line) => storedEventSchema.parse(JSON.parse(line)));
       let cursor = after;
       for (const event of page) {
-        if (event.serverSeq !== ++cursor || cursor > metadata.serverSeq)
+        if (event.serverSeq !== ++cursor || cursor > through)
           throw new ProtocolError(
             "sequence_gap",
             "History page is not contiguous",
@@ -78,7 +85,7 @@ export async function openRecordingHistory(options: {
         !page.length ||
         response.headers.get("x-agentlive-next-cursor") !== String(cursor) ||
         response.headers.get("x-agentlive-complete") !==
-          String(cursor === metadata.serverSeq)
+          String(cursor === through)
       )
         throw new ProtocolError(
           "sequence_gap",
@@ -88,5 +95,5 @@ export async function openRecordingHistory(options: {
       after = cursor;
     }
   }
-  return { metadata: { ...metadata }, events: events() };
+  return { metadata: { ...metadata }, events: events(), range: events };
 }

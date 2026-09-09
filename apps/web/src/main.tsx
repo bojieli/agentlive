@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { listRecordings } from "@agentlive/client";
 import { ForegroundClock, bindPageLifecycle } from "./lifecycle.js";
-import { BrowserSession } from "./session.js";
+import { BrowserPagedSession } from "./paged-session.js";
+type ViewerSession = Awaited<ReturnType<typeof BrowserPagedSession.open>>;
 import { AttachmentViewer } from "./attachment-viewer.js";
 import type { Attachment } from "./attachments.js";
 import { ActivityFeed } from "./activity-feed.js";
@@ -16,7 +17,7 @@ function App() {
     new URLSearchParams(location.search).get("stream") ?? "",
   );
   const [key, setKey] = useState("");
-  const [session, setSession] = useState<BrowserSession>();
+  const [session, setSession] = useState<ViewerSession>();
   const [cachePlatform] = useState(browserCachePlatform);
   const [cacheHistory, setCacheHistory] = useState(!!cachePlatform);
   const [cacheNotice, setCacheNotice] = useState("");
@@ -33,7 +34,7 @@ function App() {
   const [next, setNext] = useState<string | null>(null);
   const request = useRef<AbortController | undefined>(undefined);
   const closing = useRef<Promise<void>>(Promise.resolve());
-  function closeSession(current: BrowserSession | undefined) {
+  function closeSession(current: ViewerSession | undefined) {
     closing.current = Promise.all([closing.current, current?.close()]).then(
       () => {},
     );
@@ -73,7 +74,7 @@ function App() {
     try {
       await closing.current;
       abort.signal.throwIfAborted();
-      const joined = await BrowserSession.open(
+      const joined = await BrowserPagedSession.open(
         id,
         key,
         abort.signal,
@@ -107,10 +108,11 @@ function App() {
     if (!cachePlatform || clearing) return;
     setClearing(true);
     setError("");
-    session?.disableCache();
     setCacheHistory(false);
     setCacheNotice("");
     try {
+      await closeSession(session);
+      setSession(undefined);
       await clearSavedHistories(cachePlatform, AbortSignal.timeout(10000));
       await BrowserSnapshotCache.clear(
         cachePlatform.indexedDB,
@@ -147,15 +149,44 @@ function App() {
     }
   }
   const state = session?.state;
+  const [checkedAttachment, setCheckedAttachment] = useState<{
+    view: NonNullable<ViewerSession["view"]>;
+    attachment: Attachment;
+  }>();
+  const view = session?.view;
   const available =
     attachment &&
-    state?.artifacts.get(attachment.artifactId)?.visible !== false &&
-    state?.artifacts
-      .get(attachment.artifactId)
-      ?.versions.get(attachment.version)?.hash === attachment.hash;
+    (view
+      ? checkedAttachment?.view === view &&
+        checkedAttachment.attachment === attachment
+      : state?.artifacts.get(attachment.artifactId)?.visible !== false &&
+        state?.artifacts
+          .get(attachment.artifactId)
+          ?.versions.get(attachment.version)?.hash === attachment.hash);
   useEffect(() => {
-    if (attachment && !available) setAttachment(undefined);
-  }, [attachment, available]);
+    if (!attachment) return;
+    if (!view) {
+      if (!available) setAttachment(undefined);
+      return;
+    }
+    const abort = new AbortController();
+    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(10000)]);
+    void view
+      .attachment(attachment.artifactId, attachment.version, signal)
+      .then((value) => {
+        if (signal.aborted) return;
+        if (value?.hash === attachment.hash)
+          setCheckedAttachment({ view, attachment });
+        else setAttachment(undefined);
+      })
+      .catch((error) => {
+        if (!abort.signal.aborted)
+          setError(
+            error instanceof Error ? error.message : "Attachment lookup failed",
+          );
+      });
+    return () => abort.abort();
+  }, [attachment, view, available]);
   return (
     <div className="shell">
       <header>
@@ -206,7 +237,6 @@ function App() {
               disabled={!cachePlatform || busy || clearing || !!session}
               onChange={(event) => {
                 setCacheHistory(event.target.checked);
-                if (!event.target.checked) session?.disableCache();
               }}
             />
             Save history on this device
@@ -371,6 +401,7 @@ function App() {
             <ActivityFeed
               key={session.streamId}
               state={state!}
+              {...(view ? { view } : {})}
               following={session.follow}
               onPause={() => session.setPlaying(false)}
               order={(key) => session.order(key)}

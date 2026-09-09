@@ -43,6 +43,26 @@ export class PagedActivityView {
         );
     }
   }
+  /** Small presentation header; object maps are loaded separately by the activity feed. */
+  get summary(): RecordingState {
+    return {
+      ...initialState(),
+      appliedSeq: this.root.appliedSeq,
+      timelineMs: this.root.timelineMs,
+      title: this.root.title,
+      lifecycle: this.root.lifecycle,
+    };
+  }
+  async attachment(artifactId: string, version: number, signal: AbortSignal) {
+    const artifact = await this.reducer.get(
+      this.root,
+      "artifacts",
+      artifactId,
+      signal,
+    );
+    if (!artifact || artifact.visible === false) return undefined;
+    return this.reducer.artifactVersion(this.root, artifactId, version, signal);
+  }
   get sequence() {
     return this.root.appliedSeq;
   }
