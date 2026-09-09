@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import {
   PublisherJournal,
@@ -14,9 +14,11 @@ import {
   request,
   retryable,
 } from "@agentlive/client/transport";
+import { localArtifactResolver } from "./local-artifacts.js";
 import { OpenCodeCapture } from "./opencode-capture.js";
 import { observeOpenCodeSession } from "./observe-opencode.js";
 export interface OpenCodePublishOptions {
+  artifactRoots?: readonly string[];
   publisherRoot: string;
   serverOrigin: string;
   ownerCredential: string;
@@ -51,6 +53,7 @@ export async function publishOpenCodeRecording(
   let running: Promise<void> | undefined;
   let networkFailure: unknown;
   let capture: OpenCodeCapture | undefined;
+  let artifacts: Awaited<ReturnType<typeof localArtifactResolver>> | undefined;
   try {
     if (!journal.identity.streamId) {
       const headers = options.nativePassword
@@ -100,7 +103,11 @@ export async function publishOpenCodeRecording(
       journal.identity.writeSecret,
       ...(options.nativePassword ? [options.nativePassword] : []),
     ];
+    const roots = (options.artifactRoots ?? [])
+      .map((root) => resolve(root))
+      .sort();
     const identity = {
+      artifactRoots: roots,
       version: 1,
       converterVersion: "opencode-live-1",
       title: options.title,
@@ -111,12 +118,16 @@ export async function publishOpenCodeRecording(
     };
     const manifestPath = join(journal.directory, "publish.json");
     try {
+      const previous = JSON.parse(await readFile(manifestPath, "utf8"));
+      const { artifactRoots: _, ...legacyIdentity } = identity;
       if (
-        canonicalJson(JSON.parse(await readFile(manifestPath, "utf8"))) !==
-        canonicalJson(identity)
+        previous.artifactRoots === undefined &&
+        canonicalJson(previous) === canonicalJson(legacyIdentity)
       )
+        await atomicJson(manifestPath, identity);
+      else if (canonicalJson(previous) !== canonicalJson(identity))
         throw new Error(
-          "OpenCode publishing conversion, filtering or sharing options changed",
+          "OpenCode publishing conversion, filtering, artifact or sharing options changed",
         );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -136,7 +147,17 @@ export async function publishOpenCodeRecording(
       controller.abort(error);
     });
     while (!journal.identity.streamId) await delay(25, signal);
-    capture = await OpenCodeCapture.open(journal, secrets);
+    artifacts = await localArtifactResolver({
+      directory: join(journal.directory, "artifacts"),
+      roots,
+      baseDirectory: "/",
+      secrets,
+      serverOrigin: journal.identity.serverOrigin,
+      streamId: journal.identity.streamId!,
+      writeSecret: journal.identity.writeSecret,
+      signal,
+    });
+    capture = await OpenCodeCapture.open(journal, secrets, artifacts);
     options.onReady?.({
       streamId: journal.identity.streamId!,
       revision: journal.identity.revision!,
@@ -162,7 +183,11 @@ export async function publishOpenCodeRecording(
     try {
       await capture?.close();
     } finally {
-      await journal.close();
+      try {
+        await artifacts?.close();
+      } finally {
+        await journal.close();
+      }
     }
   }
 }

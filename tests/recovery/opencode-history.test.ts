@@ -113,3 +113,130 @@ it("imports OpenCode message/tool/error exports with filtered replay and determi
     await rm(root, { recursive: true, force: true });
   }
 });
+it("imports inline and local artifacts, links tool attachments, and retries after source deletion", async () => {
+  const { pathToFileURL } = await import("node:url");
+  const root = await mkdtemp(join(tmpdir(), "agentlive-opencode-artifacts-"));
+  const ownerCredential = "b".repeat(64);
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: ownerCredential,
+    port: 0,
+  });
+  try {
+    const file = join(root, "report.html");
+    await writeFile(file, "<h1>private-key report</h1>");
+    const sourcePath = join(root, "source.json");
+    const inline = (text: string) =>
+      `data:text/plain;base64,${Buffer.from(text).toString("base64")}`;
+    const part = (id: string, fields: Record<string, unknown>) => ({
+      id,
+      sessionID: "ses_files",
+      messageID: "msg1",
+      ...fields,
+    });
+    await writeFile(
+      sourcePath,
+      JSON.stringify({
+        info: { id: "ses_files", time: { created: 1 } },
+        messages: [
+          {
+            info: {
+              id: "msg1",
+              sessionID: "ses_files",
+              role: "assistant",
+              time: { created: 1, completed: 2 },
+            },
+            parts: [
+              part("inline1", {
+                type: "file",
+                url: inline("inline private-key"),
+                mime: "text/plain",
+                filename: "note.txt",
+              }),
+              part("local1", {
+                type: "file",
+                url: pathToFileURL(file).href.replace(".html", ".%68tml"),
+                mime: "text/html",
+                filename: "report.html",
+              }),
+              part("tool1", {
+                type: "tool",
+                tool: "report",
+                state: {
+                  status: "completed",
+                  input: {},
+                  output: "generated",
+                  attachments: [
+                    {
+                      id: "tool_file",
+                      type: "file",
+                      url: inline("tool private-key"),
+                      mime: "text/plain",
+                      filename: "tool.txt",
+                    },
+                  ],
+                },
+              }),
+              part("invalid1", {
+                type: "file",
+                url: inline("mismatched"),
+                mime: "image/png",
+                filename: "wrong.png",
+              }),
+            ],
+          },
+        ],
+      }),
+    );
+    const options = {
+      sourcePath,
+      publisherRoot: join(root, "publisher"),
+      serverOrigin: server.url,
+      ownerCredential,
+      title: "Files",
+      visibility: "private" as const,
+      secrets: ["private-key"],
+      signal: AbortSignal.timeout(10000),
+    };
+    const imported = await importOpenCodeRecording(options);
+    expect(imported.report.availableAttachments).toBe(3);
+    expect(imported.report.unavailableAttachments).toBe(1);
+    const session = await server.store.get(imported.streamId);
+    let state = initialState();
+    for await (const event of session.history(0, session.boundary.sequence))
+      state = apply(state, event);
+    const texts = [];
+    for (const artifact of state.artifacts.values())
+      for (const attachment of artifact.versions.values()) {
+        const response = await fetch(
+          `${server.url}/api/v1/streams/${imported.streamId}/attachments/${attachment.hash}`,
+          { headers: { authorization: `Bearer ${ownerCredential}` } },
+        );
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-disposition")).toContain(
+          "attachment",
+        );
+        texts.push(await response.text());
+        expect(attachment.provenance).toBe(
+          attachment.filename === "report.html"
+            ? "current-file"
+            : "historical-version",
+        );
+      }
+    expect(texts.sort()).toEqual(
+      [
+        "<h1>[REDACTED] report</h1>",
+        "inline [REDACTED]",
+        "tool [REDACTED]",
+      ].sort(),
+    );
+    expect(state.references.size).toBe(3);
+    const before = session.boundary.sequence;
+    await rm(file);
+    await importOpenCodeRecording(options);
+    expect(session.boundary.sequence).toBe(before);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 20000);

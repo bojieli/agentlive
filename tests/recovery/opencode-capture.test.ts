@@ -246,3 +246,111 @@ it("stops between durable entities on cancellation and safely resumes the snapsh
   await capture.accept(snapshot("retained", true, "completed"));
   expect((await replay(journal)).state.tools.size).toBe(1);
 });
+it("captures live attachment versions and reuses announced versions after restart", async () => {
+  const { localArtifactResolver } =
+    await import("../../packages/adapters/src/index.js");
+  const { PublisherNetwork } =
+    await import("../../packages/publisher/src/index.js");
+  const { startServer } = await import("../../packages/server/src/http.js");
+  const { writeFile } = await import("node:fs/promises");
+  const { pathToFileURL } = await import("node:url");
+  const root = await mkdtemp(join(tmpdir(), "agentlive-live-files-"));
+  roots.push(root);
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: "b".repeat(64),
+    port: 0,
+  });
+  const journal = await PublisherJournal.open(join(root, "publisher"), {
+    serverOrigin: server.url,
+    agent: "opencode",
+    nativeSessionId: "ses_test",
+  });
+  journals.push(journal);
+  const network = new PublisherNetwork({
+    journal,
+    ownerCredential: "b".repeat(64),
+    title: "Files",
+    visibility: "private",
+  });
+  const controller = new AbortController();
+  let capture: OpenCodeCapture | undefined;
+  let artifacts: Awaited<ReturnType<typeof localArtifactResolver>> | undefined;
+  let sending: Promise<void> | undefined;
+  try {
+    await network.ensureRemote(controller.signal);
+    const file = join(root, "artifact.txt");
+    await writeFile(file, "local secret-value");
+    const settings = {
+      directory: join(journal.directory, "artifacts"),
+      roots: [root],
+      baseDirectory: root,
+      secrets: ["secret-value"],
+      serverOrigin: server.url,
+      streamId: journal.identity.streamId!,
+      writeSecret: journal.identity.writeSecret,
+      signal: controller.signal,
+    };
+    artifacts = await localArtifactResolver(settings);
+    capture = await OpenCodeCapture.open(journal, ["secret-value"], artifacts);
+    const withFile = (url: string) => {
+      const source = snapshot("files", true);
+      source.messages[0]!.parts.push({
+        id: "file1",
+        messageID: "msg1",
+        sessionID: "ses_test",
+        type: "file",
+        filename: "artifact.txt",
+        mime: "text/plain",
+        url,
+      });
+      return source;
+    };
+    const original = pathToFileURL(file).href;
+    await capture.accept(withFile(original));
+    await capture.accept(
+      withFile(
+        `data:text/plain;base64,${Buffer.from("inline secret-value").toString("base64")}`,
+      ),
+    );
+    await capture.close();
+    capture = undefined;
+    await artifacts.close();
+    artifacts = undefined;
+    await rm(file);
+    artifacts = await localArtifactResolver(settings);
+    capture = await OpenCodeCapture.open(journal, ["secret-value"], artifacts);
+    await capture.accept(withFile(original));
+    const before = journal.capturedThrough;
+    await capture.accept(withFile(original));
+    expect(journal.capturedThrough).toBe(before);
+    const result = await replay(journal);
+    expect(
+      result.events.filter(
+        (event) => event.content.kind === "attachment.available",
+      ),
+    ).toHaveLength(2);
+    const artifact = [...result.state.artifacts.values()][0]!;
+    expect(artifact.pending).toBe(false);
+    expect(artifact.versions.size).toBe(2);
+    const local = [...artifact.versions.values()].find(
+      (attachment) => attachment.provenance === "current-file",
+    )!;
+    sending = network.run(controller.signal);
+    await expect
+      .poll(() => journal.identity.acknowledgedSeq, { timeout: 10000 })
+      .toBe(journal.capturedThrough);
+    const response = await fetch(
+      `${server.url}/api/v1/streams/${journal.identity.streamId}/attachments/${local.hash}`,
+      { headers: { authorization: `Bearer ${journal.identity.writeSecret}` } },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe("local [REDACTED]");
+  } finally {
+    controller.abort();
+    await sending;
+    await capture?.close();
+    await artifacts?.close();
+    await server.close();
+  }
+}, 20000);

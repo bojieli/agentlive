@@ -1,3 +1,8 @@
+import {
+  openCodeFileEvents,
+  openCodeFileDescriptor,
+  type OpenCodeArtifactResolvers,
+} from "./opencode-artifacts.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
@@ -18,6 +23,7 @@ const hash = (value: unknown) =>
   createHash("sha256").update(canonicalJson(value)).digest("hex");
 const entitySchema = z.strictObject({
   generation: z.number().int().positive().safe(),
+  availableVersions: z.array(z.number().int().positive()).default([]),
   identity: z.string(),
   fingerprint: z.string().regex(/^[a-f0-9]{64}$/),
   completed: z.boolean(),
@@ -55,10 +61,12 @@ export class OpenCodeCapture {
     private readonly lock: FileLock,
     private state: z.infer<typeof stateSchema>,
     private readonly secrets: readonly string[],
+    private readonly artifacts?: OpenCodeArtifactResolvers,
   ) {}
   static async open(
     journal: PublisherJournal,
     secrets: readonly string[] = [],
+    artifacts?: OpenCodeArtifactResolvers,
   ) {
     if (
       journal.identity.nativeAgent !== "opencode" ||
@@ -97,9 +105,14 @@ export class OpenCodeCapture {
         throw new Error(
           "OpenCode capture identity or filtering policy changed",
         );
-      const capture = new OpenCodeCapture(journal, directory, lock, state, [
-        ...secrets,
-      ]);
+      const capture = new OpenCodeCapture(
+        journal,
+        directory,
+        lock,
+        state,
+        [...secrets],
+        artifacts,
+      );
       await capture.recover();
       return capture;
     } catch (error) {
@@ -158,7 +171,7 @@ export class OpenCodeCapture {
     time: number,
     content: (
       previous: z.infer<typeof entitySchema> | undefined,
-    ) => EventContent[],
+    ) => EventContent[] | Promise<EventContent[]>,
     present = true,
     identity?: string,
   ) {
@@ -171,13 +184,52 @@ export class OpenCodeCapture {
       return;
     if (!previous && Object.keys(this.state.entities).length >= 50000)
       throw new Error("OpenCode capture entity limit reached");
-    const events = content(previous).flatMap(chunkContent);
+    const raw = await content(previous);
+    const repeated = new Set(
+      raw
+        .filter(
+          (event) =>
+            event.kind === "attachment.available" &&
+            previous?.availableVersions.includes(
+              event.payload.attachment.version,
+            ),
+        )
+        .map(
+          (event) =>
+            (event as Extract<EventContent, { kind: "attachment.available" }>)
+              .payload.attachment.artifactId,
+        ),
+    );
+    const events = raw
+      .filter(
+        (event) =>
+          !(
+            event.kind === "attachment.available" &&
+            repeated.has(event.payload.attachment.artifactId)
+          ) &&
+          !(
+            event.kind === "attachment.pending" &&
+            repeated.has(event.payload.artifactId)
+          ),
+      )
+      .flatMap(chunkContent);
+    const availableVersions = [
+      ...new Set([
+        ...(previous?.availableVersions ?? []),
+        ...raw.flatMap((event) =>
+          event.kind === "attachment.available"
+            ? [event.payload.attachment.version]
+            : [],
+        ),
+      ]),
+    ];
     const intent = {
       entityId: id,
       next: {
         generation: (previous?.generation ?? 0) + 1,
         fingerprint,
         identity,
+        availableVersions,
         completed: complete,
         present,
       },
@@ -374,12 +426,71 @@ export class OpenCodeCapture {
                     } as EventContent,
                   ]
                 : []),
-              ...(Array.isArray(native.attachments) && native.attachments.length
-                ? [gap("OpenCode tool attachments require artifact conversion")]
-                : []),
             ],
             true,
             hash({ kind: "tool", owner: message.info.id, name: part.tool }),
+          );
+          if (Array.isArray(native.attachments)) {
+            for (const [index, value] of native.attachments.entries()) {
+              signal?.throwIfAborted();
+              const attachment = z.record(z.string(), z.unknown()).parse(value);
+              if (
+                (attachment.sessionID !== undefined &&
+                  attachment.sessionID !== snapshot.info.id) ||
+                (attachment.messageID !== undefined &&
+                  attachment.messageID !== message.info.id)
+              )
+                throw new Error(
+                  "OpenCode tool attachment has conflicting ownership",
+                );
+              const attachmentId = hash({
+                tool: part.id,
+                attachment:
+                  typeof attachment.id === "string" ? attachment.id : index,
+              });
+              seen.add(attachmentId);
+              await this.revise(
+                attachmentId,
+                {
+                  descriptor: openCodeFileDescriptor(attachment),
+                  resolved: Boolean(this.artifacts),
+                },
+                false,
+                time,
+                () =>
+                  openCodeFileEvents({
+                    part: attachment,
+                    artifactId: attachmentId,
+                    messageId: id,
+                    sourceScope: snapshot.info.id,
+                    ...(this.artifacts ? { resolvers: this.artifacts } : {}),
+                    filter: (text) => this.filter(text, true),
+                  }),
+                true,
+                hash({ kind: "tool-attachment", owner: part.id }),
+              );
+            }
+          }
+        } else if (part.type === "file") {
+          await this.revise(
+            partId,
+            {
+              descriptor: openCodeFileDescriptor(part),
+              resolved: Boolean(this.artifacts),
+            },
+            false,
+            time,
+            () =>
+              openCodeFileEvents({
+                part,
+                artifactId: partId,
+                messageId: id,
+                sourceScope: snapshot.info.id,
+                ...(this.artifacts ? { resolvers: this.artifacts } : {}),
+                filter: (text) => this.filter(text, true),
+              }),
+            true,
+            hash({ kind: part.type, owner: message.info.id }),
           );
         } else
           await this.revise(
@@ -387,30 +498,14 @@ export class OpenCodeCapture {
             { type: part.type, sourceHash: hash(part) },
             false,
             time,
-            () =>
-              part.type === "file"
-                ? [
-                    {
-                      kind: "attachment.pending",
-                      payload: { artifactId: partId, filename: "attachment" },
-                    },
-                    {
-                      kind: "attachment.unavailable",
-                      payload: {
-                        artifactId: partId,
-                        reason:
-                          "OpenCode file reference requires artifact conversion",
-                      },
-                    },
-                  ]
-                : [
-                    gap(
-                      this.filter(
-                        `Unsupported OpenCode source object: ${part.type}`,
-                        true,
-                      ),
-                    ),
-                  ],
+            () => [
+              gap(
+                this.filter(
+                  `Unsupported OpenCode source object: ${part.type}`,
+                  true,
+                ),
+              ),
+            ],
             true,
             hash({ kind: part.type, owner: message.info.id }),
           );

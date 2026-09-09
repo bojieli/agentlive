@@ -14,15 +14,16 @@ export async function importOpenCodeRecording(options: OpenCodeImportOptions) {
   );
   return importNativeRecording(options, {
     agent: "opencode",
-    converterVersion: "opencode-export-1",
+    converterVersion: "opencode-export-2",
     source,
-    capture: (journal, secrets) =>
+    capture: (journal, secrets, artifacts) =>
       captureOpenCodeHistory(
         options.sourcePath,
         source,
         journal,
         secrets,
         options.signal,
+        artifacts,
       ),
   });
 }

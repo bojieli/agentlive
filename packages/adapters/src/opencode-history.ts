@@ -1,3 +1,7 @@
+import {
+  openCodeFileEvents,
+  type OpenCodeArtifactResolvers,
+} from "./opencode-artifacts.js";
 import { open } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { z } from "zod";
@@ -128,6 +132,7 @@ export async function captureOpenCodeHistory(
   sink: OpenCodeCaptureSink,
   secrets: readonly string[] = [],
   signal?: AbortSignal,
+  artifacts?: OpenCodeArtifactResolvers,
 ) {
   if (
     sink.identity.nativeAgent !== "opencode" ||
@@ -142,6 +147,7 @@ export async function captureOpenCodeHistory(
     items: 0,
     omittedReasoning: 0,
     unavailableAttachments: 0,
+    availableAttachments: 0,
     unsupported: {} as Record<string, number>,
   };
   const filter = (text: string) => {
@@ -269,27 +275,48 @@ export async function captureOpenCodeHistory(
             typeof timing.end === "number" ? timing.end : start,
           );
         else await gap(`${key}/unfinished`, `tool/${status}`, start);
-        if (Array.isArray(state.attachments) && state.attachments.length)
-          await gap(`${key}/attachments`, "tool/attachments", start);
+        if (Array.isArray(state.attachments)) {
+          for (const [index, value] of state.attachments.entries()) {
+            const attachment = object.parse(value);
+            if (
+              (attachment.sessionID !== undefined &&
+                attachment.sessionID !== manifest.nativeSessionId) ||
+              (attachment.messageID !== undefined &&
+                attachment.messageID !== message.info.id)
+            )
+              throw new Error(
+                "OpenCode tool attachment has conflicting ownership",
+              );
+            const artifactId = hash(
+              `${part.id}/attachment/${typeof attachment.id === "string" ? attachment.id : index}`,
+            );
+            const events = await openCodeFileEvents({
+              part: attachment,
+              artifactId,
+              messageId,
+              sourceScope: manifest.nativeSessionId,
+              ...(artifacts ? { resolvers: artifacts } : {}),
+              filter,
+            });
+            await emit(`${key}/attachment/${index}`, events, start);
+            if (events.some((event) => event.kind === "attachment.available"))
+              report.availableAttachments++;
+            else report.unavailableAttachments++;
+          }
+        }
       } else if (part.type === "file") {
-        await emit(
-          key,
-          [
-            {
-              kind: "attachment.pending",
-              payload: { artifactId: key, filename: "attachment" },
-            },
-            {
-              kind: "attachment.unavailable",
-              payload: {
-                artifactId: key,
-                reason: "OpenCode file reference requires artifact resolution",
-              },
-            },
-          ],
-          time,
-        );
-        report.unavailableAttachments++;
+        const events = await openCodeFileEvents({
+          part,
+          artifactId: key,
+          messageId,
+          sourceScope: manifest.nativeSessionId,
+          ...(artifacts ? { resolvers: artifacts } : {}),
+          filter,
+        });
+        await emit(key, events, time);
+        if (events.some((event) => event.kind === "attachment.available"))
+          report.availableAttachments++;
+        else report.unavailableAttachments++;
       } else if (!["step-start", "step-finish"].includes(part.type))
         await gap(key, part.type, time);
     }

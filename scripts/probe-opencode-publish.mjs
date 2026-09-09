@@ -115,7 +115,7 @@ let publishing;
 const model = process.env.AGENTLIVE_PROBE_MODEL ?? "anthropic/claude-sonnet-5";
 const slash = model.indexOf("/");
 let nativeId;
-async function prompt(marker) {
+async function prompt(marker, attachFile = false) {
   const result = await native(`/session/${nativeId}/message`, {
     model: {
       providerID: model.slice(0, slash),
@@ -126,6 +126,16 @@ async function prompt(marker) {
         type: "text",
         text: `This is a synthetic transport test. Do not use tools or read files. Write one sentence about rain and end with ${marker}.`,
       },
+      ...(attachFile
+        ? [
+            {
+              type: "file",
+              mime: "text/plain",
+              filename: "probe.txt",
+              url: `data:text/plain;base64,${Buffer.from("Synthetic attachment probe-private-key").toString("base64")}`,
+            },
+          ]
+        : []),
     ],
   });
   if (
@@ -146,6 +156,7 @@ function attach() {
     nativeServerOrigin: nativeOrigin,
     nativeSessionId: nativeId,
     nativePassword: password,
+    secrets: ["probe-private-key"],
     title: "Synthetic OpenCode publishing",
     visibility: "private",
     signal: AbortSignal.any([signal, publisherAbort.signal]),
@@ -198,7 +209,7 @@ try {
   nativeId = (
     await native("/session", { title: "Synthetic AgentLive resume probe" })
   ).id;
-  await prompt("AGENTLIVE_INITIAL_OK");
+  await prompt("AGENTLIVE_INITIAL_OK", true);
   attach();
   await until("AGENTLIVE_INITIAL_OK");
   await stopNative();
@@ -214,6 +225,26 @@ try {
   const final = await until("AGENTLIVE_DETACHED_OK");
   if (final !== baseline)
     throw new Error("Publisher restart duplicated retained history");
+  const recording = await target.store.get(streamId);
+  let replay = initialState();
+  for await (const event of recording.history(0, recording.boundary.sequence))
+    replay = apply(replay, event);
+  let verifiedAttachments = 0;
+  for (const artifact of replay.artifacts.values())
+    for (const attachment of artifact.versions.values()) {
+      const response = await fetch(
+        `${target.url}/api/v1/streams/${streamId}/attachments/${attachment.hash}`,
+        { headers: { authorization: `Bearer ${password}` }, signal },
+      );
+      if (!response.ok)
+        throw new Error("Published native attachment cannot be downloaded");
+      const text = await response.text();
+      if (!text.includes("[REDACTED]") || text.includes("probe-private-key"))
+        throw new Error("Native attachment filtering failed");
+      verifiedAttachments++;
+    }
+  if (!verifiedAttachments)
+    throw new Error("Native file input was not captured as an attachment");
   console.log(
     JSON.stringify({
       success: true,
@@ -223,6 +254,7 @@ try {
       detachedHistoryRecovered: true,
       publisherRestartDeduplicated: true,
       storedEvents: final,
+      verifiedAttachments,
     }),
   );
 } finally {

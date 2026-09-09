@@ -210,7 +210,6 @@ async function main() {
       values["native-agent"] ||
       values["resume-import"] ||
       values["record-format"] ||
-      values["artifact-root"] ||
       values["artifact-base"]
     )
       throw new Error(
@@ -228,6 +227,9 @@ async function main() {
       : await ownerCredential(ownerFile, false);
     secrets.push(secret);
     await publishOpenCodeRecording({
+      ...(values["artifact-root"]
+        ? { artifactRoots: values["artifact-root"] }
+        : {}),
       publisherRoot: join(stateDir, "publisher"),
       serverOrigin: values.server ?? "http://127.0.0.1:7331",
       ownerCredential: secret,

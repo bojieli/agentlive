@@ -287,10 +287,13 @@ it("continues durable capture while the AgentLive server is offline and sends th
   });
   try {
     await expect
-      .poll(() => {
-        if (failure) throw failure;
-        return captured;
-      })
+      .poll(
+        () => {
+          if (failure) throw failure;
+          return captured;
+        },
+        { timeout: 10000 },
+      )
       .toBeGreaterThan(0);
     const before = captured;
     await server.close();

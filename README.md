@@ -178,8 +178,20 @@ npx --yes pnpm@12.3.4 agentlive publish --agent opencode \
 
 Use `OPENCODE_SERVER_PASSWORD` (and `OPENCODE_SERVER_USERNAME` when configured) in the publisher's environment for native server authentication. `--server` selects the AgentLive destination separately. Initial attachment validates native identity/authentication before creating the remote recording. Repeat the command to resume the same publisher binding; native-server reconnect and AgentLive-server reconnect run independently. An existing binding keeps capturing available native snapshots while AgentLive is offline, then sends its durable backlog.
 
-OpenCode publishing currently preserves observed snapshots, not every native text delta. Artifact conversion, import continuation, source removal/reopen presentation, and scalable snapshot state remain unfinished. The installed-agent integration test covers three native turns, native server restart, a turn while publication is detached, and deduplicated publisher restart:
+OpenCode publishing currently preserves observed snapshots, not every native text delta. It captures base64 data-URL files and tool attachments; local `file:` references require explicit `--artifact-root` access. Remote authenticated artifact URLs, import continuation, source removal/reopen presentation, and scalable snapshot state remain unfinished. The installed-agent integration test covers three native turns, native server restart, a turn while publication is detached, and deduplicated publisher restart:
 
 ```sh
 node scripts/probe-opencode-publish.mjs
 ```
+
+OpenCode local artifact access is disabled by default. Allow a directory explicitly when its native references point to files available on this machine:
+
+```sh
+npx --yes pnpm@12.3.4 agentlive publish --agent opencode \
+  --native-server http://127.0.0.1:4096 --native-session <session-id> \
+  --artifact-root /path/to/allowed/artifacts
+```
+
+Inline files retain their embedded bytes; local files without a recorded original hash are labeled as current-file copies. Text artifacts are filtered before storage. Upload completes before an available attachment/link event is published, and retries reuse immutable captured bytes even if the original file disappears. Raw data URLs are not copied into broadcast reference events. Returning to a previously captured file version reuses that version's reference without announcing it twice.
+
+Historical OpenCode imports use converter version `opencode-export-2` for the same file and tool-attachment support. Existing imports pinned to the older converter still require migration or a separate publisher state directory.

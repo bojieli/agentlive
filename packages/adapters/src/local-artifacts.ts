@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { mkdir, readFile } from "node:fs/promises";
 import { extname, join, resolve } from "node:path";
@@ -48,7 +49,9 @@ export async function localArtifactResolver(options: {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
     if (!result) {
-      const extension = extname(input.path).toLowerCase();
+      const extension = extname(
+        input.path.startsWith("file:") ? fileURLToPath(input.path) : input.path,
+      ).toLowerCase();
       const mediaType =
         (
           {
@@ -60,6 +63,17 @@ export async function localArtifactResolver(options: {
             ".svg": "image/svg+xml",
             ".md": "text/markdown",
             ".txt": "text/plain",
+            ".pdf": "application/pdf",
+            ".html": "text/html",
+            ".htm": "text/html",
+            ".json": "application/json",
+            ".csv": "text/csv",
+            ".log": "text/plain",
+            ".yaml": "text/yaml",
+            ".yml": "text/yaml",
+            ".js": "application/javascript",
+            ".ts": "text/plain",
+            ".css": "text/css",
           } as Record<string, string>
         )[extension] ?? "application/octet-stream";
       try {
@@ -71,7 +85,21 @@ export async function localArtifactResolver(options: {
                 ? input.path
                 : resolve(options.baseDirectory, input.path),
               mediaType,
-              text: [".svg", ".md", ".txt"].includes(extension),
+              text: [
+                ".svg",
+                ".md",
+                ".txt",
+                ".html",
+                ".htm",
+                ".json",
+                ".csv",
+                ".log",
+                ".yaml",
+                ".yml",
+                ".js",
+                ".ts",
+                ".css",
+              ].includes(extension),
             },
             options.signal,
           ),
