@@ -3,12 +3,13 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomBytes } from "node:crypto";
+import { randomBytes, createHash } from "node:crypto";
 import {
   inspectCodexHistory,
   publishCodexRecording,
 } from "../packages/adapters/dist/index.js";
 import { startServer } from "../packages/server/dist/index.js";
+import { watchRecording } from "../packages/cli/dist/watch.js";
 const sourcePath = process.argv[2];
 if (!sourcePath)
   throw new Error("Usage: probe-codex-publish.mjs <native-session.jsonl>");
@@ -83,6 +84,34 @@ try {
   }
   if ((await fetch(`${server.url}/api/v1/streams/${streamId}`)).status !== 403)
     throw new Error("Recording was exposed anonymously");
+  let firstRender;
+  let renderedBytes = 0;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const hash = createHash("sha256");
+    let bytes = 0;
+    if (attempt) await server.close();
+    await watchRecording({
+      serverOrigin: server.url,
+      streamId,
+      credential: ownerCredential,
+      cacheRoot: join(root, "subscriber"),
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(120000)]),
+      write: async (text) => {
+        hash.update(text);
+        bytes += Buffer.byteLength(text);
+      },
+      onStatus: (status) => {
+        if (status === (attempt ? "connecting" : "live")) controller.abort();
+      },
+    });
+    const digest = hash.digest("hex");
+    if (!attempt) {
+      firstRender = digest;
+      renderedBytes = bytes;
+    } else if (digest !== firstRender || bytes !== renderedBytes)
+      throw new Error("Subscriber offline restart changed rendering");
+  }
   console.log(
     JSON.stringify({
       success: true,
@@ -91,6 +120,8 @@ try {
       restartDeduplicated: true,
       sourceModified: false,
       privateRecording: true,
+      subscriberOfflineReplay: true,
+      renderedBytes,
     }),
   );
 } finally {

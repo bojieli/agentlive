@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { watchRecording } from "./watch.js";
 import { replayRecording } from "./replay.js";
 import { parseArgs } from "node:util";
 import { homedir } from "node:os";
@@ -19,6 +20,7 @@ Commands:
   agentlive serve [--host 127.0.0.1] [--port 7331]
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive publish --agent codex --source <file> [--record-format structured|legacy]
+  agentlive watch --stream <recording-id> [--server <origin>] [--anonymous]
   agentlive replay --stream <recording-id> [--server <origin>] [--anonymous]
 
 Shared options:
@@ -76,7 +78,8 @@ async function main() {
     command !== "serve" &&
     command !== "import" &&
     command !== "replay" &&
-    command !== "publish"
+    command !== "publish" &&
+    command !== "watch"
   )
     throw new Error("Unknown command; use agentlive --help");
   const { values } = parseArgs({
@@ -113,7 +116,7 @@ async function main() {
     "owner-file",
     ...(command === "serve"
       ? ["host", "port"]
-      : command === "replay"
+      : command === "replay" || command === "watch"
         ? ["server", "stream", "anonymous"]
         : [
             ...(command === "publish" ? ["record-format"] : []),
@@ -170,16 +173,17 @@ async function main() {
     }
     return;
   }
-  if (command === "replay") {
+  if (command === "replay" || command === "watch") {
     if (!values.stream)
-      throw new Error("Replay requires --stream <recording-id>");
+      throw new Error("Replay and watch require --stream <recording-id>");
     const credential = values.anonymous
       ? undefined
       : process.env.AGENTLIVE_OWNER_SECRET
         ? validateSecret(process.env.AGENTLIVE_OWNER_SECRET)
         : await ownerCredential(ownerFile, false);
     if (credential) secrets.push(credential);
-    await replayRecording({
+    await (command === "watch" ? watchRecording : replayRecording)({
+      cacheRoot: join(stateDir, "subscriber"),
       serverOrigin: values.server ?? "http://127.0.0.1:7331",
       streamId: values.stream,
       ...(credential ? { credential } : {}),

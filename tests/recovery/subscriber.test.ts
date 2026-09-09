@@ -273,3 +273,186 @@ it("rejects a truncated history page without advancing the cursor", async () => 
   await expect(done).rejects.toMatchObject({ code: "invalid_request" });
   expect(client.cursor.serverSeq).toBe(0);
 });
+
+it("resumes a durable subscriber prefix after process restart without a separate cursor checkpoint", async () => {
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { root, session, publish, options } = await setup("private");
+  await publish(3);
+  const cacheOptions = {
+    serverOrigin: options.serverOrigin,
+    streamId: session.info.id,
+    initialize: async () => ({ revision: session.info.revision }),
+  };
+  let cache = await SubscriberCache.open(
+    join(root, "subscriber"),
+    cacheOptions,
+  );
+  async function catchUp() {
+    const active = run({
+      ...options,
+      cursor: cache.cursor,
+      credential: "b".repeat(64),
+      commit: (events, cursor) => cache.commit(events, cursor),
+    });
+    await expect
+      .poll(() => cache.cursor.serverSeq)
+      .toBe(session.boundary.sequence);
+    active.abort.abort();
+    await active.done;
+  }
+  await catchUp();
+  const baseline = cache.cursor.serverSeq;
+  await cache.close();
+  await publish(2);
+  cache = await SubscriberCache.open(join(root, "subscriber"), {
+    ...cacheOptions,
+    initialize: async () => {
+      throw new Error("Existing cache must reopen offline");
+    },
+  });
+  try {
+    expect(cache.cursor.serverSeq).toBe(baseline);
+    await catchUp();
+    const retained = [];
+    for await (const event of cache.events()) retained.push(event.serverSeq);
+    expect(retained).toEqual(
+      Array.from(
+        { length: session.boundary.sequence },
+        (_, index) => index + 1,
+      ),
+    );
+    await expect(
+      cache.commit([], { ...cache.cursor, revision: "other_revision" }),
+    ).rejects.toThrow("revision changed");
+    await expect(
+      cache.commit([], {
+        ...cache.cursor,
+        serverSeq: cache.cursor.serverSeq + 1,
+      }),
+    ).rejects.toThrow("receipt");
+    expect(cache.cursor.serverSeq).toBe(session.boundary.sequence);
+  } finally {
+    await cache.close();
+  }
+});
+
+it("recovers only complete cache records and refuses rebinding orphaned cached history", async () => {
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { readdir, appendFile, rm } = await import("node:fs/promises");
+  const { root, session, options } = await setup();
+  const cacheRoot = join(root, "subscriber");
+  const settings = {
+    serverOrigin: options.serverOrigin,
+    streamId: session.info.id,
+    initialize: async () => ({ revision: session.info.revision }),
+  };
+  let cache = await SubscriberCache.open(cacheRoot, settings);
+  const events = [];
+  for await (const event of session.history(0, session.boundary.sequence))
+    events.push(event);
+  await cache.commit(events, { ...cache.cursor, serverSeq: events.length });
+  await cache.close();
+  const directory = join(cacheRoot, (await readdir(cacheRoot))[0]!);
+  await appendFile(join(directory, "events.jsonl"), '{"partial":');
+  cache = await SubscriberCache.open(cacheRoot, settings);
+  expect(cache.cursor.serverSeq).toBe(events.length);
+  await cache.close();
+  await rm(join(directory, "recording.json"));
+  await expect(SubscriberCache.open(cacheRoot, settings)).rejects.toThrow(
+    "manifest is missing",
+  );
+});
+
+it("watch renders cached history before attempting an offline reconnect", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { root, server, session, options } = await setup("private");
+  let output = "";
+  const controller = new AbortController();
+  await watchRecording({
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    credential: "b".repeat(64),
+    cacheRoot: join(root, "viewer"),
+    signal: controller.signal,
+    write: async (text) => {
+      output += text;
+    },
+    onStatus: (status) => {
+      if (status === "live") controller.abort();
+    },
+  });
+  expect(output).toContain("Subscriber integration");
+  const baseline = output;
+  await server.close();
+  output = "";
+  const offline = new AbortController();
+  await watchRecording({
+    serverOrigin: options.serverOrigin,
+    streamId: session.info.id,
+    cacheRoot: join(root, "viewer"),
+    signal: offline.signal,
+    write: async (text) => {
+      output += text;
+    },
+    onStatus: (status) => {
+      if (status === "connecting") offline.abort();
+    },
+  });
+  expect(output).toBe(baseline);
+});
+
+it("retains committed events if terminal output fails and releases the cache for recovery", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { root, server, session } = await setup();
+  const cacheRoot = join(root, "failed-viewer");
+  await expect(
+    watchRecording({
+      serverOrigin: server.url,
+      streamId: session.info.id,
+      cacheRoot,
+      signal: AbortSignal.timeout(5000),
+      write: async () => {
+        throw new Error("Output disconnected");
+      },
+    }),
+  ).rejects.toThrow("commit failed");
+  const cache = await SubscriberCache.open(cacheRoot, {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    initialize: async () => {
+      throw new Error("Should already be durable");
+    },
+  });
+  try {
+    expect(cache.cursor.serverSeq).toBe(session.boundary.sequence);
+  } finally {
+    await cache.close();
+  }
+});
+
+it("enforces cache storage limits without advancing receipt", async () => {
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { root, server, session } = await setup();
+  const cache = await SubscriberCache.open(join(root, "tiny-cache"), {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    maxBytes: 1,
+    initialize: async () => ({ revision: session.info.revision }),
+  });
+  try {
+    const events = [];
+    for await (const event of session.history(0, session.boundary.sequence))
+      events.push(event);
+    await expect(
+      cache.commit(events, { ...cache.cursor, serverSeq: events.length }),
+    ).rejects.toThrow("storage limit");
+    expect(cache.cursor.serverSeq).toBe(0);
+  } finally {
+    await cache.close();
+  }
+});
