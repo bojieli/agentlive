@@ -367,3 +367,82 @@ it("imports local images, resolves message references, and preserves bytes and m
   await importCodexRecording(options);
   expect(session.boundary.sequence).toBe(before);
 });
+it("attaches from the first retained message and follows native appends across publisher restart", async () => {
+  const { followCodexHistory } =
+    await import("../../packages/adapters/src/index.js");
+  const { root, options } = await setup();
+  const binding = {
+    serverOrigin: options.serverOrigin,
+    agent: "codex" as const,
+    nativeSessionId: "native1",
+  };
+  const publisherRoot = join(root, "following");
+  let journal = await PublisherJournal.open(publisherRoot, binding);
+  await journal.bindRemote("follow_stream", "follow_revision");
+  const controller = new AbortController();
+  const appended = {
+    type: "event_msg",
+    timestamp: "2026-09-01T00:00:05.000Z",
+    payload: {
+      type: "item_completed",
+      item: {
+        type: "AgentMessage",
+        id: "follow_message",
+        content: [{ type: "Text", text: "Live suffix" }],
+      },
+    },
+  };
+  const running = followCodexHistory({
+    sourcePath: options.sourcePath,
+    journal,
+    signal: controller.signal,
+    pollMs: 1,
+    onCaughtUp: async () => {
+      await appendFile(options.sourcePath, JSON.stringify(appended) + "\n");
+    },
+  });
+  let baseline = 0;
+  try {
+    for (let attempts = 0; attempts < 200; attempts++) {
+      const events = [];
+      for await (const event of journal.pending(0)) events.push(event);
+      if (
+        events.some(
+          (event) =>
+            event.content.kind === "message.reconciled" &&
+            event.content.payload.text === "Live suffix",
+        )
+      ) {
+        baseline = journal.capturedThrough;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(baseline).toBeGreaterThan(0);
+  } finally {
+    controller.abort();
+    await running.catch((error) => {
+      if (error?.name !== "AbortError") throw error;
+    });
+    await journal.close();
+  }
+  journal = await PublisherJournal.open(publisherRoot, binding);
+  const resumed = new AbortController();
+  try {
+    await expect(
+      followCodexHistory({
+        sourcePath: options.sourcePath,
+        journal,
+        signal: resumed.signal,
+        pollMs: 1,
+        onCaughtUp: async () => {
+          expect(journal.capturedThrough).toBe(baseline);
+          resumed.abort();
+        },
+      }),
+    ).rejects.toThrow();
+    expect(journal.capturedThrough).toBe(baseline);
+  } finally {
+    await journal.close();
+  }
+});

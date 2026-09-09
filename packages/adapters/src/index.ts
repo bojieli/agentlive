@@ -23,3 +23,5 @@ export {
 } from "./import-codex.js";
 
 export { localArtifactResolver } from "./local-artifacts.js";
+export { followJsonlSource, type FollowJsonlOptions } from "./follow-jsonl.js";
+export { followCodexHistory } from "./follow-codex.js";

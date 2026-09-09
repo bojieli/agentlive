@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { readJsonlSource, type SourceCursor } from "./jsonl.js";
+import {
+  readJsonlSource,
+  type SourceCursor,
+  type SourceRecord,
+} from "./jsonl.js";
 import { CodexCapture } from "./codex.js";
 import type { RpcNotification } from "./stdio.js";
 const object = z.record(z.string(), z.unknown());
@@ -22,6 +26,7 @@ export interface CodexHistoryManifest {
 export async function inspectCodexHistory(
   path: string,
   signal?: AbortSignal,
+  tail: "parse" | "defer" = "parse",
 ): Promise<CodexHistoryManifest> {
   const nativeThreadIds = new Set<string>();
   let logicalSessionId: string | undefined;
@@ -32,7 +37,7 @@ export async function inspectCodexHistory(
     records = 0,
     structuredItems = 0;
   for await (const record of readJsonlSource(path, {
-    tail: "parse",
+    tail,
     ...(signal ? { signal } : {}),
   })) {
     const row = rowSchema.parse(record.value);
@@ -194,6 +199,26 @@ export async function captureCodexHistory(
     ...(signal ? { signal } : {}),
   }))
     void _;
+  const consumer = await createCodexHistoryConsumer(manifest, capture);
+  for await (const record of readJsonlSource(path, {
+    through: manifest.boundary.offset,
+    tail: "parse",
+    ...(signal ? { signal } : {}),
+  }))
+    await consumer.accept(record);
+  for await (const _ of readJsonlSource(path, {
+    after: manifest.boundary,
+    through: manifest.boundary.offset,
+    ...(signal ? { signal } : {}),
+  }))
+    void _;
+  return consumer.report;
+}
+
+export async function createCodexHistoryConsumer(
+  manifest: CodexHistoryManifest,
+  capture: CodexCapture,
+) {
   const report: CodexHistoryReport = {
     records: 0,
     items: 0,
@@ -209,13 +234,15 @@ export async function captureCodexHistory(
     { method: "session/begin", params: {} },
     manifest.createdAt,
   );
-  for await (const record of readJsonlSource(path, {
-    through: manifest.boundary.offset,
-    tail: "parse",
-    ...(signal ? { signal } : {}),
-  })) {
+  const accept = async (record: SourceRecord): Promise<void> => {
     const row = rowSchema.parse(record.value);
+    if (
+      row.type === "session_meta" &&
+      (row.payload.session_id ?? row.payload.id) !== manifest.nativeSessionId
+    )
+      throw new Error("Source native session identity changed");
     report.records++;
+    report.boundary = { ...record.cursor };
     const p = row.payload;
     let notification: RpcNotification | undefined;
     if (row.type === "session_meta")
@@ -386,13 +413,7 @@ export async function captureCodexHistory(
     if (notification)
       await capture.acceptHistorical(notification, row.timestamp);
     else report.omittedInternalRecords++;
-  }
-  for await (const _ of readJsonlSource(path, {
-    after: manifest.boundary,
-    through: manifest.boundary.offset,
-    ...(signal ? { signal } : {}),
-  }))
-    void _;
-  report.artifacts = { ...capture.artifactReport };
-  return report;
+    report.artifacts = { ...capture.artifactReport };
+  };
+  return { accept, report };
 }

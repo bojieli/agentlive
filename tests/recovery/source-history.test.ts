@@ -70,3 +70,68 @@ it("parses large UTF-8 records across read chunks and bounds record allocation",
     "exceeds limit",
   );
 });
+it("backfills before the live boundary, finishes partial records and resumes from durable consumer receipt", async () => {
+  const { followJsonlSource } =
+    await import("../../packages/adapters/src/index.js");
+  const path = await source('{"n":1}\n{"n":2}\n{"n":');
+  const controller = new AbortController();
+  const values: unknown[] = [];
+  let cursor:
+    import("../../packages/adapters/src/index.js").SourceCursor | undefined;
+  const running = followJsonlSource(path, {
+    signal: controller.signal,
+    pollMs: 1,
+    commit: async (record) => {
+      values.push(record.value);
+      cursor = record.cursor;
+      if (values.length === 1) await appendFile(path, "3}\n");
+      if (values.length === 3) controller.abort();
+    },
+    onCaughtUp: async (boundary) => {
+      expect(values).toEqual([{ n: 1 }, { n: 2 }]);
+      expect(boundary.cursor.offset).toBe(16);
+    },
+  });
+  await expect(running).rejects.toThrow();
+  expect(values).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }]);
+  await appendFile(path, '{"n":4}\n');
+  const resumed = new AbortController();
+  await expect(
+    followJsonlSource(path, {
+      signal: resumed.signal,
+      after: cursor!,
+      pollMs: 1,
+      commit: async (record) => {
+        values.push(record.value);
+        resumed.abort();
+      },
+    }),
+  ).rejects.toThrow();
+  expect(values).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }]);
+});
+it("leaves failed consumer commits replayable and rejects a rewritten acknowledged prefix", async () => {
+  const { followJsonlSource } =
+    await import("../../packages/adapters/src/index.js");
+  const path = await source('{"n":1}\n');
+  const first = (await read(path))[0]!;
+  await expect(
+    followJsonlSource(path, {
+      signal: AbortSignal.timeout(1000),
+      commit: async () => {
+        throw new Error("durable commit failed");
+      },
+    }),
+  ).rejects.toThrow("durable commit failed");
+  await writeFile(path, '{"n":2}\n{"n":3}\n');
+  let commits = 0;
+  await expect(
+    followJsonlSource(path, {
+      signal: AbortSignal.timeout(1000),
+      after: first.cursor,
+      commit: async () => {
+        commits++;
+      },
+    }),
+  ).rejects.toThrow("prefix changed");
+  expect(commits).toBe(0);
+});
