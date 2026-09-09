@@ -79,3 +79,8 @@ The read-only local corpus sweep exercised the new production activity cards, in
 | OpenCode retained exports | 12 / 12 | 129 | 30 | 0 | 1 |
 
 All 35 failures were `Claude source lacks session identity or timestamp`, matching the previously observed category. Counts describe the examined corpus at the time of the run; live histories may subsequently grow. Capture gaps and unavailable artifacts remain explicit fidelity limitations. Aggregate results are local ignored probe artifacts; raw source content and generated markup are not committed. These checks validate data reduction and card markup, not actual browser layout, virtual scrolling, focus, accessibility, or mobile lifecycle behavior.
+
+
+## Activity search on a native session
+
+On 2026-09-09, a fresh two-turn Kimi Code probe passed with 35 stored events, seven messages, and 19 activity cards. The shared verifier found an actual captured message using the production snapshot-search API, retaining only a success flag and aggregate counts/hash. Native resume, full-history backfill, live suffix capture, publisher restart deduplication, and browser-model playback restoration also passed. This verifies search data flow, not rendered browser search interaction or complete upstream capture fidelity.

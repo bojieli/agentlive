@@ -529,3 +529,31 @@ dialog.attachment-viewer::backdrop {
   outline: 2px solid #638972;
   outline-offset: -2px;
 }
+
+.activity-search form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 10px;
+}
+.activity-search label {
+  display: grid;
+  gap: 6px;
+  flex: 1;
+}
+.activity-search ul {
+  list-style: none;
+  padding: 0;
+  max-height: 280px;
+  overflow: auto;
+}
+.activity-search li button {
+  text-align: left;
+  width: 100%;
+  margin-bottom: 6px;
+}
+.activity-search li span {
+  display: block;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

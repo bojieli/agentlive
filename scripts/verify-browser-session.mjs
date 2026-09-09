@@ -7,6 +7,7 @@ const { IDBFactory, IDBKeyRange } = require("fake-indexeddb");
 const { createElement } = require("react");
 const { renderToStaticMarkup } = require("react-dom/server");
 import { createHash } from "node:crypto";
+import { searchActivity } from "../apps/web/dist/activity-search.js";
 import { ActivityCard, activityRows } from "../apps/web/dist/activity.js";
 import { BrowserSession } from "../apps/web/dist/session.js";
 import { openRecordingHistory } from "../packages/client/dist/index.js";
@@ -85,6 +86,34 @@ export async function verifyBrowserSession(
         throw new Error("Browser native replay differs from retained history");
     }
     const rows = activityRows(viewer.state, (key) => viewer.order(key));
+    const searchMessage = [...viewer.state.messages.values()].find(
+      (message) => message.visible !== false && message.text.length > 8,
+    );
+    let activitySearchVerified = false;
+    if (searchMessage) {
+      const query = searchMessage.text.slice(0, 32);
+      let start = 0;
+      while (true) {
+        const page = await searchActivity(
+          viewer.state,
+          rows,
+          query,
+          signal,
+          start,
+        );
+        if (
+          page.matches.some(
+            (match) => match.key === `messages/${searchMessage.id}`,
+          )
+        ) {
+          activitySearchVerified = true;
+          break;
+        }
+        if (page.nextIndex === null)
+          throw new Error("Native message missing from activity search");
+        start = page.nextIndex;
+      }
+    }
     const rendered = createHash("sha256");
     for (const row of rows)
       rendered.update(
@@ -98,6 +127,7 @@ export async function verifyBrowserSession(
       );
     const counts = {
       renderedActivityItems: rows.length,
+      activitySearchVerified,
       activityMarkupHash: rendered.digest("hex"),
       messages: viewer.state.messages.size,
       tools: viewer.state.tools.size,

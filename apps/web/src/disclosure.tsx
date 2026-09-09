@@ -51,3 +51,8 @@ export function Disclosure({
     />
   );
 }
+
+export function useRevealDisclosure() {
+  const expansion = useContext(Expansion);
+  return (choice: string) => expansion?.set(choice, true);
+}

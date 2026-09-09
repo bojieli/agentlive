@@ -362,6 +362,7 @@ function App() {
               key={session.streamId}
               state={state!}
               following={session.follow}
+              onPause={() => session.setPlaying(false)}
               order={(key) => session.order(key)}
               onAttachment={setAttachment}
             />

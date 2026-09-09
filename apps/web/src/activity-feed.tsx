@@ -10,11 +10,13 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { RecordingState } from "@agentlive/playback";
 import type { Attachment } from "./attachments.js";
 import { ActivityCard, activityRows } from "./activity.js";
+import { ActivitySearchPanel } from "./activity-search-panel.js";
 import { activityRange } from "./activity-range.js";
-import { ExpansionProvider } from "./disclosure.js";
+import { ExpansionProvider, useRevealDisclosure } from "./disclosure.js";
 export function ActivityFeed(props: {
   state: RecordingState;
   following: boolean;
+  onPause: () => void;
   order: (key: string) => number;
   onAttachment: (attachment: Attachment) => void;
 }) {
@@ -27,6 +29,7 @@ export function ActivityFeed(props: {
 function VirtualActivity({
   state,
   following,
+  onPause,
   order,
   onAttachment,
 }: Parameters<typeof ActivityFeed>[0]) {
@@ -34,6 +37,7 @@ function VirtualActivity({
     () => activityRows(state, order),
     [state, state.appliedSeq, order],
   );
+  const revealDisclosure = useRevealDisclosure();
   const parent = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState<string>();
   const [pending, setPending] = useState<string>();
@@ -104,6 +108,18 @@ function VirtualActivity({
   }, [focused, focusedIndex]);
   return (
     <section className="activity" aria-label="Session activity">
+      <ActivitySearchPanel
+        state={state}
+        rows={rows}
+        onSelect={(index) => {
+          const row = rows[index];
+          if (!row) return;
+          revealDisclosure(row.key);
+          revealDisclosure(`${row.key}/recorded-data`);
+          navigate(index);
+        }}
+        onPause={onPause}
+      />
       <div className="activity-navigation">
         <span className="muted">{rows.length} activity items</span>
         <button disabled={!rows.length} onClick={() => navigate(0)}>
