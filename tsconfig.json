@@ -12,6 +12,9 @@
     },
     {
       "path": "packages/publisher"
+    },
+    {
+      "path": "packages/server"
     }
   ]
 }

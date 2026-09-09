@@ -1,0 +1,17 @@
+{
+  "name": "@agentlive/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "dependencies": {
+    "@agentlive/protocol": "workspace:*",
+    "@agentlive/storage": "workspace:*",
+    "zod": "4.5.4"
+  }
+}

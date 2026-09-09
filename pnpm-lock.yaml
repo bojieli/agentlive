@@ -166,6 +166,18 @@ importers:
         specifier: workspace:*
         version: link:../storage
 
+  packages/server:
+    dependencies:
+      "@agentlive/protocol":
+        specifier: workspace:*
+        version: link:../protocol
+      "@agentlive/storage":
+        specifier: workspace:*
+        version: link:../storage
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4
+
   packages/storage:
     dependencies:
       "@agentlive/protocol":

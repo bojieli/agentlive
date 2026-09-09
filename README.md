@@ -38,6 +38,7 @@ No upstream binaries are patched. The probes start only their own local servers 
 - `packages/protocol`: versioned event validation, identifiers, errors, canonical JSON.
 - `packages/storage`: checksummed append-only logs, frozen-prefix reads, atomic JSON replacement, kernel-owned file locks.
 - `packages/publisher`: persistent native-session bindings, local capture journal, acknowledgments, recovery state, streaming known-secret redaction.
+- `packages/server`: serialized session core, idempotent creation, publisher fencing, and lifecycle/history boundaries (network service in progress).
 - `packages/playback`: deterministic reference reducer and independent playback clock.
 - `tests/recovery`: restart, corruption, interrupted-write, process-death, and ownership tests.
 
