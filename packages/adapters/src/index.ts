@@ -76,3 +76,4 @@ export {
   parseOpenCodeSnapshot,
   type OpenCodeSnapshot,
 } from "./opencode-history.js";
+export { OpenCodeCapture } from "./opencode-capture.js";

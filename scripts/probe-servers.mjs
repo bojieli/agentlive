@@ -1,6 +1,16 @@
 #!/usr/bin/env node
 /** Opt-in synthetic live-server probe. Raw events remain in ignored local output. */
-import { observeOpenCodeSession } from "../packages/adapters/dist/index.js";
+import {
+  OpenCodeCapture,
+  parseOpenCodeSnapshot,
+  observeOpenCodeSession,
+} from "../packages/adapters/dist/index.js";
+import {
+  PublisherJournal,
+  PublisherNetwork,
+} from "../packages/publisher/dist/index.js";
+import { startServer } from "../packages/server/dist/index.js";
+import { initialState, apply } from "../packages/playback/dist/index.js";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -91,6 +101,14 @@ const record = (event) => {
 };
 let readerTask;
 let observerTask;
+let publicationServer;
+let publisherJournal;
+let publisherTask;
+let snapshotCapture;
+let captureSecrets;
+const observerAbort = new AbortController();
+let publishedEvents = 0;
+let restartDeduplicated = false;
 let observerFailure;
 let observedSnapshots = 0;
 let observedComplete = false;
@@ -144,12 +162,42 @@ try {
   );
   sessionId = session.id;
   if (agent === "opencode") {
+    publicationServer = await startServer({
+      directory: join(workspace, "agentlive-server"),
+      ownerSecret: password,
+      port: 0,
+    });
+    publisherJournal = await PublisherJournal.open(
+      join(workspace, "publisher"),
+      {
+        serverOrigin: publicationServer.url,
+        agent: "opencode",
+        nativeSessionId: sessionId,
+      },
+    );
+    const publisher = new PublisherNetwork({
+      journal: publisherJournal,
+      ownerCredential: password,
+      title: "Synthetic OpenCode live capture",
+      visibility: "private",
+    });
+    await publisher.ensureRemote(abort.signal);
+    captureSecrets = [password, publisherJournal.identity.writeSecret];
+    snapshotCapture = await OpenCodeCapture.open(
+      publisherJournal,
+      captureSecrets,
+    );
+    publisherTask = publisher.run(abort.signal).catch((error) => {
+      observerFailure = error;
+      abort.abort(error);
+    });
     observerTask = observeOpenCodeSession({
       serverOrigin: base,
       nativeSessionId: sessionId,
       password,
-      signal: abort.signal,
+      signal: AbortSignal.any([abort.signal, observerAbort.signal]),
       commit: async (snapshot) => {
+        await snapshotCapture.accept(snapshot);
         observedSnapshots++;
         observedComplete = snapshot.messages.some(
           (message) =>
@@ -275,6 +323,46 @@ try {
       if (observerFailure) throw observerFailure;
       await delay(25);
     }
+    observerAbort.abort();
+    await observerTask;
+    await snapshotCapture.close();
+    const capturedBefore = publisherJournal.capturedThrough;
+    snapshotCapture = await OpenCodeCapture.open(
+      publisherJournal,
+      captureSecrets,
+    );
+    await snapshotCapture.accept(
+      parseOpenCodeSnapshot({
+        info: await request(`/session/${sessionId}`),
+        messages: await request(`/session/${sessionId}/message`),
+      }),
+    );
+    restartDeduplicated = capturedBefore === publisherJournal.capturedThrough;
+    if (!restartDeduplicated)
+      throw new Error("OpenCode capture restart duplicated events");
+    while (
+      publisherJournal.identity.acknowledgedSeq <
+      publisherJournal.capturedThrough
+    ) {
+      abort.signal.throwIfAborted();
+      await delay(25);
+    }
+    const recording = await publicationServer.store.get(
+      publisherJournal.identity.streamId,
+    );
+    let replay = initialState();
+    for await (const event of recording.history(0, recording.boundary.sequence))
+      replay = apply(replay, event);
+    if (
+      ![...replay.messages.values()].some(
+        (message) =>
+          message.role === "assistant" &&
+          message.completed &&
+          message.text.includes("AGENTLIVE_SERVER_OK"),
+      )
+    )
+      throw new Error("Published replay is missing native completion");
+    publishedEvents = recording.boundary.sequence;
     await delay(300);
   }
   const types = {};
@@ -286,7 +374,14 @@ try {
     finished,
     elapsedMs: Math.round(performance.now() - start),
     eventCount: events.length,
-    ...(agent === "opencode" ? { observedSnapshots, observedComplete } : {}),
+    ...(agent === "opencode"
+      ? {
+          observedSnapshots,
+          observedComplete,
+          publishedEvents,
+          restartDeduplicated,
+        }
+      : {}),
     types,
     markerObserved:
       agent === "kimi"
@@ -320,6 +415,10 @@ try {
   abort.abort();
   await readerTask?.catch(() => {});
   await observerTask;
+  await publisherTask;
+  await snapshotCapture?.close();
+  await publisherJournal?.close();
+  await publicationServer?.close();
   kill();
   await writeFile(
     join(output, "events.jsonl"),
