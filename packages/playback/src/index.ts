@@ -6,12 +6,14 @@ import {
 } from "@agentlive/protocol";
 
 export interface Message {
+  agentId?: string;
   id: string;
   role: "user" | "assistant" | "system";
   text: string;
   completed: boolean;
 }
 export interface Tool {
+  agentId?: string;
   id: string;
   name: string;
   input: string;
@@ -23,6 +25,10 @@ export interface RecordingState {
   timelineMs: number;
   title: string;
   lifecycle: "open" | "ended";
+  agents: Map<
+    string,
+    Extract<EventContent, { kind: "agent.updated" }>["payload"]
+  >;
   messages: Map<string, Message>;
   tools: Map<string, Tool>;
   changes: Map<string, { path: string; patch: string; applied: boolean }>;
@@ -42,6 +48,15 @@ export interface RecordingState {
     }
   >;
   references: Map<string, { artifactId: string; version: number }>;
+  replacements: Map<
+    string,
+    {
+      target: "message" | "tool.input" | "tool.output" | "change.patch";
+      targetId: string;
+      chunks: string[];
+      length: number;
+    }
+  >;
   gaps: Array<{ at: number; reason: string; recoveredState: boolean }>;
 }
 export function initialState(): RecordingState {
@@ -50,11 +65,13 @@ export function initialState(): RecordingState {
     timelineMs: 0,
     title: "",
     lifecycle: "open",
+    agents: new Map(),
     messages: new Map(),
     tools: new Map(),
     changes: new Map(),
     artifacts: new Map(),
     references: new Map(),
+    replacements: new Map(),
     gaps: [],
   };
 }
@@ -97,6 +114,11 @@ export function apply(
     case "recording.reopened":
       next.lifecycle = "open";
       break;
+    case "agent.updated":
+      next.agents = new Map(state.agents).set(content.payload.agentId, {
+        ...content.payload,
+      });
+      break;
     case "message.started": {
       const { messageId, role } = content.payload;
       if (state.messages.has(messageId))
@@ -104,6 +126,9 @@ export function apply(
       next.messages = new Map(state.messages).set(messageId, {
         id: messageId,
         role,
+        ...(content.payload.agentId
+          ? { agentId: content.payload.agentId }
+          : {}),
         text: "",
         completed: false,
       });
@@ -132,6 +157,77 @@ export function apply(
       });
       break;
     }
+    case "text.replacement.started": {
+      const { replacementId, target, targetId } = content.payload;
+      if (
+        state.replacements.has(replacementId) ||
+        state.replacements.size >= 16
+      )
+        throw new ProtocolError(
+          "event_conflict",
+          "Invalid or excessive text replacements",
+        );
+      if (target === "message") requireItem(state.messages, targetId);
+      else if (target === "change.patch") requireItem(state.changes, targetId);
+      else requireItem(state.tools, targetId);
+      next.replacements = new Map(state.replacements).set(replacementId, {
+        target,
+        targetId,
+        chunks: [],
+        length: 0,
+      });
+      break;
+    }
+    case "text.replacement.chunk": {
+      const { replacementId, index, text } = content.payload;
+      const current = requireItem(state.replacements, replacementId);
+      const total = [...state.replacements.values()].reduce(
+        (sum, item) => sum + item.length,
+        0,
+      );
+      if (
+        index !== current.chunks.length ||
+        total + text.length > 32 * 1024 * 1024
+      )
+        throw new ProtocolError(
+          "sequence_gap",
+          "Invalid text replacement chunk or capacity exceeded",
+        );
+      next.replacements = new Map(state.replacements).set(replacementId, {
+        ...current,
+        chunks: [...current.chunks, text],
+        length: current.length + text.length,
+      });
+      break;
+    }
+    case "text.replacement.completed": {
+      const { replacementId, parts } = content.payload;
+      const current = requireItem(state.replacements, replacementId);
+      if (parts !== current.chunks.length)
+        throw new ProtocolError(
+          "sequence_gap",
+          "Text replacement is incomplete",
+        );
+      const text = current.chunks.join("");
+      if (current.target === "message")
+        next.messages = new Map(state.messages).set(current.targetId, {
+          ...requireItem(state.messages, current.targetId),
+          text,
+        });
+      else if (current.target === "change.patch")
+        next.changes = new Map(state.changes).set(current.targetId, {
+          ...requireItem(state.changes, current.targetId),
+          patch: text,
+        });
+      else
+        next.tools = new Map(state.tools).set(current.targetId, {
+          ...requireItem(state.tools, current.targetId),
+          [current.target === "tool.input" ? "input" : "output"]: text,
+        });
+      next.replacements = new Map(state.replacements);
+      next.replacements.delete(replacementId);
+      break;
+    }
     case "tool.started": {
       const { toolId, name, input } = content.payload;
       if (state.tools.has(toolId))
@@ -139,6 +235,9 @@ export function apply(
       next.tools = new Map(state.tools).set(toolId, {
         id: toolId,
         name,
+        ...(content.payload.agentId
+          ? { agentId: content.payload.agentId }
+          : {}),
         input,
         output: "",
         status: "running",

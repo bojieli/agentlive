@@ -664,6 +664,26 @@ export class RecordingSession {
       return record;
     });
   }
+  /** One-way publication of an ended, initially private imported recording. */
+  shareEnded(visibility: "public" | "unlisted" | "private"): Promise<void> {
+    return this.serial(async () => {
+      if (this.state !== "ended")
+        throw new ProtocolError(
+          "precondition_failed",
+          "Finish the recording before sharing an import",
+        );
+      if (
+        this.metadata.visibility !== "private" &&
+        this.metadata.visibility !== visibility
+      )
+        throw new ProtocolError(
+          "precondition_failed",
+          "This operation cannot change an already shared recording",
+        );
+      if (this.metadata.visibility !== visibility)
+        await this.save({ ...this.metadata, visibility });
+    });
+  }
   async close(): Promise<void> {
     this.closing = true;
     await this.queue;

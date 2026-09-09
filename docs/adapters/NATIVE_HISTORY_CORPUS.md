@@ -23,3 +23,14 @@ These counts are structural inventory, not successful import/rendering assertion
 - Monitor, credit/authentication error, resumed-session, subagent, image, document, and artifact cases need actual conversion and viewer assertions. Their presence in an inventory is not test coverage.
 
 Run `npx --yes pnpm@12.3.4 build` then `node scripts/inventory-native-history.mjs` to refresh local structural reports. This is opt-in local work and is not part of model-free CI. It reads source files without rewriting them and stores per-file reports using hashed path identifiers. The report content excludes transcript text and credentials.
+
+
+## Codex conversion and private-import pass
+
+`node scripts/validate-codex-history.mjs` now converts the full discovered Codex corpus locally through the same normalizer used by live capture. The latest pass included 510 files (the active corpus grew after the initial inventory) and emitted 257,375 normalized events. It checks event schemas, per-event size, immutable source-effect retries, and message/tool lifecycle starts without publishing source data.
+
+The first pass failed on 89 files: 71 exceeded the normalized-event size threshold, five failed event shape/size validation, 12 contained related native threads under one logical session, and one needed legacy aborted-turn message handling. After bounded text replacements, logical-session identity handling, and legacy recovery were added, the latest pass had zero conversion failures.
+
+Remaining explicit unsupported/unavailable coverage: 1,348 image-view items, 1,361 extension items, three local-image user blocks, one skill user block, and 91 goal updates. Successful structural conversion does **not** mean those objects render fully or their artifact bytes are available. It also does not prove semantic equivalence of every original vendor view, large-state memory bounds, or the other three agents' converters. Those remain acceptance requirements.
+
+A separate real archived session passed `scripts/probe-history-import.mjs`: the source was read without changes, converted and stored through a local private server, replayed through the reference reducer, then imported again with the same identity and no additional events. Unauthenticated access was denied. The result retained 11 messages and 15 tool results across 71 stored events; an unavailable skill reference was reported. This is full storage/replay evidence for that session, separate from the corpus-wide structural pass.

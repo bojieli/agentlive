@@ -12,6 +12,8 @@
   "dependencies": {
     "@agentlive/protocol": "workspace:*",
     "@agentlive/publisher": "workspace:*",
-    "zod": "4.5.4"
+    "zod": "4.5.4",
+    "@agentlive/client": "workspace:*",
+    "@agentlive/storage": "workspace:*"
   }
 }

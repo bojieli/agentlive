@@ -12,6 +12,12 @@
     },
     {
       "path": "../publisher"
+    },
+    {
+      "path": "../client"
+    },
+    {
+      "path": "../storage"
     }
   ]
 }

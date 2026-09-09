@@ -36,3 +36,10 @@ The test suite exercises actual local HTTP/WebSocket listeners and temporary fil
 - Publisher-to-server-to-subscriber delivery and automatic recovery after server downtime while new events are captured.
 
 These synthetic integration tests complement the live-agent transport probes. They do not establish production adapter normalization or native-session recovery, which still need the full live-agent scenario matrix.
+
+
+## Large text replacement
+
+The native corpus contains source records larger than a publish batch. Normalizers split large appends and use `text.replacement.started`, ordered `text.replacement.chunk`, and `text.replacement.completed` for large final message text, tool input/output, and file patches. The replacement targets text fields only; it cannot introduce attachment references or server lifecycle operations. Each chunk has a durable event sequence and stable source-effect identity. The reducer preserves the previous value until every declared part is present, then switches to the reconstructed value. It rejects missing/out-of-order chunks and excessive pending replacement data. Subscriber checkpoints must include unfinished replacements alongside their receipt cursor.
+
+The current reference reducer bounds unfinished replacement text to 32 × 1024 × 1024 UTF-16 code units and 16 simultaneous replacements. It still holds completed message/tool state in memory; paged production state remains required. Chunking makes transport/storage records bounded and preserves content, but is not by itself a complete large-history viewer implementation.

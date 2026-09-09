@@ -18,7 +18,7 @@ export const idSchema = z
   .max(160)
   .regex(/^[a-zA-Z0-9_-]+$/);
 export const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
-const text = z.string().max(MAX_EVENT_BYTES);
+const text = z.string().max(32 * 1024 * 1024);
 const clock = z.number().finite().nonnegative();
 const agentSchema = z.enum([
   "claude",
@@ -46,6 +46,13 @@ export const contentSchema = z.discriminatedUnion("kind", [
     title: z.string().max(500),
   }),
   event("session.ended", { reason: text }),
+  event("agent.updated", {
+    agentId: idSchema,
+    nativeSessionId: idSchema,
+    parentAgentId: idSchema.optional(),
+    name: z.string().max(500).optional(),
+    status: z.enum(["active", "completed", "failed", "interrupted", "unknown"]),
+  }),
   event("turn.started", { turnId: idSchema }),
   event("turn.ended", {
     turnId: idSchema,
@@ -54,13 +61,29 @@ export const contentSchema = z.discriminatedUnion("kind", [
   event("message.started", {
     messageId: idSchema,
     role: z.enum(["user", "assistant", "system"]),
+    agentId: idSchema.optional(),
   }),
   event("message.text.append", { messageId: idSchema, text }),
   event("message.reconciled", { messageId: idSchema, text }),
   event("message.completed", { messageId: idSchema }),
+  event("text.replacement.started", {
+    replacementId: idSchema,
+    target: z.enum(["message", "tool.input", "tool.output", "change.patch"]),
+    targetId: idSchema,
+  }),
+  event("text.replacement.chunk", {
+    replacementId: idSchema,
+    index: cursorSchema,
+    text,
+  }),
+  event("text.replacement.completed", {
+    replacementId: idSchema,
+    parts: sequenceSchema,
+  }),
   event("tool.started", {
     toolId: idSchema,
     name: z.string().max(200),
+    agentId: idSchema.optional(),
     input: text,
   }),
   event("tool.arguments.append", { toolId: idSchema, text }),

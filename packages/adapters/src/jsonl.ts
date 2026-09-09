@@ -10,6 +10,7 @@ export interface SourceRecord {
 }
 export interface SourceReadOptions {
   after?: SourceCursor;
+  through?: number;
   /** Defer an incomplete live suffix, or parse a valid final line in a closed export. */
   tail?: "defer" | "parse";
   maxRecordBytes?: number;
@@ -31,6 +32,13 @@ export async function* readJsonlSource(
     const info = await file.stat();
     if (!info.isFile() || after > info.size)
       throw new Error("Source was truncated or is not a regular file");
+    const through = options.through ?? info.size;
+    if (
+      !Number.isSafeInteger(through) ||
+      through < after ||
+      through > info.size
+    )
+      throw new Error("Invalid frozen source boundary");
     const hash = createHash("sha256"),
       buffer = Buffer.alloc(64 * 1024);
     let position = 0;
@@ -61,12 +69,12 @@ export async function* readJsonlSource(
       recordEnd = after;
     const parse = (bytes: Buffer) =>
       JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    while (position < info.size) {
+    while (position < through) {
       options.signal?.throwIfAborted();
       const { bytesRead } = await file.read(
         buffer,
         0,
-        Math.min(buffer.length, info.size - position),
+        Math.min(buffer.length, through - position),
         position,
       );
       if (!bytesRead) throw new Error("Source truncated during snapshot read");
@@ -98,7 +106,7 @@ export async function* readJsonlSource(
     if (pending.length && options.tail === "parse")
       yield {
         value: parse(pending),
-        cursor: { offset: info.size, prefixHash: hash.copy().digest("hex") },
+        cursor: { offset: through, prefixHash: hash.copy().digest("hex") },
       };
   } finally {
     await file.close();

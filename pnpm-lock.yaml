@@ -147,12 +147,18 @@ importers:
 
   packages/adapters:
     dependencies:
+      "@agentlive/client":
+        specifier: workspace:*
+        version: link:../client
       "@agentlive/protocol":
         specifier: workspace:*
         version: link:../protocol
       "@agentlive/publisher":
         specifier: workspace:*
         version: link:../publisher
+      "@agentlive/storage":
+        specifier: workspace:*
+        version: link:../storage
       zod:
         specifier: 4.5.4
         version: 4.5.4

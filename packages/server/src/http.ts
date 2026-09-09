@@ -321,6 +321,19 @@ export async function startServer(options: ServerOptions) {
         ),
       );
     });
+  app.post("/api/v1/streams/:id/share", async (c) => {
+    if (!isOwner(token(c.req.header("authorization"))))
+      throw new ProtocolError(
+        "unauthorized",
+        "Sharing an import requires owner authorization",
+      );
+    const input = z
+      .strictObject({ visibility: z.enum(["public", "unlisted", "private"]) })
+      .parse(await boundedJson(c.req.raw));
+    const session = await store.get(c.req.param("id"));
+    await session.shareEnded(input.visibility);
+    return c.json({ visibility: session.info.visibility });
+  });
   app.post("/api/v1/streams/:id/watch-ticket", async (c) => {
     const session = await store.get(c.req.param("id"));
     readable(session, token(c.req.header("authorization")));

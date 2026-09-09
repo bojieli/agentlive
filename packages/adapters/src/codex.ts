@@ -3,6 +3,7 @@ import { performance } from "node:perf_hooks";
 import { z } from "zod";
 import { canonicalJson, type EventContent } from "@agentlive/protocol";
 import { PublisherJournal, StreamingRedactor } from "@agentlive/publisher";
+import { chunkContent } from "./chunks.js";
 import type { RpcNotification } from "./stdio.js";
 const id = (value: string) => createHash("sha256").update(value).digest("hex");
 const itemSchema = z.object({ id: z.string(), type: z.string() }).passthrough();
@@ -14,18 +15,31 @@ const status = (value: unknown): "completed" | "failed" | "interrupted" =>
       ? "interrupted"
       : "failed";
 /** Normalizes supported public app-server notifications into durable, source-keyed effects. */
+export type CodexCaptureSink = Pick<
+  PublisherJournal,
+  "identity" | "capture" | "capturedThrough"
+>;
 export class CodexCapture {
   private readonly segment = randomUUID();
   private readonly started = performance.now();
   private sequence = 0;
+  private historicalTime: string | undefined;
+  private historyElapsed = 0;
+  private sourceAgentId: string | undefined;
   private readonly filters = new Map<string, StreamingRedactor>();
   private readonly secrets: readonly string[];
   constructor(
-    private readonly journal: PublisherJournal,
+    private readonly journal: CodexCaptureSink,
     secrets: readonly string[] = [],
+    private readonly historyAnchor?: string,
   ) {
     if (journal.identity.nativeAgent !== "codex")
       throw new Error("Codex capture requires a Codex journal");
+    if (
+      historyAnchor !== undefined &&
+      !Number.isFinite(Date.parse(historyAnchor))
+    )
+      throw new Error("Invalid history time anchor");
     this.secrets = [...secrets];
     new StreamingRedactor(secrets);
   }
@@ -39,15 +53,53 @@ export class CodexCapture {
     fidelity: "delta" | "block" | "reconstructed" = "block",
   ) {
     if (!content.length) return;
-    await this.journal.capture({
-      sourceKey: key,
-      content,
-      observedAt: new Date().toISOString(),
-      clockSegmentId: this.segment,
-      elapsedMs: performance.now() - this.started,
-      fidelity,
-      adapterState: { version: 1, agent: "codex" },
-    });
+    const historical = this.historicalTime;
+    if (historical)
+      this.historyElapsed = Math.max(
+        this.historyElapsed,
+        Date.parse(historical) - Date.parse(this.historyAnchor!),
+      );
+    const capturePart = (sourceKey: string, part: EventContent[]) =>
+      this.journal.capture({
+        sourceKey,
+        content: part,
+        observedAt: historical ?? new Date().toISOString(),
+        clockSegmentId: historical
+          ? `history_${id(this.journal.identity.nativeSessionId)}`
+          : this.segment,
+        elapsedMs: historical
+          ? this.historyElapsed
+          : performance.now() - this.started,
+        fidelity: historical ? "reconstructed" : fidelity,
+        adapterState: { version: 1, agent: "codex" },
+      });
+    const expanded = content.flatMap(chunkContent);
+    if (
+      expanded.length === content.length &&
+      expanded.every((item, index) => item === content[index])
+    )
+      await capturePart(key, content);
+    else {
+      await capturePart(key, []);
+      for (let index = 0; index < expanded.length; index++)
+        await capturePart(`${key}/chunk/${index}`, [expanded[index]!]);
+    }
+  }
+  async acceptHistorical(
+    notification: RpcNotification,
+    observedAt: string,
+  ): Promise<void> {
+    if (!this.historyAnchor || !Number.isFinite(Date.parse(observedAt)))
+      throw new Error("Historical capture requires a valid time anchor");
+    if (this.historicalTime)
+      throw new Error("Historical capture must be serialized");
+    this.historicalTime = new Date(observedAt).toISOString();
+    try {
+      if (notification.method === "session/begin") await this.begin();
+      else await this.accept(notification);
+    } finally {
+      this.historicalTime = undefined;
+    }
   }
   async begin(): Promise<void> {
     await this.emit("codex/session", [
@@ -65,6 +117,49 @@ export class CodexCapture {
     const p = z.record(z.string(), z.unknown()).parse(notification.params);
     if (p.threadId !== this.journal.identity.nativeSessionId) return;
     const method = notification.method;
+    this.sourceAgentId =
+      typeof p.agentThreadId === "string" &&
+      p.agentThreadId !== this.journal.identity.nativeSessionId
+        ? id(p.agentThreadId)
+        : undefined;
+    if (method === "source/unsupported") {
+      await this.emit(
+        `unsupported/${id(string(p.sourceKey))}`,
+        [
+          {
+            kind: "capture.gap",
+            payload: {
+              reason: this.filter(
+                `Unsupported native source record: ${string(p.sourceType)}`,
+              ),
+              recoveredState: false,
+            },
+          },
+        ],
+        "reconstructed",
+      );
+      return;
+    }
+    if (method === "agent/metadata") {
+      const threadId = string(p.nativeThreadId);
+      await this.emit(`agent/${id(threadId)}/metadata`, [
+        {
+          kind: "agent.updated",
+          payload: {
+            agentId: id(threadId),
+            nativeSessionId: threadId,
+            status: "unknown",
+            ...(typeof p.parentThreadId === "string"
+              ? { parentAgentId: id(p.parentThreadId) }
+              : {}),
+            ...(typeof p.name === "string"
+              ? { name: this.filter(p.name).slice(0, 500) }
+              : {}),
+          },
+        },
+      ]);
+      return;
+    }
     if (method === "turn/started" || method === "turn/completed") {
       const turn = z
         .object({ id: z.string(), status: z.string() })
@@ -112,6 +207,7 @@ export class CodexCapture {
   }
   /** Recover only full, terminal turns. Active-turn recovery needs an explicit live handoff. */
   async recoverCompletedTurn(raw: unknown): Promise<void> {
+    this.sourceAgentId = undefined;
     const turn = z
       .object({
         id: z.string(),
@@ -169,7 +265,16 @@ export class CodexCapture {
       const role = item.type === "userMessage" ? "user" : "assistant";
       await this.emit(
         key + "/start",
-        [{ kind: "message.started", payload: { messageId: itemId, role } }],
+        [
+          {
+            kind: "message.started",
+            payload: {
+              messageId: itemId,
+              role,
+              ...(this.sourceAgentId ? { agentId: this.sourceAgentId } : {}),
+            },
+          },
+        ],
         fidelity,
       );
       if (completed) {
@@ -184,6 +289,39 @@ export class CodexCapture {
                 .filter((x) => x.type === "text")
                 .map((x) => x.text ?? "")
                 .join("\n");
+        if (item.type === "userMessage") {
+          const parts = z
+            .array(z.object({ type: z.string() }))
+            .parse(item.content);
+          for (let index = 0; index < parts.length; index++)
+            if (parts[index]!.type !== "text") {
+              const artifactId = id(`${item.id}/content/${index}`);
+              await this.emit(
+                `${key}/content/${index}/unavailable`,
+                [
+                  {
+                    kind: "attachment.pending",
+                    payload: {
+                      artifactId,
+                      filename: parts[index]!.type.includes("image")
+                        ? "image"
+                        : "attachment",
+                    },
+                  },
+                  {
+                    kind: "attachment.unavailable",
+                    payload: {
+                      artifactId,
+                      reason: this.filter(
+                        `Native ${parts[index]!.type} content requires artifact resolution`,
+                      ),
+                    },
+                  },
+                ],
+                fidelity,
+              );
+            }
+        }
         this.filters.delete(item.id);
         await this.emit(
           key + "/end",
@@ -216,6 +354,7 @@ export class CodexCapture {
             kind: "tool.started",
             payload: {
               toolId: itemId,
+              ...(this.sourceAgentId ? { agentId: this.sourceAgentId } : {}),
               name: this.filter(name),
               input: this.filter(input),
             },
@@ -249,6 +388,66 @@ export class CodexCapture {
           fidelity,
         );
       }
+    } else if (item.type === "subAgentActivity") {
+      const child = string(item.agentThreadId);
+      await this.emit(
+        key + "/agent",
+        [
+          {
+            kind: "agent.updated",
+            payload: {
+              agentId: id(child),
+              nativeSessionId: child,
+              parentAgentId: id(this.journal.identity.nativeSessionId),
+              name: this.filter(string(item.agentPath ?? "Subagent")).slice(
+                0,
+                500,
+              ),
+              status: "unknown",
+            },
+          },
+        ],
+        fidelity,
+      );
+    } else if (item.type === "collabAgentToolCall") {
+      await this.emit(
+        key + "/start",
+        [
+          {
+            kind: "tool.started",
+            payload: {
+              toolId: itemId,
+              name: `collaboration/${this.filter(string(item.tool))}`.slice(
+                0,
+                200,
+              ),
+              input: this.filter(
+                canonicalJson({
+                  senderThreadId: item.senderThreadId ?? null,
+                  receiverThreadIds: item.receiverThreadIds ?? [],
+                  prompt: item.prompt ?? null,
+                }),
+              ),
+            },
+          },
+        ],
+        fidelity,
+      );
+      if (completed)
+        await this.emit(
+          key + "/end",
+          [
+            {
+              kind: "tool.completed",
+              payload: {
+                toolId: itemId,
+                status: status(item.status),
+                output: this.filter(canonicalJson(item.agentsStates ?? {})),
+              },
+            },
+          ],
+          fidelity,
+        );
     } else if (item.type === "fileChange") {
       const changes = z
         .array(z.object({ path: z.string(), diff: z.string() }))

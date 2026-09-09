@@ -142,3 +142,67 @@ describe("protocol encoding", () => {
     ).toBe(false);
   });
 });
+it("keeps prior text visible until a complete ordered replacement commits", () => {
+  let state = apply(
+    initialState(),
+    record(1, {
+      kind: "message.started",
+      payload: { messageId: "m", role: "assistant" },
+    }),
+  );
+  state = apply(
+    state,
+    record(2, {
+      kind: "message.reconciled",
+      payload: { messageId: "m", text: "old" },
+    }),
+  );
+  state = apply(
+    state,
+    record(3, {
+      kind: "text.replacement.started",
+      payload: { replacementId: "r", target: "message", targetId: "m" },
+    }),
+  );
+  state = apply(
+    state,
+    record(4, {
+      kind: "text.replacement.chunk",
+      payload: { replacementId: "r", index: 0, text: "new " },
+    }),
+  );
+  expect(state.messages.get("m")!.text).toBe("old");
+  expect(() =>
+    apply(
+      state,
+      record(5, {
+        kind: "text.replacement.completed",
+        payload: { replacementId: "r", parts: 2 },
+      }),
+    ),
+  ).toThrow("incomplete");
+  expect(() =>
+    apply(
+      state,
+      record(5, {
+        kind: "text.replacement.chunk",
+        payload: { replacementId: "r", index: 2, text: "bad" },
+      }),
+    ),
+  ).toThrow("Invalid text replacement");
+  state = apply(
+    state,
+    record(5, {
+      kind: "text.replacement.chunk",
+      payload: { replacementId: "r", index: 1, text: "text" },
+    }),
+  );
+  state = apply(
+    state,
+    record(6, {
+      kind: "text.replacement.completed",
+      payload: { replacementId: "r", parts: 2 },
+    }),
+  );
+  expect(state.messages.get("m")!.text).toBe("new text");
+});

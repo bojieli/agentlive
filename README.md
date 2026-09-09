@@ -52,3 +52,13 @@ The real Codex capture-to-replay test also exercises a read-only tool and native
 npx --yes pnpm@12.3.4 build
 node scripts/probe-codex-pipeline.mjs
 ```
+
+
+Native Codex history import is available through the programmatic `importCodexRecording` API. Its isolated local validation script imports an explicitly selected source file into a private test server and checks replay and retry identity:
+
+```sh
+npx --yes pnpm@12.3.4 build
+node scripts/probe-history-import.mjs /path/to/codex-session.jsonl
+```
+
+This is not yet the packaged four-agent import command. See [native-history corpus coverage](docs/adapters/NATIVE_HISTORY_CORPUS.md) for tested behavior and unresolved object/artifact types.
