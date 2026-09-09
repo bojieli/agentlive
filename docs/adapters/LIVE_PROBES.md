@@ -158,3 +158,9 @@ On 2026-09-09, a live Kimi Code run passed after server snapshot publication swi
 Standalone package verification passed with the paged snapshot manifest, isolated installation, reproducible rebuild, publication/selection, history import/replay and clean shutdown. Browser/terminal automatic paged seeking remains unfinished; this establishes the production server and shared transport path.
 
 The final isolated full check passed 299 tests in 40 files. An earlier run concurrent with package/native disk work timed out the existing 60-second large snapshot-map test and encountered cleanup while its work was still running; the isolated rerun passed without changing test workload or deadline. Migration coverage includes legacy catalogs, suffix-only rebuild after restart, failed-build catalog preservation and explicit format/boundary rejection.
+
+## Reopened browser snapshot range cache
+
+On 2026-09-10, a live Kimi Code run passed with 35 stored events, seven messages and 19 activity items. The shared production snapshot client used BrowserSnapshotCache with fake IndexedDB, made 51 initial content requests, closed/reopened the cache and reconstructed the same state with zero additional content requests. Selection still contacted the server. Native resume, history backfill, live suffix capture, deduplication and the existing browser-model checks passed. Only aggregate results are retained.
+
+The full suite passed 304 tests in 41 files. A tightened revision-isolation test also passed with equal-length revision IDs and otherwise matching range identities. Standalone installation/reproducible rebuild and snapshot publication passed. This verifies optional range persistence through the shared client; actual browser/device behavior and automatic paged viewer reconstruction remain required.

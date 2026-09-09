@@ -8,3 +8,5 @@ export { openRecordingHistory } from "./history.js";
 
 export { listRecordings } from "./recordings.js";
 export { RecordingSnapshotClient, type OpenedSnapshot } from "./snapshots.js";
+
+export type { SnapshotReadCache } from "./snapshots.js";

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   ProtocolError,
+  canonicalJson,
   idSchema,
   cursorSchema,
   snapshotSelectionSchema,
@@ -12,6 +13,11 @@ import {
   type ContentReference,
 } from "@agentlive/playback";
 import { originOf, request } from "./http.js";
+/** Optional derivative range cache; keys include origin, recording revision and complete range identity. */
+export interface SnapshotReadCache {
+  read(key: string, signal: AbortSignal): Promise<string | undefined>;
+  write(key: string, text: string, signal: AbortSignal): Promise<void>;
+}
 export interface OpenedSnapshot {
   descriptor: SnapshotDescriptor;
   reader: Awaited<ReturnType<typeof openRecordingSnapshot>>;
@@ -25,12 +31,14 @@ export class RecordingSnapshotClient {
   private readonly fetcher: typeof fetch;
   private readonly stop = new AbortController();
   private pending = 0;
+  private cache: SnapshotReadCache | undefined;
   constructor(options: {
     serverOrigin: string;
     streamId: string;
     revision: string;
     credential?: string;
     fetch?: typeof fetch;
+    cache?: SnapshotReadCache;
   }) {
     this.streamId = idSchema.parse(options.streamId);
     this.revision = idSchema.parse(options.revision);
@@ -39,6 +47,7 @@ export class RecordingSnapshotClient {
       ? { authorization: `Bearer ${options.credential}` }
       : {};
     this.fetcher = options.fetch ?? fetch;
+    this.cache = options.cache;
   }
   private signal(signal: AbortSignal) {
     return AbortSignal.any([this.stop.signal, signal]);
@@ -154,6 +163,25 @@ export class RecordingSnapshotClient {
     Object.freeze(descriptor);
     return { descriptor, reader };
   }
+  private cacheOperation<T>(
+    parent: AbortSignal,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const signal = AbortSignal.any([parent, AbortSignal.timeout(10000)]);
+    signal.throwIfAborted();
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener("abort", abort, { once: true });
+      Promise.resolve()
+        .then(() => {
+          signal.throwIfAborted();
+          return operation(signal);
+        })
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener("abort", abort));
+      if (signal.aborted) abort();
+    });
+  }
   private async read(
     ref: ContentReference,
     offset: number,
@@ -171,6 +199,27 @@ export class RecordingSnapshotClient {
       length > ref.units - offset
     )
       throw new RangeError("Invalid snapshot content range");
+    signal.throwIfAborted();
+    const cacheKey = canonicalJson({
+      base: this.base,
+      revision: this.revision,
+      ref,
+      offset,
+      length,
+    });
+    if (this.cache) {
+      try {
+        const cache = this.cache;
+        const text = await this.cacheOperation(signal, (cacheSignal) =>
+          cache.read(cacheKey, cacheSignal),
+        );
+        signal.throwIfAborted();
+        if (typeof text === "string" && text.length === length) return text;
+      } catch {
+        signal.throwIfAborted();
+        this.cache = undefined;
+      }
+    }
     const query = new URLSearchParams({
       revision: this.revision,
       byteSize: String(ref.byteSize),
@@ -190,6 +239,18 @@ export class RecordingSnapshotClient {
         "corrupt_storage",
         "Snapshot content response has invalid shape or length",
       );
+    if (this.cache) {
+      try {
+        const cache = this.cache;
+        await this.cacheOperation(signal, (cacheSignal) =>
+          cache.write(cacheKey, result.data.text, cacheSignal),
+        );
+      } catch {
+        signal.throwIfAborted();
+        this.cache = undefined;
+      }
+    }
+    signal.throwIfAborted();
     return result.data.text;
   }
   async select(

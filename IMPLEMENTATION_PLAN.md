@@ -1254,3 +1254,10 @@ Server snapshot publication now reduces JSONL history through PagedReducer and p
 The shared snapshot client uses `openRecordingSnapshot` to dispatch validated descriptors. Missing format means the original codec, preserving existing catalog reads and exact-boundary retries. Paged readers expose lazy object lookup/ranges and text reads with a detached state-root accessor. Reject descriptor/manifest boundary or format mismatches without speculative fallback. Failed builds leave the last published catalog intact.
 
 Validate suffix-only reconstruction after reopen, legacy catalog compatibility, incomplete suffix rejection, immutable reader roots, format/boundary mismatches, authorized HTTP Unicode range reads, packaged snapshot generation, and actual native-agent publication/reconstruction. Browser/terminal automatic snapshot seeking, browser content storage, batching, collection and performance acceptance remain required.
+
+
+### Bounded browser snapshot range persistence
+
+Add optional SnapshotReadCache support to the shared HTTP snapshot client and an IndexedDB BrowserSnapshotCache. Scope keys to normalized server/recording, revision, complete content reference and range. Verify a key/text checksum on local reads, preserve exact UTF-16 ranges, cap retention at 256 ranges of at most 65,536 units, and evict oldest writes atomically with insertion. Selection/publication still authorizes against the server.
+
+Keep crypto outside transactions; bound admission, database work and even uncooperative cache implementations. Treat invalid derivative data as a miss and cache failures as network fallback, while preserving caller cancellation. Clear ranges with saved browser history. Verify persistence, corruption, eviction, clearing, revision isolation, cancellation and live native snapshot recovery after reopening IndexedDB. This supplies the read cache; production BrowserSession paged working state, automatic seeking and complete offline retention remain required.

@@ -91,3 +91,8 @@ This client does not yet replace browser or terminal replay reconstruction with 
 The shared client returns a reader whose `manifest` supplies the verified recording boundary and whose `materialize` helper supports bounded equivalence checks. For paged descriptors, narrow the reader using its `format` property before calling `get("messages", messageId)` or `entries("messages", offset, limit)`. Message text and tool input/output are content references; pass a reference to `text(ref, offset, length)` to load a bounded range. The paged reader's `state` accessor returns a detached root copy for subsequent local reduction; mutating it does not change the reader.
 
 Old catalog entries remain selectable and readable. Building a new boundary after a legacy checkpoint replays authoritative history into paged state; it does not materialize and convert the legacy snapshot. Retrying an existing legacy boundary returns that same descriptor.
+
+
+### Optional range persistence
+
+Pass `cache: SnapshotReadCache` when constructing the client to reuse exact verified ranges. The browser implementation is described in [BROWSER_SNAPSHOT_CACHE.md](BROWSER_SNAPSHOT_CACHE.md). Selection/publication remains a network operation. Cache keys include recording revision and full range identity; caller cancellation and client close prevent cached reads too. Cache failures disable the cache for that client and fall back to the network. The client does not own the supplied cache; its creator must close it.

@@ -1,3 +1,4 @@
+import { BrowserSnapshotCache } from "./snapshot-cache.js";
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { listRecordings } from "@agentlive/client";
@@ -110,6 +111,10 @@ function App() {
     setCacheNotice("");
     try {
       await clearSavedHistories(cachePlatform, AbortSignal.timeout(10000));
+      await BrowserSnapshotCache.clear(
+        cachePlatform.indexedDB,
+        AbortSignal.timeout(10000),
+      );
       setCacheNotice("Saved histories cleared from this device.");
     } catch {
       setError(

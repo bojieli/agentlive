@@ -162,3 +162,82 @@ it("bounds concurrent requests and cancels all accepted work on close", async ()
     true,
   );
 });
+
+it("scopes cached ranges to recording revisions and still authorizes each selection", async () => {
+  const { initialPagedState } =
+    await import("../../packages/playback/src/index.js");
+  const rows = new Map<string, string>();
+  let selections = 0,
+    reads = 0;
+  const cache = {
+    read: async (key: string) => rows.get(key),
+    write: async (key: string, text: string) => {
+      rows.set(key, text);
+    },
+  };
+  for (const revision of ["revision", "revision", "changedx"]) {
+    const text = JSON.stringify({
+      format: "agentlive.paged-state",
+      version: 1,
+      reducerVersion: 1,
+      streamId: options.streamId,
+      revision,
+      state: initialPagedState(),
+    });
+    const ref = { hash: "a".repeat(64), byteSize: 12, units: text.length };
+    const client = new RecordingSnapshotClient({
+      ...options,
+      revision,
+      cache,
+      fetch: async (url) => {
+        if (new URL(String(url)).pathname.includes("snapshot-content")) {
+          reads++;
+          return Response.json({ text });
+        }
+        selections++;
+        return Response.json({
+          streamId: options.streamId,
+          revision,
+          snapshot: {
+            format: "agentlive.paged-state",
+            serverSeq: 0,
+            timelineMs: 0,
+            ref,
+          },
+        });
+      },
+    });
+    try {
+      expect(
+        (await client.select(0, AbortSignal.timeout(2000)))!.reader.manifest
+          .serverSeq,
+      ).toBe(0);
+    } finally {
+      client.close();
+    }
+  }
+  expect(selections).toBe(3);
+  expect(reads).toBe(2);
+  expect(rows.size).toBe(2);
+});
+it("cancels a stalled cache lookup without waiting for its implementation", async () => {
+  let started!: () => void;
+  const waiting = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  const client = new RecordingSnapshotClient({
+    ...options,
+    cache: {
+      read: async () => {
+        started();
+        return new Promise(() => {});
+      },
+      write: async () => {},
+    },
+    fetch: async () => Response.json(envelope),
+  });
+  const task = client.select(1, AbortSignal.timeout(2000));
+  await waiting;
+  client.close();
+  await expect(task).rejects.toThrow("closed");
+});
