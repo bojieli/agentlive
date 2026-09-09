@@ -198,3 +198,6 @@ Historical OpenCode imports use converter version `opencode-export-2` for the sa
 
 
 For multi-session hosting, `serve --max-cached-sessions 128` sets the resident session cache capacity. Active requests and live connections retain their sessions; idle sessions can be evicted and reopened from JSONL. If every cached session is in use, new session loads receive a retryable capacity response. This limits resident session count, not total memory or retained disk usage. Programmatic `RecordingStore.get/create` calls acquire ownership and must be paired with `store.release(session)` when finished.
+
+
+Server shutdown stops admission and drains accepted work. Configure its waiting deadline with `agentlive serve --shutdown-timeout-ms 30000` (default: 30 seconds; positive integer up to 2147483647). If the deadline expires, the CLI reports an error and cleanup continues while retaining the store lock. The library’s `close()` rejects with `ShutdownTimeoutError` (`code: "shutdown_timeout"`); use `whenClosed()` to await actual completion afterward. A timeout does not prove a pending write was canceled. Use a process supervisor for a hard termination deadline, including blocked event loops. On restart, publishers reconcile durable acknowledgements and retry unacknowledged events through the existing deduplication protocol.

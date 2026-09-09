@@ -4,7 +4,7 @@ import { replayRecording } from "./replay.js";
 import { parseArgs } from "node:util";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { startServer } from "@agentlive/server";
+import { startServer, ShutdownTimeoutError } from "@agentlive/server";
 import {
   publishCodexRecording,
   publishClaudeRecording,
@@ -20,7 +20,7 @@ import { ownerCredential, validateSecret } from "./credentials.js";
 const help = `AgentLive — record and share coding-agent sessions
 
 Commands:
-  agentlive serve [--host 127.0.0.1] [--port 7331] [--max-cached-sessions 128]
+  agentlive serve [--host 127.0.0.1] [--port 7331] [--max-cached-sessions 128] [--shutdown-timeout-ms 30000]
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
   agentlive publish --agent opencode --native-server <origin> --native-session <id>
@@ -105,6 +105,7 @@ async function main() {
       host: { type: "string" },
       port: { type: "string" },
       "max-cached-sessions": { type: "string" },
+      "shutdown-timeout-ms": { type: "string" },
       agent: { type: "string" },
       source: { type: "string" },
       server: { type: "string" },
@@ -128,7 +129,7 @@ async function main() {
     "state-dir",
     "owner-file",
     ...(command === "serve"
-      ? ["host", "port", "max-cached-sessions"]
+      ? ["host", "port", "max-cached-sessions", "shutdown-timeout-ms"]
       : command === "replay" || command === "watch"
         ? [
             "server",
@@ -165,6 +166,15 @@ async function main() {
     const maxCachedSessions = Number(values["max-cached-sessions"] ?? 128);
     if (!Number.isSafeInteger(maxCachedSessions) || maxCachedSessions < 1)
       throw new Error("--max-cached-sessions must be a positive integer");
+    const shutdownTimeoutMs = Number(values["shutdown-timeout-ms"] ?? 30_000);
+    if (
+      !Number.isSafeInteger(shutdownTimeoutMs) ||
+      shutdownTimeoutMs < 1 ||
+      shutdownTimeoutMs > 2_147_483_647
+    )
+      throw new Error(
+        "--shutdown-timeout-ms must be an integer from 1 to 2147483647",
+      );
     const port = Number(values.port ?? 7331);
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535)
       throw new Error("Port must be an integer from 0 to 65535");
@@ -177,6 +187,7 @@ async function main() {
       ownerSecret: secret,
       host: values.host ?? "127.0.0.1",
       maxCachedSessions,
+      shutdownTimeoutMs,
       port,
     });
     try {
@@ -415,7 +426,8 @@ try {
   await main();
   process.exitCode = interrupted;
 } catch (error) {
-  if (interrupted) process.exitCode = interrupted;
+  if (interrupted && !(error instanceof ShutdownTimeoutError))
+    process.exitCode = interrupted;
   else {
     try {
       const filter = new StreamingRedactor(secrets);

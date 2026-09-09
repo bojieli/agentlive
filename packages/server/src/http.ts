@@ -34,6 +34,16 @@ export interface ServerOptions {
   maxConnections?: number;
   maxCachedSessions?: number;
   maxSocketBytes?: number;
+  shutdownTimeoutMs?: number;
+}
+export class ShutdownTimeoutError extends Error {
+  readonly code = "shutdown_timeout";
+  constructor(readonly timeoutMs: number) {
+    super(
+      `Server shutdown exceeded ${timeoutMs}ms; cleanup continues with store ownership retained`,
+    );
+    this.name = "ShutdownTimeoutError";
+  }
 }
 const digest = (value: string) => createHash("sha256").update(value).digest();
 const token = (header: string | undefined) =>
@@ -114,6 +124,15 @@ const integer = (value: string | undefined, fallback?: number): number => {
 export async function startServer(options: ServerOptions) {
   if (!/^[a-f0-9]{64}$/.test(options.ownerSecret))
     throw new Error("Owner secret must be 32 random bytes encoded as hex");
+  const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 30_000;
+  if (
+    !Number.isSafeInteger(shutdownTimeoutMs) ||
+    shutdownTimeoutMs < 1 ||
+    shutdownTimeoutMs > 2_147_483_647
+  )
+    throw new Error(
+      "shutdownTimeoutMs must be an integer from 1 to 2147483647",
+    );
   const store = await RecordingStore.open(
     options.directory,
     options.maxCachedSessions === undefined
@@ -697,40 +716,65 @@ export async function startServer(options: ServerOptions) {
   const url = `http://${address.family === "IPv6" ? `[${address.address}]` : address.address}:${address.port}`;
   if (!origin) origin = url;
   let closePromise: Promise<void> | undefined;
+  let cleanupPromise: Promise<void> | undefined;
+  function close() {
+    if (closePromise) return closePromise;
+    closing = true;
+    cleanupPromise = (async () => {
+      for (const client of wss.clients) client.terminate();
+      const stopped = new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+      if ("closeAllConnections" in server) server.closeAllConnections();
+      const errors: unknown[] = [];
+      try {
+        await stopped;
+      } catch (error) {
+        errors.push(error);
+      }
+      while (requests.size) await Promise.all([...requests]);
+      // An upgrade accepted before admission stopped may have completed during HTTP draining.
+      for (const client of wss.clients) client.terminate();
+      while (connections.size)
+        await Promise.allSettled([...connections].map((drain) => drain()));
+      errors.push(...connectionErrors);
+      try {
+        await store.close();
+      } catch (error) {
+        errors.push(error);
+      }
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      if (errors.length)
+        throw new AggregateError(errors, "Server shutdown failed");
+    })();
+    closePromise = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new ShutdownTimeoutError(shutdownTimeoutMs)),
+        shutdownTimeoutMs,
+      );
+      // Keep the deadline alive even when the stalled work owns no event-loop handles.
+      // Both handlers remain attached after timeout, observing late cleanup failures.
+      cleanupPromise!.then(
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    });
+    return closePromise;
+  }
   return {
     url,
     store,
-    close() {
-      if (closePromise) return closePromise;
-      closing = true;
-      closePromise = (async () => {
-        for (const client of wss.clients) client.terminate();
-        const stopped = new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve())),
-        );
-        if ("closeAllConnections" in server) server.closeAllConnections();
-        const errors: unknown[] = [];
-        try {
-          await stopped;
-        } catch (error) {
-          errors.push(error);
-        }
-        while (requests.size) await Promise.all([...requests]);
-        // An upgrade accepted before admission stopped may have completed during HTTP draining.
-        for (const client of wss.clients) client.terminate();
-        while (connections.size)
-          await Promise.allSettled([...connections].map((drain) => drain()));
-        errors.push(...connectionErrors);
-        try {
-          await store.close();
-        } catch (error) {
-          errors.push(error);
-        }
-        await new Promise<void>((resolve) => wss.close(() => resolve()));
-        if (errors.length)
-          throw new AggregateError(errors, "Server shutdown failed");
-      })();
-      return closePromise;
+    close,
+    /** Starts shutdown if necessary; waits without a deadline for actual cleanup. */
+    whenClosed() {
+      void close().catch(() => {});
+      return cleanupPromise!;
     },
   };
 }

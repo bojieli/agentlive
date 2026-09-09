@@ -21,7 +21,11 @@ afterEach(async () => {
   for (const root of roots.splice(0))
     await rm(root, { recursive: true, force: true });
 });
-async function setup(visibility = "public", maxCachedSessions = 128) {
+async function setup(
+  visibility = "public",
+  maxCachedSessions = 128,
+  shutdownTimeoutMs = 30_000,
+) {
   const directory = await mkdtemp(join(tmpdir(), "agentlive-http-test-"));
   roots.push(directory);
   const server = await startServer({
@@ -29,6 +33,7 @@ async function setup(visibility = "public", maxCachedSessions = 128) {
     ownerSecret,
     port: 0,
     maxCachedSessions,
+    shutdownTimeoutMs,
   });
   servers.push(server);
   const input = {
@@ -493,52 +498,66 @@ it("keeps a subscribed session resident until explicit unsubscribe", async () =>
   expect(server.store.cacheSize).toBe(1);
 });
 
-it("drains queued publisher work before closing sessions or releasing the store lock", async () => {
-  const { RecordingStore } = await import("../../packages/server/src/index.js");
-  const { server, streamId, revision } = await setup();
-  const session = await server.store.get(streamId);
-  const directory = server.store.directory;
-  const original = session.append.bind(session);
-  let unblock!: () => void;
-  let entered = false;
-  const gate = new Promise<void>((resolve) => {
-    unblock = resolve;
-  });
-  vi.spyOn(session, "append").mockImplementation(async (...args) => {
-    entered = true;
-    await gate;
-    return original(...args);
-  });
-  const pub = await publisher(server, streamId, revision, 1);
-  pub.send({
-    type: "batch",
-    protocolVersion: 1,
-    requestId: "during-close",
-    events: [event(streamId, 1)],
-  });
-  await expect.poll(() => entered).toBe(true);
-  let finished = false;
-  const closing = server.close().then(() => {
-    finished = true;
-  });
-  try {
-    await expect(RecordingStore.open(directory)).rejects.toMatchObject({
-      code: "publisher_busy",
+it.each([30_000, 30])(
+  "drains queued publisher work before releasing ownership (deadline=%s)",
+  async (shutdownTimeoutMs) => {
+    const { RecordingStore } =
+      await import("../../packages/server/src/index.js");
+    const { server, streamId, revision } = await setup(
+      "public",
+      128,
+      shutdownTimeoutMs,
+    );
+    if (shutdownTimeoutMs === 30) servers.splice(servers.indexOf(server), 1);
+    const session = await server.store.get(streamId);
+    const directory = server.store.directory;
+    const original = session.append.bind(session);
+    let unblock!: () => void;
+    let entered = false;
+    const gate = new Promise<void>((resolve) => {
+      unblock = resolve;
     });
-    expect(finished).toBe(false);
-  } finally {
-    unblock();
-    await closing;
-  }
-  const reopened = await RecordingStore.open(directory);
-  try {
-    const retained = await reopened.get(streamId);
-    expect(retained.boundary.sequence).toBe(2);
-    reopened.release(retained);
-  } finally {
-    await reopened.close();
-  }
-});
+    vi.spyOn(session, "append").mockImplementation(async (...args) => {
+      entered = true;
+      await gate;
+      return original(...args);
+    });
+    const pub = await publisher(server, streamId, revision, 1);
+    pub.send({
+      type: "batch",
+      protocolVersion: 1,
+      requestId: "during-close",
+      events: [event(streamId, 1)],
+    });
+    await expect.poll(() => entered).toBe(true);
+    let finished = false;
+    const closing = server.close().then(() => {
+      finished = true;
+    });
+    try {
+      if (shutdownTimeoutMs === 30)
+        await expect(closing).rejects.toMatchObject({
+          code: "shutdown_timeout",
+        });
+      await expect(RecordingStore.open(directory)).rejects.toMatchObject({
+        code: "publisher_busy",
+      });
+      expect(finished).toBe(false);
+    } finally {
+      unblock();
+      await server.whenClosed();
+      if (shutdownTimeoutMs !== 30) await closing;
+    }
+    const reopened = await RecordingStore.open(directory);
+    try {
+      const retained = await reopened.get(streamId);
+      expect(retained.boundary.sequence).toBe(2);
+      reopened.release(retained);
+    } finally {
+      await reopened.close();
+    }
+  },
+);
 
 it("waits for an in-flight HTTP handler after its connection is closed", async () => {
   const { RecordingStore } = await import("../../packages/server/src/index.js");
@@ -581,3 +600,68 @@ it("waits for an in-flight HTTP handler after its connection is closed", async (
   }
   expect(completed).toBe(true);
 });
+
+it.each([false, true])(
+  "bounds shutdown waiting while retaining ownership and observing late cleanup (failure=%s)",
+  async (fail) => {
+    const { RecordingStore } =
+      await import("../../packages/server/src/index.js");
+    const { server, streamId } = await setup("public", 128, 30);
+    servers.splice(servers.indexOf(server), 1);
+    const session = await server.store.get(streamId);
+    const original = session.close.bind(session);
+    let unblock!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    const spy = vi.spyOn(session, "close").mockImplementation(async () => {
+      await gate;
+      await original();
+      if (fail) throw new Error("late cleanup failure");
+    });
+    const closing = server.close();
+    expect(server.close()).toBe(closing);
+    const started = performance.now();
+    try {
+      await expect(closing).rejects.toMatchObject({
+        code: "shutdown_timeout",
+        timeoutMs: 30,
+      });
+      expect(performance.now() - started).toBeLessThan(2000);
+      await expect(
+        RecordingStore.open(server.store.directory),
+      ).rejects.toMatchObject({ code: "publisher_busy" });
+      expect(server.close()).toBe(closing);
+    } finally {
+      const drained = server.whenClosed();
+      unblock();
+      if (fail) await expect(drained).rejects.toThrow("Server shutdown failed");
+      else await drained;
+    }
+    expect(spy).toHaveBeenCalledTimes(1);
+    const reopened = await RecordingStore.open(server.store.directory);
+    await reopened.close();
+  },
+);
+
+it("finishes before the shutdown deadline and exposes the actual completion", async () => {
+  const { server } = await setup("public", 128, 5000);
+  await server.close();
+  await server.whenClosed();
+  expect(server.close()).toBe(server.close());
+});
+
+it.each([0, -1, 0.5, NaN, Infinity, 2147483648])(
+  "rejects invalid shutdown deadlines before acquiring the store (%s)",
+  async (shutdownTimeoutMs) => {
+    const directory = await mkdtemp(join(tmpdir(), "agentlive-deadline-test-"));
+    roots.push(directory);
+    await expect(
+      startServer({ directory, ownerSecret, port: 0, shutdownTimeoutMs }),
+    ).rejects.toThrow("shutdownTimeoutMs");
+    const { RecordingStore } =
+      await import("../../packages/server/src/index.js");
+    const store = await RecordingStore.open(directory);
+    await store.close();
+  },
+);

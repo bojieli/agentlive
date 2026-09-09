@@ -7,5 +7,5 @@ export type {
 } from "./session.js";
 export { RecordingStore, createSessionSchema } from "./store.js";
 export type { CreateSession } from "./store.js";
-export { startServer } from "./http.js";
+export { startServer, ShutdownTimeoutError } from "./http.js";
 export type { ServerOptions } from "./http.js";
