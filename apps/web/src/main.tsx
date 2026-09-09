@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { listRecordings } from "@agentlive/client";
 import { ForegroundClock, bindPageLifecycle } from "./lifecycle.js";
 import { BrowserSession } from "./session.js";
+import { AttachmentViewer } from "./attachment-viewer.js";
+import type { Attachment } from "./attachments.js";
 import "./style.css";
 const seconds = (time: number) => `${(time / 1000).toFixed(1)}s`;
 function App() {
@@ -11,6 +13,7 @@ function App() {
   );
   const [key, setKey] = useState("");
   const [session, setSession] = useState<BrowserSession>();
+  const [attachment, setAttachment] = useState<Attachment>();
   const [, refresh] = useState(0);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -45,6 +48,7 @@ function App() {
     request.current?.abort();
     session?.close();
     setSession(undefined);
+    setAttachment(undefined);
     setPlaying(false);
     const abort = new AbortController();
     request.current = abort;
@@ -86,6 +90,15 @@ function App() {
     }
   }
   const state = session?.state;
+  const available =
+    attachment &&
+    state?.artifacts.get(attachment.artifactId)?.visible !== false &&
+    state?.artifacts
+      .get(attachment.artifactId)
+      ?.versions.get(attachment.version)?.hash === attachment.hash;
+  useEffect(() => {
+    if (attachment && !available) setAttachment(undefined);
+  }, [attachment, available]);
   return (
     <div className="shell">
       <header>
@@ -258,6 +271,15 @@ function App() {
                 {session.error}
               </div>
             )}
+            {attachment && available && (
+              <AttachmentViewer
+                key={`${session.streamId}/${attachment.hash}`}
+                attachment={attachment}
+                streamId={session.streamId}
+                credential={session.credential}
+                onClose={() => setAttachment(undefined)}
+              />
+            )}
             <section className="feed" aria-label="Session activity">
               {[
                 [...state!.messages.values()]
@@ -307,22 +329,9 @@ function App() {
                       {[...artifact.versions.values()].map((version) => (
                         <button
                           key={version.version}
-                          onClick={() =>
-                            void download(
-                              version.hash,
-                              version.filename,
-                              session.credential,
-                              session.streamId,
-                            ).catch((error: unknown) =>
-                              setError(
-                                error instanceof Error
-                                  ? error.message
-                                  : "Download failed",
-                              ),
-                            )
-                          }
+                          onClick={() => setAttachment(version)}
                         >
-                          Download version {version.version}
+                          Open version {version.version}
                         </button>
                       ))}
                     </section>
@@ -366,53 +375,5 @@ function App() {
       </main>
     </div>
   );
-}
-async function download(
-  hash: string,
-  filename: string,
-  credential: string,
-  streamId: string,
-) {
-  const response = await fetch(
-    `/api/v1/streams/${encodeURIComponent(streamId)}/attachments/${hash}`,
-    {
-      headers: credential ? { authorization: `Bearer ${credential}` } : {},
-      signal: AbortSignal.timeout(30000),
-      redirect: "error",
-    },
-  );
-  if (!response.ok || !response.body)
-    throw new Error("Attachment is unavailable or access was denied");
-  const reader = response.body.getReader(),
-    chunks: Uint8Array<ArrayBuffer>[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const item = await reader.read();
-      if (item.done) break;
-      size += item.value.length;
-      if (size > 25 * 1024 * 1024)
-        throw new Error("Attachment exceeds the browser download limit");
-      chunks.push(new Uint8Array(item.value));
-    }
-  } finally {
-    void reader.cancel().catch(() => {});
-    reader.releaseLock();
-  }
-  const blob = new Blob(chunks, { type: "application/octet-stream" });
-  const actual = [
-    ...new Uint8Array(
-      await crypto.subtle.digest("SHA-256", await blob.arrayBuffer()),
-    ),
-  ]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-  if (actual !== hash) throw new Error("Attachment integrity check failed");
-  const url = URL.createObjectURL(blob),
-    link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 createRoot(document.getElementById("root")!).render(<App />);

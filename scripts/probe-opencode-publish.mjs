@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { loadAttachment, textPreview } from "../apps/web/dist/attachments.js";
 import { verifyBrowserSession } from "./verify-browser-session.mjs";
 import { listRecordings } from "../packages/client/dist/index.js";
 import { SubscriberCache } from "../packages/storage/dist/index.js";
@@ -301,6 +302,17 @@ try {
       const text = await response.text();
       if (!text.includes("[REDACTED]") || text.includes("probe-private-key"))
         throw new Error("Native attachment filtering failed");
+      const browserBytes = await loadAttachment(
+        attachment,
+        streamId,
+        password,
+        signal,
+        target.url,
+      );
+      if (textPreview(browserBytes, attachment.mediaType) !== text)
+        throw new Error(
+          "Browser attachment preview differs from the filtered native file",
+        );
       verifiedAttachments++;
     }
   if (!verifiedAttachments)
@@ -456,6 +468,7 @@ try {
       resumedSnapshotImport: resumeImport,
       storedEvents: final,
       verifiedAttachments,
+      browserAttachmentsVerified: true,
     }),
   );
 } finally {

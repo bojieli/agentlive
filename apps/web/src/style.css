@@ -364,3 +364,37 @@ h4 {
     scroll-behavior: auto;
   }
 }
+.attachment-viewer {
+  background: white;
+  border: 1px solid #c7d1c6;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 24px;
+  overflow-wrap: anywhere;
+}
+.attachment-viewer img {
+  display: block;
+  max-width: 100%;
+  max-height: 65vh;
+  object-fit: contain;
+  margin: 15px auto;
+}
+.attachment-viewer pre {
+  max-height: 65vh;
+  overflow: auto;
+}
+.attachment-viewer h3 {
+  margin: 0;
+}
+.attachment-viewer a {
+  color: #265944;
+}
+dialog.attachment-viewer {
+  width: min(900px, calc(100vw - 32px));
+  max-height: 90vh;
+  margin: auto;
+  color: inherit;
+}
+dialog.attachment-viewer::backdrop {
+  background: #172c267a;
+}
