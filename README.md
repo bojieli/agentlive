@@ -2,7 +2,7 @@
 
 Broadcast and replay coding-agent sessions from one stable session URL, with structured messages, tools, file changes, and versioned attachments.
 
-**Implementation is in progress.** This repository currently contains the implementation plan, live-agent transport probes, and tested recorder/publisher/playback foundations plus a programmatic HTTP/WebSocket server, shared synchronization engines, and immutable attachment storage. It is not yet an installable broadcast server or finished viewer. See [implementation status](IMPLEMENTATION_STATUS.md) for verified work and remaining release gates.
+**Implementation is in progress.** This repository currently contains the implementation plan, live-agent transport probes, and tested recorder/publisher/playback foundations plus a programmatic HTTP/WebSocket server, shared synchronization engines, and immutable attachment storage. A workspace CLI can start the server and import recordings from all four agents. The distributable installer and viewers are unfinished. See [implementation status](IMPLEMENTATION_STATUS.md) for verified work and remaining release gates.
 
 ## Development
 
@@ -14,6 +14,32 @@ npx --yes pnpm@12.3.4 check
 ```
 
 `check` verifies formatting, builds the TypeScript packages, and runs offline tests. It makes no model calls. CI runs the same command on macOS and Linux with Node 26.
+
+## Local server and history import
+
+After installing and building the workspace:
+
+```sh
+npx --yes pnpm@12.3.4 build
+npx --yes pnpm@12.3.4 agentlive serve
+```
+
+The server listens on `127.0.0.1:7331` and persists state under `~/.agentlive`. First startup creates an owner-only credential file at `~/.agentlive/owner.json`; subsequent starts reuse it. The ready message reports the server URL. Stop with Ctrl-C or SIGTERM to close storage cleanly.
+
+In another terminal, import a retained session:
+
+```sh
+npx --yes pnpm@12.3.4 agentlive import --agent codex --source /path/to/session.jsonl
+npx --yes pnpm@12.3.4 agentlive import --agent claude --source /path/to/session.jsonl
+npx --yes pnpm@12.3.4 agentlive import --agent kimi --source /path/to/session_ID/agents/main/wire.jsonl
+npx --yes pnpm@12.3.4 agentlive import --agent opencode --source /path/to/opencode-export.json
+```
+
+Imports are private by default. Use `--visibility unlisted` or `--visibility public` to make a completed import readable without credentials. Import output includes the recording ID and conversion report; unsupported source objects remain visible in the report. A viewer is not yet included.
+
+Use `--state-dir` on both commands for isolated state, `--server` on imports for another server, and `--owner-file` for its credential JSON. An existing owner secret may instead be supplied through `AGENTLIVE_OWNER_SECRET`. Local artifact access defaults to the source directory; add explicit `--artifact-root` paths where needed. Moved Kimi exports require both `--native-session` and `--native-agent`. See `agentlive --help` for all options.
+
+These commands run from the source checkout. Clean standalone installation, automatic native-session discovery, live publishing commands, and terminal/browser viewers remain release requirements.
 
 ## Live integration probes
 
@@ -31,7 +57,7 @@ AGENTLIVE_PROBE_MODEL=anthropic/claude-sonnet-5 \
   node scripts/probe-servers.mjs opencode
 ```
 
-No upstream binaries are patched. The probes start only their own local servers and stop those processes afterward. Existing user sessions are not used as fixtures. Provider selection stays on the publisher machine; AgentLive's eventual broadcast server will not require model credentials.
+No upstream binaries are patched. The probes start only their own local servers and stop those processes afterward. The live probes create synthetic sessions; separate native-history scripts test explicitly selected existing histories read-only. Provider selection stays on the publisher machine; AgentLive's eventual broadcast server will not require model credentials.
 
 ## Architecture
 
@@ -54,11 +80,11 @@ node scripts/probe-codex-pipeline.mjs
 ```
 
 
-Native Codex history import is available through the programmatic `importCodexRecording` API. Its isolated local validation script imports an explicitly selected source file into a private test server and checks replay and retry identity:
+Native history import is available through the four agent-specific programmatic import APIs and the workspace CLI. Its isolated local validation script imports an explicitly selected source file into a private test server and checks replay and retry identity:
 
 ```sh
 npx --yes pnpm@12.3.4 build
 node scripts/probe-history-import.mjs /path/to/codex-session.jsonl
 ```
 
-This is not yet the packaged four-agent import command. See [native-history corpus coverage](docs/adapters/NATIVE_HISTORY_CORPUS.md) for tested behavior and unresolved object/artifact types.
+The distributable npm package is not yet built. See [native-history corpus coverage](docs/adapters/NATIVE_HISTORY_CORPUS.md) for tested behavior and unresolved object/artifact types.

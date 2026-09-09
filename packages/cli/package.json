@@ -1,0 +1,18 @@
+{
+  "name": "@agentlive/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "agentlive": "dist/main.js"
+  },
+  "engines": {
+    "node": ">=26.8.1 <27"
+  },
+  "dependencies": {
+    "@agentlive/adapters": "workspace:*",
+    "@agentlive/server": "workspace:*",
+    "@agentlive/publisher": "workspace:*",
+    "@agentlive/storage": "workspace:*"
+  }
+}

@@ -163,6 +163,21 @@ importers:
         specifier: 4.5.4
         version: 4.5.4
 
+  packages/cli:
+    dependencies:
+      "@agentlive/adapters":
+        specifier: workspace:*
+        version: link:../adapters
+      "@agentlive/publisher":
+        specifier: workspace:*
+        version: link:../publisher
+      "@agentlive/server":
+        specifier: workspace:*
+        version: link:../server
+      "@agentlive/storage":
+        specifier: workspace:*
+        version: link:../storage
+
   packages/client:
     dependencies:
       "@agentlive/protocol":

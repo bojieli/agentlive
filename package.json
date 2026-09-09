@@ -15,7 +15,8 @@
     "probe:agents": "node scripts/probe-agents.mjs",
     "check": "pnpm format:check && pnpm typecheck && pnpm test",
     "format": "prettier --write packages tests scripts *.json *.ts *.yaml .github/workflows/*.yml",
-    "format:check": "prettier --check packages tests scripts *.json *.ts *.yaml .github/workflows/*.yml"
+    "format:check": "prettier --check packages tests scripts *.json *.ts *.yaml .github/workflows/*.yml",
+    "agentlive": "node packages/cli/dist/main.js"
   },
   "devDependencies": {
     "@types/node": "26.5.0",
