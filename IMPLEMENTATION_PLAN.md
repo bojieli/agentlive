@@ -937,3 +937,9 @@ Bound the number of resident session objects independently of the number of reta
 Evict the least recently used idle session before opening another. If every resident session is owned, return retryable capacity pressure rather than closing active sessions. Reopening reconstructs durable revision, producer state, and history. Immutable attachment downloads retain their own file handles and survive session-cache eviction. The default capacity is 128 and the server CLI exposes `--max-cached-sessions`.
 
 This bounds resident session objects/file stores, not total server memory: the creation-request directory index, per-session state size, active work, and retention policies still require their own scalability limits and operational evidence.
+
+### Shutdown ownership and cleanup failures
+
+Stop new HTTP/WS admission, terminate transports, and drain accepted HTTP handlers plus queued WebSocket work before closing session stores. Keep the directory lock until all session cleanup attempts settle. Session cleanup must attempt both attachment-store and event-log closure, even if one fails. Repeated close calls share the same completion result; surface aggregate cleanup failures after all attempts.
+
+The server now follows this ordering. Validate delayed publisher writes, request handlers surviving transport closure, one failed session alongside another pending close, and attachment cleanup failure. Shutdown currently waits for accepted work without a deadline; a bounded cancellation policy with explicit handling of uncertain writes remains required for production operation.

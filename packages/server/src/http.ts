@@ -131,6 +131,9 @@ export async function startServer(options: ServerOptions) {
   const socketLimit = options.maxSocketBytes ?? 2 * 1024 * 1024;
   let origin = options.publicOrigin ?? "";
   let closing = false;
+  const requests = new Set<Promise<void>>();
+  const connections = new Set<() => Promise<void>>();
+  const connectionErrors: unknown[] = [];
   const tickets = new Map<string, { streamId: string; expires: number }>();
   const readable = (session: RecordingSession, secret: string) => {
     if (session.info.visibility !== "private" || isOwner(secret)) return;
@@ -157,7 +160,17 @@ export async function startServer(options: ServerOptions) {
         { error: { code: "retry_later", message: "Server is closing" } },
         503,
       );
-    await next();
+    let finished!: () => void;
+    const done = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    requests.add(done);
+    try {
+      await next();
+    } finally {
+      requests.delete(done);
+      finished();
+    }
   });
   app.onError((error, c) => {
     const failure = protocolError(error);
@@ -428,17 +441,39 @@ export async function startServer(options: ServerOptions) {
       session = undefined;
       lease = undefined;
     };
-    const cleanup = () => {
-      if (ended) return;
+    let drained: Promise<void> | undefined;
+    const drain = (): Promise<void> => {
+      if (drained) return drained;
       ended = true;
       clearInterval(heartbeat);
       unsubscribe?.();
       unsubscribe = undefined;
-      void queue.then(releaseSession, releaseSession);
+      drained = queue.then(releaseSession, (error) => {
+        releaseSession();
+        throw error;
+      });
+      void drained.then(
+        () => {
+          connections.delete(drain);
+        },
+        (error) => {
+          connectionErrors.push(error);
+          connections.delete(drain);
+        },
+      );
+      return drained;
+    };
+    connections.add(drain);
+    const cleanup = () => {
+      void drain();
     };
     return {
       onOpen(_event: Event, ws: WSContext<WebSocketLike>) {
         socket = ws;
+        if (ended || closing) {
+          ws.close(1001, "Server is closing");
+          return;
+        }
         heartbeat = setInterval(() => {
           if (Date.now() - lastSeen > 60_000) {
             cleanup();
@@ -451,7 +486,7 @@ export async function startServer(options: ServerOptions) {
       onClose: cleanup,
       onError: cleanup,
       onMessage(event: MessageEvent, ws: WSContext<WebSocketLike>) {
-        if (ended) return;
+        if (ended || closing) return;
         if (typeof event.data !== "string" || queued >= 8) {
           ws.close(1008, "Invalid or excessive pending messages");
           return;
@@ -593,6 +628,7 @@ export async function startServer(options: ServerOptions) {
           .finally(() => {
             queued--;
           });
+        void queue.catch(cleanup);
       },
     };
   }
@@ -673,9 +709,26 @@ export async function startServer(options: ServerOptions) {
           server.close((error) => (error ? reject(error) : resolve())),
         );
         if ("closeAllConnections" in server) server.closeAllConnections();
-        await stopped;
-        await store.close();
-        wss.close();
+        const errors: unknown[] = [];
+        try {
+          await stopped;
+        } catch (error) {
+          errors.push(error);
+        }
+        while (requests.size) await Promise.all([...requests]);
+        // An upgrade accepted before admission stopped may have completed during HTTP draining.
+        for (const client of wss.clients) client.terminate();
+        while (connections.size)
+          await Promise.allSettled([...connections].map((drain) => drain()));
+        errors.push(...connectionErrors);
+        try {
+          await store.close();
+        } catch (error) {
+          errors.push(error);
+        }
+        await new Promise<void>((resolve) => wss.close(() => resolve()));
+        if (errors.length)
+          throw new AggregateError(errors, "Server shutdown failed");
       })();
       return closePromise;
     },

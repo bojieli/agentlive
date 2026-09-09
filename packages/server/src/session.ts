@@ -698,16 +698,28 @@ export class RecordingSession {
         await this.save({ ...this.metadata, visibility });
     });
   }
-  async close(): Promise<void> {
+  private closePromise: Promise<void> | undefined;
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.closing = true;
-    await this.queue;
-    for (const subscriber of this.subscribers) {
-      try {
-        subscriber.invalidate("session_closed");
-      } catch {}
-    }
-    this.subscribers.clear();
-    await this.blobs.close();
-    await this.log.close();
+    this.closePromise = (async () => {
+      await this.queue;
+      for (const subscriber of this.subscribers) {
+        try {
+          subscriber.invalidate("session_closed");
+        } catch {}
+      }
+      this.subscribers.clear();
+      const results = await Promise.allSettled([
+        this.blobs.close(),
+        this.log.close(),
+      ]);
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length)
+        throw new AggregateError(errors, "Recording session cleanup failed");
+    })();
+    return this.closePromise;
   }
 }

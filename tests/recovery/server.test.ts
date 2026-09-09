@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -390,4 +390,58 @@ it("bounds cached sessions, retains owned sessions and reopens evicted durable h
   store.release(aRestored);
   expect(() => store.release(aRestored)).toThrow("ownership");
   expect(store.cacheSize).toBe(2);
+});
+
+it("waits for every session cleanup before releasing the directory lock after a close failure", async () => {
+  const { root, store, session, input } = await setup();
+  stores.splice(stores.indexOf(store), 1);
+  const other = await store.create({ ...input, requestId: "other-close" });
+  const closeFirst = session.close.bind(session);
+  const closeOther = other.close.bind(other);
+  let unblock!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  vi.spyOn(session, "close").mockImplementation(async () => {
+    await closeFirst();
+    throw new Error("Injected close failure");
+  });
+  const pending = vi.spyOn(other, "close").mockImplementation(async () => {
+    await gate;
+    await closeOther();
+  });
+  const closing = store.close();
+  expect(store.close()).toBe(closing);
+  const rejected = expect(closing).rejects.toThrow(
+    "Server store cleanup failed",
+  );
+  try {
+    await expect.poll(() => pending.mock.calls.length).toBe(1);
+    await expect(RecordingStore.open(root)).rejects.toMatchObject({
+      code: "publisher_busy",
+    });
+  } finally {
+    unblock();
+    await rejected;
+  }
+  const reopened = await RecordingStore.open(root);
+  await reopened.close();
+  expect(pending).toHaveBeenCalledTimes(1);
+});
+it("attempts log cleanup even when attachment cleanup fails and does not repeat cleanup", async () => {
+  const { store, session } = await setup();
+  stores.splice(stores.indexOf(store), 1);
+  const internals = session as any;
+  const closeBlobs = internals.blobs.close.bind(internals.blobs);
+  vi.spyOn(internals.blobs, "close").mockImplementation(async () => {
+    await closeBlobs();
+    throw new Error("Injected attachment cleanup failure");
+  });
+  const logClose = vi.spyOn(internals.log, "close");
+  const closing = session.close();
+  expect(session.close()).toBe(closing);
+  await expect(closing).rejects.toThrow("Recording session cleanup failed");
+  expect(logClose).toHaveBeenCalledTimes(1);
+  await expect(store.close()).rejects.toThrow("Server store cleanup failed");
+  expect(logClose).toHaveBeenCalledTimes(1);
 });

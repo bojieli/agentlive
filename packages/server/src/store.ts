@@ -35,6 +35,7 @@ export type CreateSession = z.infer<typeof createSessionSchema>;
 export class RecordingStore {
   private queue: Promise<unknown> = Promise.resolve();
   private closed = false;
+  private closePromise: Promise<void> | undefined;
   private readonly requests = new Map<string, { id: string; digest: string }>();
   private readonly sessions = new Map<
     string,
@@ -251,16 +252,28 @@ export class RecordingStore {
     idSchema.parse(id);
     return this.serial(() => this.load(id));
   }
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
-    await this.queue;
-    try {
-      await Promise.all(
-        [...this.sessions.values()].map(({ session }) => session.close()),
+    this.closePromise = (async () => {
+      await this.queue;
+      const results = await Promise.allSettled(
+        [...this.sessions.values()].map(({ session }) =>
+          Promise.resolve().then(() => session.close()),
+        ),
       );
-    } finally {
       this.sessions.clear();
-      await this.lock.release();
-    }
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      try {
+        await this.lock.release();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length)
+        throw new AggregateError(errors, "Server store cleanup failed");
+    })();
+    return this.closePromise;
   }
 }

@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -491,4 +491,93 @@ it("keeps a subscribed session resident until explicit unsubscribe", async () =>
   expect(next.status).toBe(201);
   await next.arrayBuffer();
   expect(server.store.cacheSize).toBe(1);
+});
+
+it("drains queued publisher work before closing sessions or releasing the store lock", async () => {
+  const { RecordingStore } = await import("../../packages/server/src/index.js");
+  const { server, streamId, revision } = await setup();
+  const session = await server.store.get(streamId);
+  const directory = server.store.directory;
+  const original = session.append.bind(session);
+  let unblock!: () => void;
+  let entered = false;
+  const gate = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  vi.spyOn(session, "append").mockImplementation(async (...args) => {
+    entered = true;
+    await gate;
+    return original(...args);
+  });
+  const pub = await publisher(server, streamId, revision, 1);
+  pub.send({
+    type: "batch",
+    protocolVersion: 1,
+    requestId: "during-close",
+    events: [event(streamId, 1)],
+  });
+  await expect.poll(() => entered).toBe(true);
+  let finished = false;
+  const closing = server.close().then(() => {
+    finished = true;
+  });
+  try {
+    await expect(RecordingStore.open(directory)).rejects.toMatchObject({
+      code: "publisher_busy",
+    });
+    expect(finished).toBe(false);
+  } finally {
+    unblock();
+    await closing;
+  }
+  const reopened = await RecordingStore.open(directory);
+  try {
+    const retained = await reopened.get(streamId);
+    expect(retained.boundary.sequence).toBe(2);
+    reopened.release(retained);
+  } finally {
+    await reopened.close();
+  }
+});
+
+it("waits for an in-flight HTTP handler after its connection is closed", async () => {
+  const { RecordingStore } = await import("../../packages/server/src/index.js");
+  const { server, streamId, base } = await setup();
+  const session = await server.store.get(streamId);
+  const original = session.attachmentStatus.bind(session);
+  let unblock!: () => void;
+  let entered = false;
+  let completed = false;
+  const gate = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  vi.spyOn(session, "attachmentStatus").mockImplementation(async (...args) => {
+    entered = true;
+    await gate;
+    const result = await original(...args);
+    completed = true;
+    return result;
+  });
+  const response = fetch(
+    base + "/attachments/" + "a".repeat(64) + "/status?byteSize=1",
+    { headers: { authorization: "Bearer " + writeSecret } },
+  ).then(
+    async (result) => {
+      await result.arrayBuffer();
+    },
+    () => {},
+  );
+  await expect.poll(() => entered).toBe(true);
+  const closing = server.close();
+  try {
+    await expect(
+      RecordingStore.open(server.store.directory),
+    ).rejects.toMatchObject({ code: "publisher_busy" });
+    expect(completed).toBe(false);
+  } finally {
+    unblock();
+    await closing;
+    await response;
+  }
+  expect(completed).toBe(true);
 });
