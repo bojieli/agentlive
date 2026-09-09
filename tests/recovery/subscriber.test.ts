@@ -784,3 +784,119 @@ it.each([false, true])(
     }
   },
 );
+
+it("persists playback choices independently of receipt and rejects foreign settings", async () => {
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { readdir, readFile, writeFile } = await import("node:fs/promises");
+  const { root, server, session } = await setup();
+  const cacheRoot = join(root, "preferences");
+  const options = {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    initialize: async () => ({ revision: session.info.revision }),
+  };
+  let cache = await SubscriberCache.open(cacheRoot, options);
+  expect(await cache.loadPlayback()).toBeUndefined();
+  const choices = { speed: 4, paused: true, immediate: false };
+  const saved = cache.savePlayback(choices);
+  choices.speed = 8;
+  await saved;
+  await cache.savePresentation(0);
+  await cache.close();
+  cache = await SubscriberCache.open(cacheRoot, options);
+  try {
+    expect(await cache.loadPlayback()).toEqual({
+      speed: 4,
+      paused: true,
+      immediate: false,
+    });
+    expect(await cache.loadPresentation()).toBe(0);
+    expect(cache.cursor.serverSeq).toBe(0);
+    expect(() =>
+      cache.savePlayback({ speed: NaN, paused: false, immediate: true }),
+    ).toThrow("Invalid playback");
+    const path = join(
+      cacheRoot,
+      (await readdir(cacheRoot))[0]!,
+      "playback.json",
+    );
+    const foreign = JSON.parse(await readFile(path, "utf8"));
+    foreign.revision = "wrong-revision";
+    await writeFile(path, JSON.stringify(foreign));
+    await expect(cache.loadPlayback()).rejects.toThrow("identity");
+    expect(await cache.loadPresentation()).toBe(0);
+    expect(cache.cursor.serverSeq).toBe(0);
+  } finally {
+    await cache.close();
+  }
+});
+
+it("remembers control changes while paused and restores timed mode without blocking noninteractive watch", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { PlaybackPacer } =
+    await import("../../packages/playback/src/index.js");
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { root, server, session, publish } = await setup();
+  await publish(3);
+  const cacheRoot = join(root, "remember-controls");
+  const settings = {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    cacheRoot,
+    resumeView: true,
+    write: async () => {},
+  };
+  const playback = new PlaybackPacer();
+  const abort = new AbortController();
+  let receipt = 0;
+  const done = watchRecording({
+    ...settings,
+    presentation: playback,
+    signal: abort.signal,
+    onReceipt: (seq) => {
+      receipt = seq;
+    },
+  });
+  runs.push({ abort, done });
+  await expect.poll(() => receipt).toBe(session.boundary.sequence);
+  playback.setSpeed(1024);
+  playback.setImmediate(false);
+  playback.setPaused(true);
+  abort.abort();
+  await done;
+  const cacheOptions = {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    initialize: async () => ({ revision: session.info.revision }),
+  };
+  let cache = await SubscriberCache.open(cacheRoot, cacheOptions);
+  expect(await cache.loadPlayback()).toEqual({
+    speed: 1024,
+    paused: true,
+    immediate: false,
+  });
+  await cache.close();
+  await publish(2);
+  const resumedAbort = new AbortController();
+  const resumed = watchRecording({
+    ...settings,
+    signal: resumedAbort.signal,
+    onPresented: (seq) => {
+      if (seq === session.boundary.sequence) resumedAbort.abort();
+    },
+  });
+  runs.push({ abort: resumedAbort, done: resumed });
+  await resumed;
+  cache = await SubscriberCache.open(cacheRoot, cacheOptions);
+  try {
+    expect(await cache.loadPlayback()).toEqual({
+      speed: 1024,
+      paused: false,
+      immediate: false,
+    });
+  } finally {
+    await cache.close();
+  }
+});

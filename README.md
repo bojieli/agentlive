@@ -214,3 +214,6 @@ agentlive publish --agent opencode --native-server http://127.0.0.1:4096 --nativ
 ```
 
 Use the same state directory, target server, title, visibility, filtering secrets, and artifact settings. Retain the original export unchanged. After the first successful transition, publishing can restart with the same arguments; `--resume-import` is then optional, but `--source` remains required to verify the imported prefix. Native authentication secrets must already be included in the import’s filtering policy if they add to that policy. The importer now uses converter `opencode-snapshot-4`; earlier export converters still require migration before continuation.
+
+
+With `watch --resume-view`, playback speed, pause state, and timed/live catch-up mode are saved separately from the event cache and viewing position. Interactive restart shows the saved snapshot even when paused. Noninteractive restart resumes unpaused; an explicit `--speed` overrides saved speed and selects timed playback. `--restart-view` resets both viewing position and playback preferences. Ordinary watch without either flag does not restore or update these preferences.

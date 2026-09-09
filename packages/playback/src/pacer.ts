@@ -5,6 +5,16 @@ export class PlaybackPacer {
   private rate: number;
   private stopped = false;
   private immediatePlayback = false;
+  private changes = new Set<() => void>();
+  onChange(listener: () => void) {
+    this.changes.add(listener);
+    return () => {
+      this.changes.delete(listener);
+    };
+  }
+  private changed() {
+    for (const listener of [...this.changes]) listener();
+  }
   private wakeups = new Set<() => void>();
   constructor(speed = 1) {
     this.validateSpeed(speed);
@@ -21,6 +31,7 @@ export class PlaybackPacer {
     this.checkpoint();
     this.immediatePlayback = immediate;
     this.wake();
+    this.changed();
   }
   get paused() {
     return this.stopped;
@@ -51,11 +62,13 @@ export class PlaybackPacer {
     this.checkpoint();
     this.rate = speed;
     this.wake();
+    this.changed();
   }
   setPaused(paused: boolean) {
     this.checkpoint();
     this.stopped = paused;
     this.wake();
+    this.changed();
   }
   /** Reset the presentation anchor after the caller has positioned its event source. */
   reset(position = 0) {

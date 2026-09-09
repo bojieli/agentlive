@@ -48,7 +48,7 @@ export async function watchRecording(options: {
     throw new Error("Interactive watch requires a terminal");
   const presentation =
     options.presentation ??
-    (options.interactive || options.speed !== undefined
+    (options.interactive || options.speed !== undefined || rememberPosition
       ? new PlaybackPacer(options.speed ?? 1)
       : undefined);
   if (options.speed !== undefined) presentation!.setSpeed(options.speed);
@@ -90,7 +90,6 @@ export async function watchRecording(options: {
         origin,
         options.streamId,
       )) {
-        await presentation?.waitUntil(0, signal);
         signal.throwIfAborted();
         await interruptible(write(text, signal), signal);
       }
@@ -151,7 +150,10 @@ export async function watchRecording(options: {
   };
   const wasRaw = process.stdin.isRaw;
   const wasFlowing = process.stdin.readableFlowing === true;
+  let controlsChanged = false;
+  let unsubscribePlayback: (() => void) | undefined;
   const onInput = (input: Buffer) => {
+    controlsChanged = true;
     for (const key of input.toString("utf8")) {
       if (key === "q" || key === "\u0003") stop.abort();
       else if (key === " ") presentation!.setPaused(!presentation!.paused);
@@ -192,6 +194,28 @@ export async function watchRecording(options: {
     });
     openedCache = cache;
     signal.throwIfAborted();
+    if (rememberPosition && presentation) {
+      const saved = options.restartView
+        ? undefined
+        : await cache.loadPlayback();
+      if (saved && !options.presentation && !controlsChanged) {
+        if (options.speed === undefined) {
+          presentation.setSpeed(saved.speed);
+          presentation.setImmediate(saved.immediate);
+        }
+        presentation.setPaused(options.interactive ? saved.paused : false);
+      }
+      const persist = () =>
+        cache.savePlayback({
+          speed: presentation.speed,
+          paused: presentation.paused,
+          immediate: presentation.immediate,
+        });
+      unsubscribePlayback = presentation.onChange(() => {
+        void run(persist);
+      });
+      await persist();
+    }
     const client = createClient(cache);
     await Promise.all([
       run(() => present(cache)),
@@ -202,6 +226,7 @@ export async function watchRecording(options: {
     if (!signal.aborted || failed) throw error;
   } finally {
     stop.abort();
+    unsubscribePlayback?.();
     if (options.interactive) {
       process.stdin.off("data", onInput);
       process.stdin.setRawMode(wasRaw);

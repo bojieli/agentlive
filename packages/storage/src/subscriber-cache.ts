@@ -12,6 +12,31 @@ import {
 import { atomicJson } from "./atomic.js";
 import { FileLock } from "./lock.js";
 import { JsonlLog } from "./log.js";
+export interface PlaybackPreferences {
+  speed: number;
+  paused: boolean;
+  immediate: boolean;
+}
+function playbackPreferences(value: unknown): PlaybackPreferences {
+  if (!value || typeof value !== "object")
+    throw new Error("Invalid playback preferences");
+  const input = value as Record<string, unknown>;
+  if (
+    Object.keys(input).sort().join(",") !== "immediate,paused,speed" ||
+    typeof input.speed !== "number" ||
+    !Number.isFinite(input.speed) ||
+    input.speed <= 0 ||
+    input.speed > 1024 ||
+    typeof input.paused !== "boolean" ||
+    typeof input.immediate !== "boolean"
+  )
+    throw new Error("Invalid playback preferences");
+  return {
+    speed: input.speed,
+    paused: input.paused,
+    immediate: input.immediate,
+  };
+}
 /** The durable event prefix is the receipt cursor; no separately updated cursor file. */
 export class SubscriberCache {
   private tail: Promise<unknown> = Promise.resolve();
@@ -164,6 +189,46 @@ export class SubscriberCache {
         hash,
       });
     });
+    this.presentationTail = work.catch(() => {});
+    return work;
+  }
+  /** Display settings are independent of durable receipt and presentation position. */
+  async loadPlayback(): Promise<PlaybackPreferences | undefined> {
+    if (this.closed) throw new Error("Subscriber cache is closed");
+    await this.presentationTail;
+    const path = join(this.directory, "playback.json");
+    let saved;
+    try {
+      if ((await stat(path)).size > 4096)
+        throw new Error("Playback preferences are oversized");
+      saved = JSON.parse(await readFile(path, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    if (
+      !saved ||
+      saved.version !== 1 ||
+      saved.serverOrigin !== this.binding.serverOrigin ||
+      saved.streamId !== this.binding.streamId ||
+      saved.revision !== this.binding.revision ||
+      Object.keys(saved).sort().join(",") !==
+        "playback,revision,serverOrigin,streamId,version"
+    )
+      throw new Error("Playback preferences identity is invalid");
+    return playbackPreferences(saved.playback);
+  }
+  savePlayback(value: PlaybackPreferences): Promise<void> {
+    if (this.closed)
+      return Promise.reject(new Error("Subscriber cache is closed"));
+    const playback = playbackPreferences(value);
+    const work = this.presentationTail.then(() =>
+      atomicJson(join(this.directory, "playback.json"), {
+        version: 1,
+        ...this.binding,
+        playback,
+      }),
+    );
     this.presentationTail = work.catch(() => {});
     return work;
   }

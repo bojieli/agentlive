@@ -45,7 +45,7 @@ try {
     signal: AbortSignal.timeout(30000),
   });
   const python = String.raw`
-import os, pty, termios, subprocess, sys, select, time, json
+import os, pty, termios, subprocess, sys, select, time, json, glob
 command = sys.argv[1:]
 watching = "watch" in command
 for quit_early in (True, False):
@@ -85,13 +85,21 @@ for quit_early in (True, False):
         assert child.poll() is not None, "Replay did not exit"
         assert termios.tcgetattr(slave) == original, "Terminal settings were not restored"
         assert child.returncode == 0, "Replay failed"
+        if watching:
+            root = command[command.index("--state-dir") + 1]
+            paths = glob.glob(os.path.join(root, "subscriber", "*", "playback.json"))
+            assert len(paths) == 1, "Playback preferences missing"
+            with open(paths[0]) as file:
+                saved = json.load(file)["playback"]
+            assert saved["paused"] == quit_early, "Pause preference was not persisted"
+            assert saved["immediate"] == (not quit_early), "Catch-up mode was not persisted"
     finally:
         if child.poll() is None:
             child.kill()
             child.wait()
         os.close(master)
         os.close(slave)
-print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "liveCatchup": watching, "quit": True, "terminalRestored": True, "seekState": not watching, "watchControls": watching}))
+print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "liveCatchup": watching, "quit": True, "terminalRestored": True, "seekState": not watching, "watchControls": watching, "persistedPreferences": watching}))
 `;
   const result = await promisify(execFile)(
     "python3",
@@ -109,7 +117,7 @@ print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "li
       "--state-dir",
       root,
       ...(process.argv.includes("--watch")
-        ? ["--speed", "1"]
+        ? ["--speed", "1", "--resume-view"]
         : ["--from-ms", "30000"]),
     ],
     {

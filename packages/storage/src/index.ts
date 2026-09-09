@@ -5,3 +5,5 @@ export { FileLock } from "./lock.js";
 export { BlobStore } from "./blobs.js";
 export type { BlobDescriptor, BlobLimits, StagedBlob } from "./blobs.js";
 export { SubscriberCache } from "./subscriber-cache.js";
+
+export type { PlaybackPreferences } from "./subscriber-cache.js";
