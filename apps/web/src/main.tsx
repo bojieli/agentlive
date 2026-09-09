@@ -28,13 +28,20 @@ function App() {
   const [, refresh] = useState(0);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  const [playing, setPlaying] = useState(false),
-    [speed, setSpeed] = useState(1);
+  const playing = session?.playing ?? false,
+    speed = session?.speed ?? 1;
   const [recordings, setRecordings] = useState<
     Awaited<ReturnType<typeof listRecordings>>["recordings"]
   >([]);
   const [next, setNext] = useState<string | null>(null);
   const request = useRef<AbortController | undefined>(undefined);
+  const closing = useRef<Promise<void>>(Promise.resolve());
+  function closeSession(current: BrowserSession | undefined) {
+    closing.current = Promise.all([closing.current, current?.close()]).then(
+      () => {},
+    );
+    return closing.current;
+  }
   const [clock] = useState(() => new ForegroundClock());
   useEffect(() => {
     if (session) return bindPageLifecycle(session, document, window, clock);
@@ -47,10 +54,10 @@ function App() {
       try {
         const elapsed = clock.elapsed();
         if (clock.interrupted) session.reconnect();
-        session.seek(session.time + elapsed * speed);
+        session.advance(elapsed);
       } catch (error) {
         setError(error instanceof Error ? error.message : "Playback failed");
-        setPlaying(false);
+        session?.setPlaying(false);
       }
     }, 50);
     return () => clearInterval(interval);
@@ -58,16 +65,17 @@ function App() {
   async function join(id = stream) {
     if (clearing) return;
     request.current?.abort();
-    session?.close();
+    closeSession(session);
     setSession(undefined);
     setAttachment(undefined);
-    setPlaying(false);
     const abort = new AbortController();
     request.current = abort;
     setBusy(true);
     setError("");
     setCacheNotice("");
     try {
+      await closing.current;
+      abort.signal.throwIfAborted();
       const joined = await BrowserSession.open(
         id,
         key,
@@ -77,7 +85,7 @@ function App() {
         { cache: cacheHistory },
       );
       if (abort.signal.aborted) {
-        joined.close();
+        await closeSession(joined);
         return;
       }
       setSession(joined);
@@ -260,7 +268,7 @@ function App() {
               <button
                 onClick={() => {
                   request.current?.abort();
-                  session.close();
+                  closeSession(session);
                   setSession(undefined);
                   setKey("");
                 }}
@@ -275,16 +283,14 @@ function App() {
                 </span>
                 <button
                   onClick={() => {
-                    const wasFollowing = session.follow;
-                    if (wasFollowing) session.seek(session.time);
-                    setPlaying(!playing && !wasFollowing);
+                    session.setPlaying(!(session.playing || session.follow));
                   }}
                 >
                   {playing || session.follow ? "Pause" : "Play"}
                 </button>
                 <button
                   onClick={() => {
-                    setPlaying(false);
+                    session?.setPlaying(false);
                     session.seek(session.duration, true);
                   }}
                 >
@@ -295,13 +301,17 @@ function App() {
                   <select
                     aria-label="Playback speed"
                     value={speed}
-                    onChange={(event) => setSpeed(Number(event.target.value))}
+                    onChange={(event) =>
+                      session.setSpeed(Number(event.target.value))
+                    }
                   >
-                    {[0.25, 0.5, 1, 2, 4, 8].map((value) => (
-                      <option key={value} value={value}>
-                        {value}×
-                      </option>
-                    ))}
+                    {[...new Set([speed, 0.25, 0.5, 1, 2, 4, 8])]
+                      .sort((a, b) => a - b)
+                      .map((value) => (
+                        <option key={value} value={value}>
+                          {value}×
+                        </option>
+                      ))}
                   </select>
                 </label>
               </div>
@@ -313,7 +323,7 @@ function App() {
                 step="1"
                 value={session.time}
                 onChange={(event) => {
-                  setPlaying(false);
+                  session?.setPlaying(false);
                   session.seek(Number(event.target.value));
                 }}
               />

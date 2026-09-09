@@ -208,7 +208,7 @@ it("rejoins from saved receipt, catches up its suffix, and checks access before 
           streamId: recording.info.id,
           producerEpoch: "epoch",
           producerSeq: ++sequence,
-          observedAt: new Date().toISOString(),
+          observedAt: recording.info.createdAt,
           clockSegmentId: "clock",
           elapsedMs: sequence,
           fidelity: "delta",
@@ -216,10 +216,6 @@ it("rejoins from saved receipt, catches up its suffix, and checks access before 
           content,
         },
       ]);
-    await append({
-      kind: "message.started",
-      payload: { messageId: "message", role: "assistant" },
-    });
     const open = (credential = "b".repeat(64)) =>
       BrowserSession.open(
         recording.info.id,
@@ -232,6 +228,22 @@ it("rejoins from saved receipt, catches up its suffix, and checks access before 
     viewer = await open();
     await expect.poll(() => viewer!.status).toBe("live");
     expect(viewer.cacheStatus).toBe("saved");
+    viewer.setPlaying(false);
+    const beforeMessage = viewer.received;
+    await append({
+      kind: "message.started",
+      payload: { messageId: "message", role: "assistant" },
+    });
+    await expect.poll(() => viewer!.received).toBe(beforeMessage + 1);
+    expect(viewer.duration).toBe(0);
+    expect(viewer.state.appliedSeq).toBe(beforeMessage);
+    await viewer.close();
+    viewer = await open();
+    expect(viewer.time).toBe(0);
+    expect(viewer.state.appliedSeq).toBe(beforeMessage);
+    expect(viewer.state.messages.size).toBe(0);
+    viewer.seek(viewer.duration, true);
+
     const prefix = viewer.received;
     await viewer.close();
     await append({
@@ -264,6 +276,30 @@ it("rejoins from saved receipt, catches up its suffix, and checks access before 
       .poll(() => viewer!.state.messages.get("message")?.text)
       .toBe("Suffix after reload");
     expect(viewer.cacheStatus).toBe("saved");
+    await viewer.close();
+    // Save an inspection position while receipt already contains the later message.
+    viewer = await open();
+    await expect.poll(() => viewer!.status).toBe("live");
+    const selected = viewer.duration / 2;
+    viewer.seek(selected);
+    viewer.setSpeed(4);
+    viewer.setPlaying(false);
+    const selectedSeq = viewer.state.appliedSeq;
+    await viewer.close();
+    viewer = await open();
+    expect(viewer.time).toBe(selected);
+    expect(viewer.state.appliedSeq).toBe(selectedSeq);
+    expect(viewer.speed).toBe(4);
+    expect(viewer.playing).toBe(false);
+    expect(viewer.follow).toBe(false);
+    viewer.setPlaying(true);
+    viewer.advance(0.1);
+    const playingTime = viewer.time;
+    await viewer.close();
+    viewer = await open();
+    expect(viewer.playing).toBe(true);
+    expect(viewer.time).toBe(playingTime);
+    viewer.seek(viewer.duration, true);
     await viewer.close();
     const savedPrefix = viewer.received;
     for (const rollback of [false, true]) {
@@ -375,4 +411,73 @@ it("evicts complete entries when the catalog's accounted bytes exceed the site b
   expect(headers).toBe(4);
   expect(batches).toBe(4);
   expect(bytes).toBeLessThanOrEqual(256 * 1024 * 1024);
+});
+
+it("keeps an older verified playback anchor while another tab advances receipt", async () => {
+  const env = platform();
+  const first = await BrowserHistoryCache.open(binding, env, signal());
+  await first.append([event(1)], signal());
+  const other = await BrowserHistoryCache.open(binding, env, signal());
+  await other.read(1, signal());
+  await first.append([event(2)], signal());
+  expect(
+    await other.saveView(
+      { serverSeq: 1, timelineMs: 1, speed: 2, mode: "paused" },
+      signal(),
+    ),
+  ).toBe(true);
+  await first.append([event(3)], signal());
+  first.close();
+  other.close();
+  const restored = await BrowserHistoryCache.open(binding, env, signal());
+  expect(await restored.read(3, signal())).toEqual([
+    event(1),
+    event(2),
+    event(3),
+  ]);
+  expect(restored.loadView()).toEqual({
+    serverSeq: 1,
+    timelineMs: 1,
+    speed: 2,
+    mode: "paused",
+  });
+  restored.close();
+});
+it("ignores malformed or unbound view preferences without discarding valid receipt", async () => {
+  const env = platform();
+  const cache = await BrowserHistoryCache.open(binding, env, signal());
+  await cache.append([event(1)], signal());
+  await cache.saveView(
+    { serverSeq: 1, timelineMs: 1, speed: 1, mode: "playing" },
+    signal(),
+  );
+  cache.close();
+  for (const changes of [
+    { speed: 0 },
+    { hash: "f".repeat(64) },
+    { serverSeq: 100 },
+  ]) {
+    await mutate(env.indexedDB, (tx) => {
+      const request = tx.objectStore("headers").openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result!;
+        cursor.update({
+          ...cursor.value,
+          view: {
+            serverSeq: 1,
+            timelineMs: 1,
+            speed: 1,
+            mode: "playing",
+            through: 1,
+            hash: cursor.value.hash,
+            ...changes,
+          },
+        });
+      };
+    });
+    const restored = await BrowserHistoryCache.open(binding, env, signal());
+    expect(await restored.read(1, signal())).toEqual([event(1)]);
+    expect(restored.loadView()).toBeUndefined();
+    restored.close();
+  }
 });

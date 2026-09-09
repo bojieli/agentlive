@@ -13,7 +13,41 @@ export interface CachePlatform {
   keyRange: typeof IDBKeyRange;
 }
 export class CacheAheadError extends Error {}
+export interface BrowserView {
+  serverSeq: number;
+  timelineMs: number;
+  speed: number;
+  mode: "follow" | "paused" | "playing";
+}
+interface SavedView extends BrowserView {
+  through: number;
+  hash: string;
+}
+function view(value: unknown): SavedView | undefined {
+  const saved = value as SavedView;
+  if (
+    !saved ||
+    typeof saved !== "object" ||
+    Object.keys(saved).sort().join(",") !==
+      "hash,mode,serverSeq,speed,through,timelineMs" ||
+    !Number.isSafeInteger(saved.serverSeq) ||
+    saved.serverSeq < 0 ||
+    !Number.isSafeInteger(saved.through) ||
+    saved.through < saved.serverSeq ||
+    !Number.isFinite(saved.timelineMs) ||
+    saved.timelineMs < 0 ||
+    !Number.isFinite(saved.speed) ||
+    saved.speed < 1 / 1024 ||
+    saved.speed > 1024 ||
+    !["follow", "paused", "playing"].includes(saved.mode) ||
+    typeof saved.hash !== "string" ||
+    !/^[a-f0-9]{64}$/.test(saved.hash)
+  )
+    return;
+  return { ...saved };
+}
 interface Header {
+  view?: SavedView;
   key: string;
   generation: string;
   sequence: number;
@@ -165,6 +199,10 @@ async function connect(
 /** Optional, bounded IndexedDB receipt. The server remains authoritative. */
 export class BrowserHistoryCache {
   private closed = false;
+  private restoredView: BrowserView | undefined;
+  loadView() {
+    return this.restoredView ? { ...this.restoredView } : undefined;
+  }
   private constructor(
     private readonly db: IDBDatabase,
     private readonly platform: CachePlatform,
@@ -275,6 +313,8 @@ export class BrowserHistoryCache {
       },
     );
     const events: StoredEvent[] = [];
+    const saved = view(snapshot.position.view);
+    let anchored = !!saved && saved.through === 0 && saved.hash === ZERO;
     let hash = ZERO,
       bytes = 0,
       timeline = 0;
@@ -289,6 +329,8 @@ export class BrowserHistoryCache {
       )
         throw new Error("Browser cache hash chain is invalid");
       hash = batch.hash;
+      if (saved?.through === batch.sequence && saved.hash === hash)
+        anchored = true;
       bytes += size(batch.lines);
       for (const line of batch.lines.slice(0, -1).split("\n")) {
         const event = storedEventSchema.parse(JSON.parse(line));
@@ -310,6 +352,15 @@ export class BrowserHistoryCache {
     )
       throw new Error("Browser cache cursor does not match its prefix");
     signal.throwIfAborted();
+    this.restoredView =
+      saved && anchored && saved.through <= events.length
+        ? {
+            serverSeq: saved.serverSeq,
+            timelineMs: saved.timelineMs,
+            speed: saved.speed,
+            mode: saved.mode,
+          }
+        : undefined;
     this.position = snapshot.position;
     return events;
   }
@@ -369,6 +420,8 @@ export class BrowserHistoryCache {
             hash,
             lines,
           } satisfies Batch);
+          if (current.view) next.view = current.view;
+          else delete next.view;
           tx.objectStore("headers").put(next);
           this.evict(tx, [
             ...rows.filter((row) => row.key !== position.key),
@@ -380,6 +433,50 @@ export class BrowserHistoryCache {
     );
     if (saved) this.position = next;
     return saved;
+  }
+  async saveView(value: BrowserView, parent: AbortSignal): Promise<boolean> {
+    if (this.closed) return false;
+    const position = this.position;
+    const saved = view({
+      ...value,
+      through: position.sequence,
+      hash: position.hash,
+    });
+    if (!saved) throw new Error("Invalid browser playback checkpoint");
+    return transact<boolean>(
+      this.db,
+      "readwrite",
+      AbortSignal.any([parent, AbortSignal.timeout(10000)]),
+      (tx, read, result) => {
+        read(tx.objectStore("headers").get(position.key), (row) => {
+          if (!row) {
+            result(false);
+            return;
+          }
+          const current = header(row);
+          if (
+            current.generation !== position.generation ||
+            current.sequence < position.sequence
+          ) {
+            result(false);
+            return;
+          }
+          const write = (anchor: boolean) => {
+            if (anchor)
+              tx.objectStore("headers").put({ ...current, view: saved });
+            result(anchor);
+          };
+          if (current.sequence === position.sequence)
+            write(current.hash === position.hash);
+          else if (position.sequence === 0) write(position.hash === ZERO);
+          else
+            read(
+              tx.objectStore("batches").get([position.key, position.sequence]),
+              (batch) => write(batch?.hash === position.hash),
+            );
+        });
+      },
+    );
   }
   async clear(parent: AbortSignal): Promise<void> {
     this.closed = true;

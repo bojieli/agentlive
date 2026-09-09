@@ -80,6 +80,14 @@ export async function verifyBrowserSession(
       if (serialize(expected) !== serialize(viewer.state))
         throw new Error("Browser native replay differs from retained history");
     }
+    const counts = {
+      messages: viewer.state.messages.size,
+      tools: viewer.state.tools.size,
+      artifacts: viewer.state.artifacts.size,
+    };
+    viewer.seek(viewer.duration / 2);
+    viewer.setSpeed(2);
+    viewer.setPlaying(false);
     await viewer.close();
     const restored = await BrowserSession.open(
       streamId,
@@ -92,7 +100,11 @@ export async function verifyBrowserSession(
     try {
       if (
         restored.restoredEvents !== viewer.received ||
-        serialize(restored.state) !== serialize(viewer.state)
+        serialize(restored.state) !== serialize(viewer.state) ||
+        restored.time !== viewer.time ||
+        restored.speed !== 2 ||
+        restored.playing ||
+        restored.follow
       )
         throw new Error("Persistent browser model differs after reload");
     } finally {
@@ -100,12 +112,11 @@ export async function verifyBrowserSession(
     }
     return {
       received: viewer.received,
-      messages: viewer.state.messages.size,
-      tools: viewer.state.tools.size,
-      artifacts: viewer.state.artifacts.size,
+      ...counts,
       seekVerified: true,
       foregroundRevalidated: true,
       persistedReloadVerified: true,
+      pausedPlaybackRestored: true,
     };
   } finally {
     await viewer.close();
