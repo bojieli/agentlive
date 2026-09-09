@@ -73,7 +73,7 @@ for quit_early in (True, False):
         if quit_early:
             os.write(master, b"q")
         else:
-            os.write(master, b" " if watching else b"++++++++++ ")
+            os.write(master, b"+-l" if watching else b"++++++++++ ")
             read_until(b"SECOND_PTY_MESSAGE")
             if watching:
                 os.write(master, b"q")
@@ -91,7 +91,7 @@ for quit_early in (True, False):
             child.wait()
         os.close(master)
         os.close(slave)
-print(json.dumps({"success": True, "pauseResume": True, "speedChange": not watching, "quit": True, "terminalRestored": True, "seekState": not watching, "watchControls": watching}))
+print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "liveCatchup": watching, "quit": True, "terminalRestored": True, "seekState": not watching, "watchControls": watching}))
 `;
   const result = await promisify(execFile)(
     "python3",
@@ -108,7 +108,9 @@ print(json.dumps({"success": True, "pauseResume": True, "speedChange": not watch
       "--interactive",
       "--state-dir",
       root,
-      ...(process.argv.includes("--watch") ? [] : ["--from-ms", "30000"]),
+      ...(process.argv.includes("--watch")
+        ? ["--speed", "1"]
+        : ["--from-ms", "30000"]),
     ],
     {
       env: { ...process.env, AGENTLIVE_OWNER_SECRET: secret },

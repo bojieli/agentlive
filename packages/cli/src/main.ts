@@ -24,7 +24,7 @@ Commands:
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
   agentlive publish --agent opencode --native-server <origin> --native-session <id>
-  agentlive watch --stream <recording-id> [--server <origin>] [--anonymous] [--interactive] [--resume-view | --restart-view]
+  agentlive watch --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive] [--resume-view | --restart-view]
   agentlive replay --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive] [--from-ms <position>]
 
 Shared options:
@@ -137,7 +137,7 @@ async function main() {
             "anonymous",
             ...(command === "replay"
               ? ["speed", "interactive", "from-ms"]
-              : ["interactive", "resume-view", "restart-view"]),
+              : ["speed", "interactive", "resume-view", "restart-view"]),
           ]
         : [
             ...(command === "publish"

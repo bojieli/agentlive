@@ -4,6 +4,7 @@ export class PlaybackPacer {
   private anchor = performance.now();
   private rate: number;
   private stopped = false;
+  private immediatePlayback = false;
   private wakeups = new Set<() => void>();
   constructor(speed = 1) {
     this.validateSpeed(speed);
@@ -11,6 +12,15 @@ export class PlaybackPacer {
   }
   get speed() {
     return this.rate;
+  }
+  get immediate() {
+    return this.immediatePlayback;
+  }
+  /** Skip timing delays while preserving pause and event ordering. */
+  setImmediate(immediate: boolean) {
+    this.checkpoint();
+    this.immediatePlayback = immediate;
+    this.wake();
   }
   get paused() {
     return this.stopped;
@@ -60,7 +70,9 @@ export class PlaybackPacer {
       throw new RangeError("Invalid event timeline");
     for (;;) {
       signal.throwIfAborted();
-      const remaining = timelineMs - this.current();
+      const remaining = this.immediatePlayback
+        ? 0
+        : timelineMs - this.current();
       if (!this.stopped && remaining <= 0) return;
       await new Promise<void>((resolve, reject) => {
         let timer: ReturnType<typeof setTimeout> | undefined;

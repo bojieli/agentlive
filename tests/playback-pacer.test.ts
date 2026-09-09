@@ -72,3 +72,28 @@ it("resets to a positioned source and rejects invalid timing controls", async ()
   expect(() => pacer.reset(-1)).toThrow();
   await expect(pacer.waitUntil(NaN, abort.signal)).rejects.toThrow();
 });
+
+it("wakes timed waits for immediate catch-up while retaining pause semantics", async () => {
+  const abort = clock();
+  const pacer = new PlaybackPacer();
+  const finished = vi.fn();
+  const pending = pacer.waitUntil(60_000, abort.signal).then(finished);
+  await vi.advanceTimersByTimeAsync(100);
+  pacer.setPaused(true);
+  pacer.setImmediate(true);
+  await vi.advanceTimersByTimeAsync(100);
+  expect(finished).not.toHaveBeenCalled();
+  expect(vi.getTimerCount()).toBe(0);
+  pacer.setPaused(false);
+  await pending;
+  expect(finished).toHaveBeenCalledOnce();
+  pacer.reset(60_000);
+  pacer.setImmediate(false);
+  const next = vi.fn();
+  const waiting = pacer.waitUntil(61_000, abort.signal).then(next);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(next).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await waiting;
+  expect(vi.getTimerCount()).toBe(0);
+});

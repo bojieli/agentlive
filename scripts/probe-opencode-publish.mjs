@@ -264,6 +264,7 @@ try {
     cacheRoot: join(root, "subscriber"),
     signal: AbortSignal.any([signal, watched.signal]),
     presentation: gate,
+    speed: 1024,
     resumeView: true,
     write: async () => {},
     onReceipt: (sequence) => {

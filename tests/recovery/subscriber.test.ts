@@ -696,3 +696,42 @@ it("does not checkpoint a failed output even after receipt is durable", async ()
     await cache.close();
   }
 });
+
+it("receives a complete backlog during timed watch and switches to live catch-up without skipping events", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { PlaybackPacer } =
+    await import("../../packages/playback/src/index.js");
+  const { root, server, session, publish } = await setup();
+  await publish(20);
+  const playback = new PlaybackPacer();
+  const abort = new AbortController();
+  let receipt = 0;
+  const presented: number[] = [];
+  const done = watchRecording({
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    cacheRoot: join(root, "timed"),
+    signal: abort.signal,
+    speed: 0.000001,
+    presentation: playback,
+    write: async () => {},
+    onReceipt: (seq) => {
+      receipt = seq;
+    },
+    onPresented: (seq) => {
+      presented.push(seq);
+    },
+  });
+  runs.push({ abort, done });
+  await expect.poll(() => receipt).toBe(session.boundary.sequence);
+  await expect.poll(() => presented.length).toBeGreaterThan(0);
+  expect(presented.length).toBeLessThan(receipt);
+  await publish(5);
+  await expect.poll(() => receipt).toBe(session.boundary.sequence);
+  expect(presented.length).toBeLessThan(receipt);
+  playback.setImmediate(true);
+  await expect.poll(() => presented.length).toBe(receipt);
+  expect(presented).toEqual(Array.from({ length: receipt }, (_, i) => i + 1));
+  abort.abort();
+  await done;
+});

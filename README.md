@@ -201,3 +201,6 @@ For multi-session hosting, `serve --max-cached-sessions 128` sets the resident s
 
 
 Server shutdown stops admission and drains accepted work. Configure its waiting deadline with `agentlive serve --shutdown-timeout-ms 30000` (default: 30 seconds; positive integer up to 2147483647). If the deadline expires, the CLI reports an error and cleanup continues while retaining the store lock. The library’s `close()` rejects with `ShutdownTimeoutError` (`code: "shutdown_timeout"`); use `whenClosed()` to await actual completion afterward. A timeout does not prove a pending write was canceled. Use a process supervisor for a hard termination deadline, including blocked event loops. On restart, publishers reconcile durable acknowledgements and retry unacknowledged events through the existing deduplication protocol.
+
+
+To watch with recorded timing, use `agentlive watch --stream <id> --speed 1 --interactive`. Space pauses presentation, +/- changes speed, `l` resumes immediate live catch-up, and `q` exits. Receipt continues while playback is paused or slowed. Without `--speed`, watch catches up immediately. Catch-up preserves every event in order; it does not discard intervening history. `--resume-view` also restores the timing anchor at the saved presentation position.

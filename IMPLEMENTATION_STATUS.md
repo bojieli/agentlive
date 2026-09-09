@@ -230,3 +230,10 @@ Validation: 157 tests pass. Fault injection verifies that delayed publisher work
 ### Bounded shutdown wait
 
 Server `close()` has a configurable 30-second default deadline (`serve --shutdown-timeout-ms`, programmatic `shutdownTimeoutMs`). Timeout reports `ShutdownTimeoutError` with code `shutdown_timeout`; accepted work continues draining with directory ownership retained. `whenClosed()` waits for the actual cleanup result, including failures occurring after timeout. Repeated close calls share the initial result. CLI signal shutdown reports timeouts instead of suppressing them. The deadline bounds asynchronous waiting, not synchronous event-loop blocking or process lifetime; production supervisors still need a hard termination deadline.
+
+
+### Timed live viewer playback
+
+Watch supports optional `--speed`, interactive +/- speed changes, and `l` for immediate catch-up. The shared pacer wakes a pending timing wait when switching to immediate mode and preserves pause semantics. Timing starts at the first event or saved presentation prefix. Receipt remains independent of slow or paused presentation, and catch-up visits every event in sequence.
+
+Validation: all 169 tests across 24 files pass, including slow timed presentation with continued durable receipt, ordered live catch-up, mode changes during a paused wait, and timer cleanup. The terminal probe passed pause/resume, speed changes, live catch-up, quit, and terminal restoration. The installed OpenCode probe used timed presentation at 1024x and passed three turns, native-server restart, publisher restart, detached-history recovery, saved-view restoration, 25 stored events, and one verified attachment with a one-session target cache. Arbitrary seeking, persistent playback preferences, paged state, and production browser/mobile viewers remain required.

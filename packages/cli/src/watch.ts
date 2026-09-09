@@ -35,9 +35,10 @@ export async function watchRecording(options: {
   onReceipt?: (serverSeq: number) => void;
   onPresented?: (serverSeq: number) => void;
   interactive?: boolean;
+  speed?: number;
   resumeView?: boolean;
   restartView?: boolean;
-  /** Optional presentation gate; its pause state never controls network receipt. */
+  /** Optional playback controller; changes never control network receipt. */
   presentation?: PlaybackPacer;
 }) {
   if (options.resumeView && options.restartView)
@@ -47,7 +48,11 @@ export async function watchRecording(options: {
     throw new Error("Interactive watch requires a terminal");
   const presentation =
     options.presentation ??
-    (options.interactive ? new PlaybackPacer() : undefined);
+    (options.interactive || options.speed !== undefined
+      ? new PlaybackPacer(options.speed ?? 1)
+      : undefined);
+  if (options.speed !== undefined) presentation!.setSpeed(options.speed);
+  presentation?.setImmediate(options.speed === undefined);
   const origin = originOf(options.serverOrigin);
   const cache = await SubscriberCache.open(options.cacheRoot, {
     serverOrigin: origin,
@@ -96,12 +101,18 @@ export async function watchRecording(options: {
         await interruptible(write(text, signal), signal);
       }
     }
+    let anchored = saved > 0;
+    if (anchored) presentation?.reset(state.timelineMs);
     for (;;) {
       signal.throwIfAborted();
       const through = cache.cursor.serverSeq;
       for await (const event of cache.events(state.appliedSeq, through)) {
         signal.throwIfAborted();
-        await presentation?.waitUntil(0, signal);
+        if (!anchored) {
+          presentation?.reset(event.timelineMs);
+          anchored = true;
+        }
+        await presentation?.waitUntil(event.timelineMs, signal);
         count(event);
         const previous = state;
         state = apply(state, event);
@@ -149,12 +160,24 @@ export async function watchRecording(options: {
     for (const key of input.toString("utf8")) {
       if (key === "q" || key === "\u0003") stop.abort();
       else if (key === " ") presentation!.setPaused(!presentation!.paused);
+      else if (key === "l") {
+        presentation!.setImmediate(true);
+        presentation!.setPaused(false);
+      } else if (key === "+" || key === "=" || key === "-") {
+        if (presentation!.immediate) presentation!.reset(state.timelineMs);
+        presentation!.setImmediate(false);
+        presentation!.setSpeed(
+          key === "-"
+            ? Math.max(1 / 1024, presentation!.speed / 2)
+            : Math.min(1024, presentation!.speed * 2),
+        );
+      }
     }
   };
   try {
     if (options.interactive) {
       process.stderr.write(
-        "Watch controls: space pause/resume presentation, q quit (receipt continues while paused)\n",
+        "Watch controls: space pause/resume, +/- recorded-time speed, l live catch-up, q quit (receipt continues independently)\n",
       );
       process.stdin.setRawMode(true);
       process.stdin.on("data", onInput);
