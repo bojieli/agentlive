@@ -574,3 +574,23 @@ it("upgrades unavailable attachment checkpoints without rewriting history and re
   expect(journal.capturedThrough).toBe(boundary);
   expect(resolveInline).toHaveBeenCalledTimes(1);
 });
+
+it("retains a possible secret prefix in an active error and releases it only at native completion", async () => {
+  const journal = await setup();
+  const capture = await OpenCodeCapture.open(journal, ["danger-secret"]);
+  captures.push(capture);
+  const active = snapshot("Starting");
+  active.messages[0]!.info.error = {
+    name: "APIError",
+    data: { message: "credits exhausted" },
+  };
+  await capture.accept(active);
+  expect([...(await replay(journal)).state.messages.values()][0]).toMatchObject(
+    { text: "Starting\ncredits exhauste", completed: false },
+  );
+  active.messages[0]!.info.time.completed = 2;
+  await capture.accept(active);
+  expect([...(await replay(journal)).state.messages.values()][0]).toMatchObject(
+    { text: "Starting\ncredits exhausted", completed: true },
+  );
+});

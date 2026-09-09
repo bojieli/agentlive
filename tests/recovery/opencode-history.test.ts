@@ -27,7 +27,8 @@ it("imports OpenCode message/tool/error exports with filtered replay and determi
             id: "msg_test",
             sessionID: "ses_test",
             role: "assistant",
-            time: { created: time },
+            // This fixture asserts final text; mark the native message terminal.
+            time: { created: time, completed: time + 3 },
             error: {
               name: "APIError",
               data: {
