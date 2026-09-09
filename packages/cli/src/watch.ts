@@ -54,13 +54,7 @@ export async function watchRecording(options: {
   if (options.speed !== undefined) presentation!.setSpeed(options.speed);
   presentation?.setImmediate(options.speed === undefined);
   const origin = originOf(options.serverOrigin);
-  const cache = await SubscriberCache.open(options.cacheRoot, {
-    serverOrigin: origin,
-    streamId: options.streamId,
-    initialize: async () =>
-      (await openRecordingHistory({ ...options, serverOrigin: origin }))
-        .metadata,
-  });
+  let openedCache: SubscriberCache | undefined;
   const stop = new AbortController();
   const signal = AbortSignal.any([options.signal, stop.signal]);
   const write =
@@ -82,7 +76,7 @@ export async function watchRecording(options: {
         "Terminal reference watch exceeds its 64 MiB event budget; paged state is not yet available",
       );
   };
-  const present = async () => {
+  const present = async (cache: SubscriberCache) => {
     if (options.restartView) await cache.savePresentation(0);
     const saved = rememberPosition ? await cache.loadPresentation() : 0;
     if (saved) {
@@ -133,16 +127,17 @@ export async function watchRecording(options: {
       await cache.waitForEvents(state.appliedSeq, signal);
     }
   };
-  const client = new SubscriberClient({
-    serverOrigin: origin,
-    cursor: cache.cursor,
-    ...(options.credential ? { credential: options.credential } : {}),
-    ...(options.onStatus ? { onStatus: options.onStatus } : {}),
-    commit: async (events, cursor) => {
-      await cache.commit(events, cursor);
-      options.onReceipt?.(cursor.serverSeq);
-    },
-  });
+  const createClient = (cache: SubscriberCache) =>
+    new SubscriberClient({
+      serverOrigin: origin,
+      cursor: cache.cursor,
+      ...(options.credential ? { credential: options.credential } : {}),
+      ...(options.onStatus ? { onStatus: options.onStatus } : {}),
+      commit: async (events, cursor) => {
+        await cache.commit(events, cursor);
+        options.onReceipt?.(cursor.serverSeq);
+      },
+    });
   const run = async (work: () => Promise<void>) => {
     try {
       await work();
@@ -183,8 +178,28 @@ export async function watchRecording(options: {
       process.stdin.on("data", onInput);
       process.stdin.resume();
     }
-    await Promise.all([run(present), run(() => client.run(signal))]);
+    const cache = await SubscriberCache.open(options.cacheRoot, {
+      serverOrigin: origin,
+      streamId: options.streamId,
+      initialize: async () =>
+        (
+          await openRecordingHistory({
+            ...options,
+            serverOrigin: origin,
+            signal,
+          })
+        ).metadata,
+    });
+    openedCache = cache;
+    signal.throwIfAborted();
+    const client = createClient(cache);
+    await Promise.all([
+      run(() => present(cache)),
+      run(() => client.run(signal)),
+    ]);
     if (failed) throw failure;
+  } catch (error) {
+    if (!signal.aborted || failed) throw error;
   } finally {
     stop.abort();
     if (options.interactive) {
@@ -192,6 +207,6 @@ export async function watchRecording(options: {
       process.stdin.setRawMode(wasRaw);
       if (!wasFlowing) process.stdin.pause();
     }
-    await cache.close();
+    await openedCache?.close();
   }
 }

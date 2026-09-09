@@ -735,3 +735,52 @@ it("receives a complete backlog during timed watch and switches to live catch-up
   abort.abort();
   await done;
 });
+
+it.each([false, true])(
+  "cancels initial watch metadata and releases cache ownership (headers sent=%s)",
+  async (sendHeaders) => {
+    const { createServer } = await import("node:http");
+    const { watchRecording } = await import("../../packages/cli/src/watch.js");
+    const { SubscriberCache } =
+      await import("../../packages/storage/src/index.js");
+    const root = await mkdtemp(join(tmpdir(), "agentlive-stalled-join-"));
+    roots.push(root);
+    const entered = deferred();
+    const http = createServer((_req, res) => {
+      if (sendHeaders) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('{"revision":');
+      }
+      entered.resolve();
+    });
+    await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve));
+    const address = http.address() as import("node:net").AddressInfo;
+    const serverOrigin = `http://127.0.0.1:${address.port}`;
+    const abort = new AbortController();
+    const cacheRoot = join(root, "cache");
+    const done = watchRecording({
+      serverOrigin,
+      streamId: "stalled-join",
+      cacheRoot,
+      signal: abort.signal,
+      write: async () => {},
+    });
+    runs.push({ abort, done });
+    try {
+      await entered.promise;
+      abort.abort();
+      await done;
+      const cache = await SubscriberCache.open(cacheRoot, {
+        serverOrigin,
+        streamId: "stalled-join",
+        initialize: async () => ({ revision: "new-revision" }),
+      });
+      expect(cache.cursor.serverSeq).toBe(0);
+      await cache.close();
+    } finally {
+      abort.abort();
+      http.closeAllConnections();
+      await new Promise<void>((resolve) => http.close(() => resolve()));
+    }
+  },
+);

@@ -237,3 +237,10 @@ Server `close()` has a configurable 30-second default deadline (`serve --shutdow
 Watch supports optional `--speed`, interactive +/- speed changes, and `l` for immediate catch-up. The shared pacer wakes a pending timing wait when switching to immediate mode and preserves pause semantics. Timing starts at the first event or saved presentation prefix. Receipt remains independent of slow or paused presentation, and catch-up visits every event in sequence.
 
 Validation: all 169 tests across 24 files pass, including slow timed presentation with continued durable receipt, ordered live catch-up, mode changes during a paused wait, and timer cleanup. The terminal probe passed pause/resume, speed changes, live catch-up, quit, and terminal restoration. The installed OpenCode probe used timed presentation at 1024x and passed three turns, native-server restart, publisher restart, detached-history recovery, saved-view restoration, 25 stored events, and one verified attachment with a one-session target cache. Arbitrary seeking, persistent playback preferences, paged state, and production browser/mobile viewers remain required.
+
+
+### Canceling viewers during initial join
+
+Watch and replay install interactive controls before their initial network request. Keyboard cancellation reaches the initial metadata fetch, restores terminal settings, and, for watch, releases cache ownership even when metadata stalls before headers or mid-body. Non-cancellation initialization failures still propagate.
+
+Validation: all 171 tests across 24 files pass. `scripts/probe-viewer-join-cancel.mjs` and its `--replay` mode verify q and Ctrl-C against a real stalled HTTP endpoint in a PTY, prompt clean exit, and terminal restoration. The watch probe also reopens the same cache after cancellation. The existing replay PTY probe passed seek, speed, pause, and quit. The installed OpenCode probe passed three native turns, native and publisher restarts, viewer restoration, detached-history recovery, 24 stored events, and one verified attachment with a one-session cache. Synchronous cache recovery and blocking output are not made preemptible by this change.

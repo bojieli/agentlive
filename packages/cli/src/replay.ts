@@ -39,11 +39,8 @@ export async function replayRecording(options: {
   const local = new AbortController();
   const signal = AbortSignal.any([options.signal, local.signal]);
   const origin = originOf(options.serverOrigin);
-  const history = await openRecordingHistory({
-    ...options,
-    serverOrigin: origin,
-    signal,
-  });
+  let metadata:
+    Awaited<ReturnType<typeof openRecordingHistory>>["metadata"] | undefined;
   const wasRaw = process.stdin.isRaw;
   const wasFlowing = process.stdin.readableFlowing === true;
   const onInput = (input: Buffer) => {
@@ -57,15 +54,21 @@ export async function replayRecording(options: {
         pacer!.setSpeed(Math.max(1 / 1024, pacer!.speed / 2));
     }
   };
-  if (options.interactive) {
-    process.stderr.write(
-      "Replay controls: space pause/resume, +/- speed, q quit\n",
-    );
-    process.stdin.setRawMode(true);
-    process.stdin.on("data", onInput);
-    process.stdin.resume();
-  }
   try {
+    if (options.interactive) {
+      process.stderr.write(
+        "Replay controls: space pause/resume, +/- speed, q quit\n",
+      );
+      process.stdin.setRawMode(true);
+      process.stdin.on("data", onInput);
+      process.stdin.resume();
+    }
+    const history = await openRecordingHistory({
+      ...options,
+      serverOrigin: origin,
+      signal,
+    });
+    metadata = history.metadata;
     let started = false;
     let snapshotShown = false;
     let state = initialState(),
@@ -133,7 +136,7 @@ export async function replayRecording(options: {
       !options.signal.aborted &&
       error === local.signal.reason
     )
-      return history.metadata;
+      return metadata;
     throw error;
   } finally {
     if (options.interactive) {
