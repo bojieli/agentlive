@@ -1,3 +1,5 @@
+import type { PagedActivityView } from "./paged-activity.js";
+import { searchPagedActivity } from "./paged-activity-search.js";
 import { useEffect, useRef, useState } from "react";
 import type { RecordingState } from "@agentlive/playback";
 import type { ActivityRow } from "./activity.js";
@@ -5,11 +7,13 @@ import { searchActivity, type ActivitySearchPage } from "./activity-search.js";
 export function ActivitySearchPanel({
   state,
   rows,
+  view,
   onSelect,
   onPause,
 }: {
   state: RecordingState;
   rows: readonly ActivityRow[];
+  view?: PagedActivityView | undefined;
   onSelect: (index: number, query: string) => void;
   onPause: () => void;
 }) {
@@ -18,9 +22,12 @@ export function ActivitySearchPanel({
     page: ActivitySearchPage;
     sequence: number;
     query: string;
+    view: PagedActivityView | undefined;
   }>();
   const page =
-    saved?.sequence === state.appliedSeq && saved.query === query
+    saved?.sequence === state.appliedSeq &&
+    saved.query === query &&
+    saved.view === view
       ? saved.page
       : undefined;
   const [busy, setBusy] = useState(false);
@@ -32,7 +39,7 @@ export function ActivitySearchPanel({
     setSaved(undefined);
     setBusy(false);
     return () => request.current?.abort();
-  }, [sequence]);
+  }, [sequence, view]);
   async function search(start = 0) {
     request.current?.abort();
     const abort = new AbortController();
@@ -42,14 +49,11 @@ export function ActivitySearchPanel({
     setError("");
     setSaved(undefined);
     try {
-      const result = await searchActivity(
-        state,
-        rows,
-        query,
-        abort.signal,
-        start,
-      );
-      if (!abort.signal.aborted) setSaved({ page: result, sequence, query });
+      const result = view
+        ? await searchPagedActivity(view, query, abort.signal, start)
+        : await searchActivity(state, rows, query, abort.signal, start);
+      if (!abort.signal.aborted)
+        setSaved({ page: result, sequence, query, view });
     } catch (error) {
       if (!abort.signal.aborted)
         setError(error instanceof Error ? error.message : "Search failed");
@@ -108,7 +112,7 @@ export function ActivitySearchPanel({
             {page.matches.map((match) => (
               <li key={match.key}>
                 <button onClick={() => onSelect(match.index, query)}>
-                  <strong>{rows[match.index]?.kind}</strong>
+                  <strong>{match.key.split("/")[0]}</strong>
                   <span>{match.excerpt}</span>
                 </button>
               </li>

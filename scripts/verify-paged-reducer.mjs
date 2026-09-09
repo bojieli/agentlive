@@ -1,3 +1,6 @@
+import { searchPagedActivity } from "../apps/web/dist/paged-activity-search.js";
+import { searchActivity } from "../apps/web/dist/activity-search.js";
+import { loadActivityWindow } from "../apps/web/dist/activity-window.js";
 import { activityRows } from "../apps/web/dist/activity.js";
 import { readTextPage } from "../apps/web/dist/text-source.js";
 import { textPage } from "../apps/web/dist/text-page.js";
@@ -208,6 +211,43 @@ export async function verifyPagedReducer(events, expected, signal) {
         (await activityIndex.position(activityRoot, key, signal)) !== position
       )
         throw new Error("Persistent activity position differs from row order");
+    const referenceRows = activityRows(
+      expected,
+      (key) => firstMention.get(key) ?? Number.MAX_SAFE_INTEGER,
+    );
+    const queries = new Set(["assistant"]);
+    const text = [...expected.messages.values()].find(
+      (message) => message.text.length,
+    )?.text;
+    if (text) queries.add(text.slice(0, 16));
+    for (const query of queries) {
+      const wanted = await searchActivity(
+        expected,
+        referenceRows,
+        query,
+        signal,
+      );
+      const actual = await searchPagedActivity(view, query, signal);
+      if (
+        !isDeepStrictEqual(
+          actual.matches.map((match) => match.key),
+          wanted.matches.map((match) => match.key),
+        ) ||
+        actual.nextIndex !== wanted.nextIndex
+      )
+        throw new Error("Paged native activity search differs from reference");
+    }
+    if (view.rowCount) {
+      const offset = Math.floor((view.rowCount - 1) / 32) * 32;
+      const window = await loadActivityWindow(view, [offset], signal);
+      if (
+        !isDeepStrictEqual(
+          [...window.values()].map((row) => row.key),
+          orderedKeys.slice(offset, offset + 32),
+        )
+      )
+        throw new Error("Native activity window differs from persisted order");
+    }
     return {
       events: events.length,
       reopened,
@@ -218,6 +258,8 @@ export async function verifyPagedReducer(events, expected, signal) {
       pagedTextFields,
       pagedActivityCards,
       indexedActivityRows: orderedKeys.length,
+      pagedSearchQueries: queries.size,
+      pagedWindowVerified: true,
       storedBytes: store.usage.storedBytes,
     };
   } finally {

@@ -1,3 +1,4 @@
+import { loadActivityWindow } from "./activity-window.js";
 import { PagedActivityCard } from "./paged-activity-card.js";
 import type { PagedActivityView } from "./paged-activity.js";
 import {
@@ -11,7 +12,7 @@ import {
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { RecordingState } from "@agentlive/playback";
 import type { Attachment } from "./attachments.js";
-import { ActivityCard, activityRows } from "./activity.js";
+import { ActivityCard, activityRows, type ActivityRow } from "./activity.js";
 import { TextPagesProvider, useRevealText } from "./paged-text.js";
 import { ActivitySearchPanel } from "./activity-search-panel.js";
 import { activityRange } from "./activity-range.js";
@@ -47,18 +48,43 @@ function VirtualActivity({
   onAttachment,
 }: Parameters<typeof ActivityFeed>[0]) {
   const rows = useMemo(
-    () => activityRows(state, order),
-    [state, state.appliedSeq, order],
+    () => (view ? [] : activityRows(state, order)),
+    [state, state.appliedSeq, order, view],
   );
   const revealDisclosure = useRevealDisclosure();
   const revealText = useRevealText();
   const parent = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState<string>();
   const [pending, setPending] = useState<string>();
-  const focusedIndex = rows.findIndex((row) => row.key === focused);
-  const getItemKey = useCallback((index: number) => rows[index]!.key, [rows]);
+  const [pagedFocus, setPagedFocus] = useState(-1);
+  const [loaded, setLoaded] = useState<{
+    view: PagedActivityView;
+    rows: Map<number, ActivityRow>;
+  }>();
+  const [loadError, setLoadError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  const count = view ? view.rowCount : rows.length;
+  const rowAt = useCallback(
+    (index: number) =>
+      view
+        ? loaded?.view === view
+          ? loaded.rows.get(index)
+          : undefined
+        : rows[index],
+    [view, loaded, rows],
+  );
+  const focusedIndex = view
+    ? pagedFocus
+    : rows.findIndex((row) => row.key === focused);
+  const getItemKey = useCallback(
+    (index: number) =>
+      view
+        ? (loaded?.rows.get(index)?.key ?? `pending:${index}`)
+        : rows[index]!.key,
+    [view, loaded, rows],
+  );
   const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
-    count: rows.length,
+    count,
     getScrollElement: () => parent.current,
     getItemKey,
     estimateSize: () => 180,
@@ -69,40 +95,152 @@ function VirtualActivity({
     rangeExtractor: (range) => activityRange(range, focusedIndex),
   });
   const items = virtualizer.getVirtualItems();
+  const rangeKey = items
+    .map((item) => Math.floor(item.index / 32) * 32)
+    .filter((value, index, all) => all.indexOf(value) === index)
+    .sort((a, b) => a - b)
+    .join(",");
+  useEffect(() => {
+    if (!view) return;
+    const abort = new AbortController();
+    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(10000)]);
+    setLoadError("");
+    void (async () => {
+      const selected = await loadActivityWindow(
+        view,
+        rangeKey ? rangeKey.split(",").map(Number) : [],
+        signal,
+      );
+      setLoaded({ view, rows: selected });
+    })().catch((error) => {
+      if (!abort.signal.aborted)
+        setLoadError(
+          error instanceof Error ? error.message : "Activity loading failed",
+        );
+    });
+    return () => abort.abort();
+  }, [view, rangeKey, attempt]);
+  const navigation = useRef<AbortController | undefined>(undefined);
+  useEffect(() => () => navigation.current?.abort(), [view]);
+  useEffect(() => {
+    if (!view || !focused) {
+      setPagedFocus(-1);
+      return;
+    }
+    const abort = new AbortController();
+    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(10000)]);
+    void view
+      .position(focused, signal)
+      .then((index) => {
+        if (!signal.aborted) {
+          setPagedFocus(index ?? -1);
+          if (index === undefined) {
+            setFocused(undefined);
+            setPending(undefined);
+            parent.current?.focus({ preventScroll: true });
+          }
+        }
+      })
+      .catch((error) => {
+        if (!abort.signal.aborted)
+          setLoadError(
+            error instanceof Error ? error.message : "Activity position failed",
+          );
+      });
+    return () => abort.abort();
+  }, [view, focused]);
   const handledHash = useRef<string | undefined>(undefined);
   const navigate = useCallback(
-    (index: number) => {
-      const row = rows[index];
-      if (!row) return;
-      setFocused(row.key);
-      setPending(row.key);
-      virtualizer.scrollToIndex(index, { align: "start" });
+    (index: number, query?: string) => {
+      if (index < 0 || index >= count) return;
+      navigation.current?.abort();
+      const abort = new AbortController();
+      navigation.current = abort;
+      const signal = AbortSignal.any([
+        abort.signal,
+        AbortSignal.timeout(10000),
+      ]);
+      void (async () => {
+        const row = view ? (await view.rows(index, 1, signal))[0] : rows[index];
+        signal.throwIfAborted();
+        if (!row) return;
+        if (query !== undefined) {
+          revealText(row.key, query);
+          revealDisclosure(row.key);
+          revealDisclosure(`${row.key}/recorded-data`);
+        }
+        setFocused(row.key);
+        if (view) setPagedFocus(index);
+        setPending(row.key);
+        virtualizer.scrollToIndex(index, { align: "start" });
+      })().catch((error) => {
+        if (!abort.signal.aborted)
+          setLoadError(
+            error instanceof Error
+              ? error.message
+              : "Activity navigation failed",
+          );
+      });
     },
-    [rows, virtualizer],
+    [view, rows, count, virtualizer, revealText, revealDisclosure],
+  );
+  const hashIndex = useCallback(
+    async (hash: string, signal: AbortSignal) => {
+      if (!view) return rows.findIndex((row) => `#${row.anchor}` === hash);
+      const match = /^#([a-z]+)-(.*)$/.exec(hash);
+      if (!match) return -1;
+      let id: string;
+      try {
+        id = decodeURIComponent(match[2]!);
+      } catch {
+        return -1;
+      }
+      return (await view.position(`${match[1]}/${id}`, signal)) ?? -1;
+    },
+    [view, rows],
   );
   useEffect(() => {
+    let active: AbortController | undefined;
     const reveal = () => {
+      active?.abort();
       const hash = location.hash;
       if (!hash) {
         handledHash.current = undefined;
         return;
       }
       if (handledHash.current === hash) return;
-      const index = rows.findIndex((row) => `#${row.anchor}` === hash);
-      if (index < 0) {
-        handledHash.current = undefined;
-        return;
-      }
-      handledHash.current = hash;
-      navigate(index);
+      const abort = new AbortController();
+      active = abort;
+      const signal = AbortSignal.any([
+        abort.signal,
+        AbortSignal.timeout(10000),
+      ]);
+      void hashIndex(hash, signal)
+        .then((index) => {
+          if (signal.aborted || index < 0) return;
+          handledHash.current = hash;
+          navigate(index);
+        })
+        .catch((error) => {
+          if (!abort.signal.aborted)
+            setLoadError(
+              error instanceof Error ? error.message : "Activity link failed",
+            );
+        });
     };
     reveal();
     window.addEventListener("hashchange", reveal);
-    return () => window.removeEventListener("hashchange", reveal);
-  }, [rows, navigate]);
+    return () => {
+      active?.abort();
+      window.removeEventListener("hashchange", reveal);
+    };
+  }, [hashIndex, navigate]);
   useLayoutEffect(() => {
     if (!pending) return;
-    const index = rows.findIndex((row) => row.key === pending);
+    const index = view
+      ? pagedFocus
+      : rows.findIndex((row) => row.key === pending);
+    if (rowAt(index)?.key !== pending) return;
     const element = parent.current?.querySelector<HTMLDivElement>(
       `[data-index="${index}"]`,
     );
@@ -111,39 +249,38 @@ function VirtualActivity({
       element.focus({ preventScroll: true });
       setPending(undefined);
     }
-  }, [pending, rows, virtualizer, items]);
+  }, [pending, rows, view, pagedFocus, rowAt, virtualizer, items]);
   // A seek may remove the focused object; return focus to the activity region.
   useLayoutEffect(() => {
-    if (focused && focusedIndex < 0) {
+    if (!view && focused && focusedIndex < 0) {
       setFocused(undefined);
       setPending(undefined);
       parent.current?.focus({ preventScroll: true });
     }
-  }, [focused, focusedIndex]);
+  }, [view, focused, focusedIndex]);
   return (
     <section className="activity" aria-label="Session activity">
       <ActivitySearchPanel
         state={state}
         rows={rows}
-        onSelect={(index, query) => {
-          const row = rows[index];
-          if (!row) return;
-          revealText(row.key, query);
-          revealDisclosure(row.key);
-          revealDisclosure(`${row.key}/recorded-data`);
-          navigate(index);
-        }}
+        view={view}
+        onSelect={(index, query) => navigate(index, query)}
         onPause={onPause}
       />
+      {loadError && (
+        <p role="alert">
+          {loadError}{" "}
+          <button onClick={() => setAttempt((value) => value + 1)}>
+            Retry loading
+          </button>
+        </p>
+      )}
       <div className="activity-navigation">
-        <span className="muted">{rows.length} activity items</span>
-        <button disabled={!rows.length} onClick={() => navigate(0)}>
+        <span className="muted">{count} activity items</span>
+        <button disabled={!count} onClick={() => navigate(0)}>
           First item
         </button>
-        <button
-          disabled={!rows.length}
-          onClick={() => navigate(rows.length - 1)}
-        >
+        <button disabled={!count} onClick={() => navigate(count - 1)}>
           Latest item
         </button>
       </div>
@@ -157,7 +294,14 @@ function VirtualActivity({
           const item = (event.target as Element).closest<HTMLElement>(
             "[data-index]",
           );
-          if (item) setFocused(rows[Number(item.dataset.index)]?.key);
+          if (item) {
+            const index = Number(item.dataset.index);
+            const row = rowAt(index);
+            if (row) {
+              setFocused(row.key);
+              if (view) setPagedFocus(index);
+            }
+          }
         }}
         onBlurCapture={(event) => {
           if (!event.currentTarget.contains(event.relatedTarget as Node | null))
@@ -175,15 +319,11 @@ function VirtualActivity({
             event.altKey
           )
             return;
-          const index = rows.findIndex(
-            (row) => `#${row.anchor}` === link.getAttribute("href"),
-          );
-          if (index < 0) return;
-          event.preventDefault();
           const hash = link.getAttribute("href")!;
-          handledHash.current = hash;
+          event.preventDefault();
+          handledHash.current = undefined;
           if (location.hash !== hash) history.pushState(null, "", hash);
-          navigate(index);
+          window.dispatchEvent(new HashChangeEvent("hashchange"));
         }}
         onKeyDown={(event) => {
           if (
@@ -196,9 +336,9 @@ function VirtualActivity({
             event.key === "Home"
               ? 0
               : event.key === "End"
-                ? rows.length - 1
+                ? count - 1
                 : event.key === "ArrowDown"
-                  ? Math.min(rows.length - 1, focusedIndex + 1)
+                  ? Math.min(count - 1, focusedIndex + 1)
                   : event.key === "ArrowUp"
                     ? Math.max(0, focusedIndex - 1)
                     : undefined;
@@ -212,14 +352,14 @@ function VirtualActivity({
           style={{ height: virtualizer.getTotalSize(), position: "relative" }}
         >
           {items.map((item) => {
-            const row = rows[item.index]!;
+            const row = rowAt(item.index);
             return (
               <div
                 key={item.key}
                 data-index={item.index}
                 ref={virtualizer.measureElement}
                 role="listitem"
-                aria-setsize={rows.length}
+                aria-setsize={count}
                 aria-posinset={item.index + 1}
                 tabIndex={0}
                 className="activity-row"
@@ -231,7 +371,9 @@ function VirtualActivity({
                   transform: `translateY(${item.start}px)`,
                 }}
               >
-                {view ? (
+                {!row ? (
+                  <p role="status">Loading activity…</p>
+                ) : view ? (
                   <PagedActivityCard
                     row={row}
                     view={view}
@@ -248,7 +390,7 @@ function VirtualActivity({
             );
           })}
         </div>
-        {!rows.length && <p className="muted">No activity at this position.</p>}
+        {!count && <p className="muted">No activity at this position.</p>}
       </div>
     </section>
   );

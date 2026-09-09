@@ -178,7 +178,7 @@ it("loads workflow links and bounded artifact versions at the selected boundary"
             attachment: {
               artifactId: "artifact",
               version,
-              filename: "result",
+              filename: version === 34 ? "historic-search-needle" : "result",
               hash: "a".repeat(64),
               mediaType: "text/plain",
               byteSize: 3,
@@ -218,10 +218,127 @@ it("loads workflow links and bounded artifact versions at the selected boundary"
     expect([...last.state.artifacts.get("artifact")!.versions.keys()]).toEqual([
       33, 34, 35,
     ]);
+    const { searchPagedActivity } =
+      await import("../../apps/web/src/paged-activity-search.js");
+    expect(
+      (
+        await searchPagedActivity(view, "historic-search-needle", signal())
+      ).matches.map((match) => match.key),
+    ).toEqual(["artifacts/artifact"]);
+    expect(
+      (await searchPagedActivity(view, "interrupted", signal())).matches.map(
+        (match) => match.key,
+      ),
+    ).toEqual(["gaps/0"]);
     const plan = (await view.load(row("plans", "plan"), signal()))!;
     expect([...plan.state.artifacts.get("artifact")!.versions.keys()]).toEqual([
       1,
     ]);
+  } finally {
+    await state.close();
+  }
+});
+
+it("searches frozen paged text across boundaries and excludes subsequently hidden rows", async () => {
+  const { searchPagedActivity } =
+    await import("../../apps/web/src/paged-activity-search.js");
+  const state = await BrowserPagedState.open(
+    new IDBFactory(),
+    binding,
+    signal(),
+  );
+  try {
+    await add(state, [
+      {
+        kind: "message.started",
+        payload: { messageId: "m", role: "assistant" },
+      },
+      {
+        kind: "message.text.append",
+        payload: {
+          messageId: "m",
+          text: "x".repeat(16383) + "🦊needle" + "y".repeat(20000),
+        },
+      },
+    ]);
+    const view = state.view();
+    const original = BrowserContentStore.prototype.read;
+    const reads: number[] = [];
+    const spy = vi
+      .spyOn(BrowserContentStore.prototype, "read")
+      .mockImplementation(function (
+        this: BrowserContentStore,
+        ref,
+        offset,
+        length,
+        active,
+      ) {
+        reads.push(length);
+        return original.call(this, ref, offset, length, active);
+      });
+    try {
+      const result = await searchPagedActivity(view, "🦊needle", signal());
+      expect(result.matches.map((match) => match.key)).toEqual(["messages/m"]);
+      expect(result.matches[0]!.excerpt).toContain("🦊needle");
+      expect(result.matches[0]!.excerpt.length).toBeLessThan(500);
+      expect(Math.max(...reads)).toBeLessThanOrEqual(32768);
+    } finally {
+      spy.mockRestore();
+    }
+    await add(state, [
+      {
+        kind: "object.visibility",
+        payload: { objectType: "message", objectId: "m", visible: false },
+      },
+    ]);
+    expect(
+      (await searchPagedActivity(state.view(), "needle", signal())).matches,
+    ).toEqual([]);
+    expect(
+      (await searchPagedActivity(view, "needle", signal())).matches,
+    ).toHaveLength(1);
+  } finally {
+    await state.close();
+  }
+});
+
+it("paginates paged search without losing or repeating matching rows", async () => {
+  const { searchPagedActivity } =
+    await import("../../apps/web/src/paged-activity-search.js");
+  const state = await BrowserPagedState.open(
+    new IDBFactory(),
+    binding,
+    signal(),
+  );
+  try {
+    await add(
+      state,
+      Array.from({ length: 55 }, (_, index) => ({
+        kind: "message.started" as const,
+        payload: { messageId: `needle-${index}`, role: "assistant" as const },
+      })),
+    );
+    const view = state.view();
+    const first = await searchPagedActivity(view, "needle", signal());
+    expect(first.matches).toHaveLength(50);
+    expect(first.nextIndex).toBe(50);
+    const second = await searchPagedActivity(
+      view,
+      "needle",
+      signal(),
+      first.nextIndex!,
+    );
+    expect(second.matches).toHaveLength(5);
+    expect(second.nextIndex).toBeNull();
+    expect(
+      new Set([...first.matches, ...second.matches].map((match) => match.key))
+        .size,
+    ).toBe(55);
+    const stop = new AbortController();
+    stop.abort(new Error("cancel search"));
+    await expect(
+      searchPagedActivity(view, "needle", stop.signal),
+    ).rejects.toThrow("cancel search");
   } finally {
     await state.close();
   }

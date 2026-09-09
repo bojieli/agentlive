@@ -43,6 +43,25 @@ async function read(
     throw new Error("Text source returned an invalid range");
   return text;
 }
+/** Verified, cancellable range access for bounded excerpts. */
+export async function readSourceRange(
+  input: TextSource,
+  offset: number,
+  length: number,
+  signal: AbortSignal,
+) {
+  const value = source(input);
+  if (
+    !Number.isSafeInteger(offset) ||
+    !Number.isSafeInteger(length) ||
+    offset < 0 ||
+    length < 0 ||
+    length > 65536 ||
+    offset + length > value.units
+  )
+    throw new RangeError("Invalid text range");
+  return read(value, offset, length, signal);
+}
 /** One page plus at most two boundary units, never the whole retained text. */
 export async function readTextPage(
   input: TextSource,
