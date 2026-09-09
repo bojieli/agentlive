@@ -11,6 +11,7 @@ import {
   AgentReference,
   objectAnchor,
 } from "./workflow-card.js";
+import { browserCachePlatform, clearSavedHistories } from "./history-cache.js";
 import "./style.css";
 const seconds = (time: number) => `${(time / 1000).toFixed(1)}s`;
 function App() {
@@ -19,6 +20,10 @@ function App() {
   );
   const [key, setKey] = useState("");
   const [session, setSession] = useState<BrowserSession>();
+  const [cachePlatform] = useState(browserCachePlatform);
+  const [cacheHistory, setCacheHistory] = useState(!!cachePlatform);
+  const [cacheNotice, setCacheNotice] = useState("");
+  const [clearing, setClearing] = useState(false);
   const [attachment, setAttachment] = useState<Attachment>();
   const [, refresh] = useState(0);
   const [busy, setBusy] = useState(false),
@@ -51,6 +56,7 @@ function App() {
     return () => clearInterval(interval);
   }, [session, playing, speed, clock]);
   async function join(id = stream) {
+    if (clearing) return;
     request.current?.abort();
     session?.close();
     setSession(undefined);
@@ -60,9 +66,15 @@ function App() {
     request.current = abort;
     setBusy(true);
     setError("");
+    setCacheNotice("");
     try {
-      const joined = await BrowserSession.open(id, key, abort.signal, () =>
-        refresh((value) => value + 1),
+      const joined = await BrowserSession.open(
+        id,
+        key,
+        abort.signal,
+        () => refresh((value) => value + 1),
+        location.origin,
+        { cache: cacheHistory },
       );
       if (abort.signal.aborted) {
         joined.close();
@@ -76,6 +88,24 @@ function App() {
         setError(error instanceof Error ? error.message : "Unable to join");
     } finally {
       if (request.current === abort) setBusy(false);
+    }
+  }
+  async function forgetHistory() {
+    if (!cachePlatform || clearing) return;
+    setClearing(true);
+    setError("");
+    session?.disableCache();
+    setCacheHistory(false);
+    setCacheNotice("");
+    try {
+      await clearSavedHistories(cachePlatform, AbortSignal.timeout(10000));
+      setCacheNotice("Saved histories cleared from this device.");
+    } catch {
+      setError(
+        "Unable to clear saved history. Close other AgentLive tabs and try again.",
+      );
+    } finally {
+      setClearing(false);
     }
   }
   async function browse(after?: string) {
@@ -148,7 +178,19 @@ function App() {
               autoComplete="off"
             />
           </label>
-          <button className="primary" disabled={busy || !stream}>
+          <label className="cache-choice">
+            <input
+              type="checkbox"
+              checked={cacheHistory}
+              disabled={!cachePlatform || busy || clearing || !!session}
+              onChange={(event) => {
+                setCacheHistory(event.target.checked);
+                if (!event.target.checked) session?.disableCache();
+              }}
+            />
+            Save history on this device
+          </label>
+          <button className="primary" disabled={busy || clearing || !stream}>
             {busy ? "Joining…" : "Join recording"}
           </button>
         </form>
@@ -159,6 +201,18 @@ function App() {
         >
           Browse my recordings
         </button>
+        <button
+          className="secondary"
+          disabled={!cachePlatform || busy || clearing}
+          onClick={() => void forgetHistory()}
+        >
+          {clearing ? "Clearing…" : "Clear saved histories"}
+        </button>
+        {cacheNotice && (
+          <p className="muted" role="status">
+            {cacheNotice}
+          </p>
+        )}
         <div className="recordings">
           {recordings.map((recording) => (
             <button key={recording.id} onClick={() => void join(recording.id)}>
@@ -272,6 +326,11 @@ function App() {
                 </span>
               </div>
             </section>
+            <p className="muted" role="status">
+              {session.cacheStatus === "saved"
+                ? "History is being saved on this device."
+                : "History is kept for this visit only."}
+            </p>
             {session.error && (
               <div className="error" role="alert">
                 {session.error}

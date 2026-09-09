@@ -1,4 +1,9 @@
 /** Exercise the actual browser transport/model against a native probe's recording. */
+import { createRequire } from "node:module";
+const require = createRequire(
+  new URL("../apps/web/package.json", import.meta.url),
+);
+const { IDBFactory, IDBKeyRange } = require("fake-indexeddb");
 import { BrowserSession } from "../apps/web/dist/session.js";
 import { openRecordingHistory } from "../packages/client/dist/index.js";
 import { apply, initialState } from "../packages/playback/dist/index.js";
@@ -19,12 +24,14 @@ export async function verifyBrowserSession(
   });
   const events = [];
   for await (const event of history.events) events.push(event);
+  const platform = { indexedDB: new IDBFactory(), keyRange: IDBKeyRange };
   const viewer = await BrowserSession.open(
     streamId,
     credential,
     signal,
     () => {},
     serverOrigin,
+    { platform },
   );
   try {
     while (viewer.received < history.metadata.serverSeq) {
@@ -73,6 +80,24 @@ export async function verifyBrowserSession(
       if (serialize(expected) !== serialize(viewer.state))
         throw new Error("Browser native replay differs from retained history");
     }
+    await viewer.close();
+    const restored = await BrowserSession.open(
+      streamId,
+      credential,
+      signal,
+      () => {},
+      serverOrigin,
+      { platform },
+    );
+    try {
+      if (
+        restored.restoredEvents !== viewer.received ||
+        serialize(restored.state) !== serialize(viewer.state)
+      )
+        throw new Error("Persistent browser model differs after reload");
+    } finally {
+      await restored.close();
+    }
     return {
       received: viewer.received,
       messages: viewer.state.messages.size,
@@ -80,6 +105,7 @@ export async function verifyBrowserSession(
       artifacts: viewer.state.artifacts.size,
       seekVerified: true,
       foregroundRevalidated: true,
+      persistedReloadVerified: true,
     };
   } finally {
     await viewer.close();

@@ -493,3 +493,13 @@ dialog.attachment-viewer::backdrop {
     gap: 2px;
   }
 }
+.cache-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 400;
+}
+.cache-choice input {
+  width: auto;
+  accent-color: #265944;
+}

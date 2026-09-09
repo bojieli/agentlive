@@ -1,9 +1,26 @@
 import { openRecordingHistory, SubscriberClient } from "@agentlive/client";
 import { apply, initialState } from "@agentlive/playback";
+import {
+  BrowserHistoryCache,
+  CacheAheadError,
+  browserCachePlatform,
+  type CachePlatform,
+} from "./history-cache.js";
 import type { StoredEvent } from "@agentlive/protocol";
-/** A bounded browser receipt buffer. Reload starts from zero until persistent browser caching is added. */
+/** A bounded receipt buffer with optional evictable browser persistence. */
 export class BrowserSession {
   private events: StoredEvent[] = [];
+  private cache: BrowserHistoryCache | undefined;
+  private cacheWritable = true;
+  cacheStatus: "memory" | "saved" = "memory";
+  restoredEvents = 0;
+  disableCache() {
+    this.cacheWritable = false;
+    this.cache?.close();
+    this.cache = undefined;
+    this.cacheStatus = "memory";
+    this.changed();
+  }
   private bytes = 0;
   private readonly objectOrder = new Map<string, number>();
   order(key: string) {
@@ -72,6 +89,7 @@ export class BrowserSession {
     signal: AbortSignal,
     changed: () => void,
     origin = location.origin,
+    options: { cache?: boolean; platform?: CachePlatform } = {},
   ) {
     const metadata = (
       await openRecordingHistory({
@@ -88,9 +106,68 @@ export class BrowserSession {
       credential,
       changed,
     );
+    const platform = options.platform ?? browserCachePlatform();
+    if (options.cache !== false && platform) {
+      try {
+        const binding = {
+          serverOrigin: origin,
+          streamId,
+          revision: metadata.revision,
+        };
+        session.cache = await BrowserHistoryCache.open(
+          binding,
+          platform,
+          signal,
+        );
+        let events: StoredEvent[];
+        try {
+          events = await session.cache.read(Number.MAX_SAFE_INTEGER, signal);
+        } catch (error) {
+          if (error instanceof CacheAheadError || signal.aborted) throw error;
+          await session.cache.clear(signal);
+          session.cache = await BrowserHistoryCache.open(
+            binding,
+            platform,
+            signal,
+          );
+          events = [];
+        }
+        if (events.length > metadata.serverSeq) {
+          const current = (
+            await openRecordingHistory({
+              serverOrigin: origin,
+              streamId,
+              ...(credential ? { credential } : {}),
+              signal,
+            })
+          ).metadata;
+          if (
+            current.revision !== metadata.revision ||
+            current.serverSeq < events.length
+          )
+            throw new CacheAheadError(
+              "Saved history differs from this server. Clear saved histories explicitly to reload.",
+            );
+        }
+        session.accept(events);
+        session.restoredEvents = events.length;
+        session.cacheStatus = "saved";
+      } catch (error) {
+        session.disableCache();
+        if (error instanceof CacheAheadError || signal.aborted) throw error;
+      }
+    }
+    if (signal.aborted) {
+      session.cache?.close();
+      signal.throwIfAborted();
+    }
     const client = new SubscriberClient({
       serverOrigin: origin,
-      cursor: { streamId, revision: metadata.revision, serverSeq: 0 },
+      cursor: {
+        streamId,
+        revision: metadata.revision,
+        serverSeq: session.received,
+      },
       ...(credential ? { credential } : {}),
       onStatus: (status) => {
         session.status =
@@ -104,52 +181,26 @@ export class BrowserSession {
         changed();
       },
       commit: async (events) => {
-        let sequence = session.received,
-          time = session.duration;
-        const added = events.reduce((size, event) => {
-          if (event.serverSeq !== ++sequence || event.timelineMs < time)
-            throw new Error("Recording history is not ordered");
-          time = event.timelineMs;
-          return size + new TextEncoder().encode(JSON.stringify(event)).length;
-        }, 0);
-        if (session.bytes + added > 64 * 1024 * 1024)
-          throw new Error(
-            "This browser viewer has reached its 64 MiB recording limit.",
-          );
+        let time = session.duration;
         for (const event of events) {
-          const payload = event.content.payload as Record<string, unknown>;
-          for (const [kind, field] of Object.entries({
-            messages: "messageId",
-            tools: "toolId",
-            changes: "changeId",
-            artifacts: "artifactId",
-            agents: "agentId",
-            tasks: "taskId",
-            goals: "goalId",
-            interactions: "interactionId",
-            plans: "planId",
-            monitors: "monitorId",
-          })) {
-            const id = payload[field];
+          if (event.timelineMs < time)
+            throw new Error("Recording timeline moved backwards");
+          time = event.timelineMs;
+        }
+        if (session.cache && session.cacheWritable) {
+          try {
             if (
-              typeof id === "string" &&
-              !session.objectOrder.has(`${kind}/${id}`)
+              !(await session.cache.append(
+                events,
+                AbortSignal.any([signal, session.stop.signal]),
+              ))
             )
-              session.objectOrder.set(`${kind}/${id}`, event.serverSeq);
+              session.disableCache();
+          } catch {
+            session.disableCache();
           }
         }
-        session.events.push(...events);
-        session.bytes += added;
-        if (session.follow) {
-          try {
-            session.seek(session.duration, true);
-          } catch (error) {
-            session.follow = false;
-            session.error =
-              error instanceof Error ? error.message : "Playback failed";
-            changed();
-          }
-        } else changed();
+        session.accept(events);
       },
     });
     session.task = session
@@ -163,12 +214,57 @@ export class BrowserSession {
         changed();
       })
       .finally(() => {
+        session.cache?.close();
         if (!session.error) {
           session.status = "stopped";
           changed();
         }
       });
     return session;
+  }
+  private accept(events: readonly StoredEvent[]) {
+    let sequence = this.received,
+      time = this.duration;
+    const added = events.reduce((size, event) => {
+      if (event.serverSeq !== ++sequence || event.timelineMs < time)
+        throw new Error("Recording history is not ordered");
+      time = event.timelineMs;
+      return size + new TextEncoder().encode(JSON.stringify(event)).length;
+    }, 0);
+    if (this.bytes + added > 64 * 1024 * 1024)
+      throw new Error(
+        "This browser viewer has reached its 64 MiB recording limit.",
+      );
+    for (const event of events) {
+      const payload = event.content.payload as Record<string, unknown>;
+      for (const [kind, field] of Object.entries({
+        messages: "messageId",
+        tools: "toolId",
+        changes: "changeId",
+        artifacts: "artifactId",
+        agents: "agentId",
+        tasks: "taskId",
+        goals: "goalId",
+        interactions: "interactionId",
+        plans: "planId",
+        monitors: "monitorId",
+      })) {
+        const id = payload[field];
+        if (typeof id === "string" && !this.objectOrder.has(`${kind}/${id}`))
+          this.objectOrder.set(`${kind}/${id}`, event.serverSeq);
+      }
+    }
+    for (const event of events) this.events.push(event);
+    this.bytes += added;
+    if (this.follow) {
+      try {
+        this.seek(this.duration, true);
+      } catch (error) {
+        this.follow = false;
+        this.error = error instanceof Error ? error.message : "Playback failed";
+        this.changed();
+      }
+    } else this.changed();
   }
   seek(time: number, follow = false) {
     if (!Number.isFinite(time) || time < 0)
