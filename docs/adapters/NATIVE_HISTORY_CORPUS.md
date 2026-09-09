@@ -139,3 +139,11 @@ The corpus validator now also renders each final reconstructed state, checks ter
 | Discovered OpenCode exports | 12 / 12 | 12,230 |
 
 The 35 Claude failures retain the missing identity/timing category. Unsupported source gaps and unavailable artifacts remain explicit; successful snapshot rendering does not establish complete native-object coverage. Byte counts are cumulative across files, not peak memory claims. No rendered corpus transcript is saved or uploaded.
+
+### Claude retained files and embedded plans (2026-09-09)
+
+Read-only shape inspection found 340 text-file attachment records, 1,004 edited-text snippets, and 22 embedded plan references across the discovered Claude corpus. The file records retain content plus start/count/total line metadata. They are now converted from recorded bytes into explicitly labeled excerpt/snippet attachments; embedded plans become Markdown attachments with typed plan references. The activity status is unknown unless separately established. Other attachment categories, including reminders, queued commands, environment/configuration material, and monitor-related records, are not blindly forwarded as files.
+
+The refreshed conversion → reducer → event/snapshot renderer pass processed 1,592 files: 1,557 passed and the same 35 failed standalone identity/timing preflight. It emitted 414,506 normalized events, with 71,405 explicit gaps and 1,746 unavailable attachment representations in this resolver-free validation. The increase in unavailable representations includes newly recognized retained bytes that need an artifact resolver; it does not mean those bytes are absent from the native file.
+
+A selected real existing session containing all three new attachment forms passed private HTTP import, replay, retry deduplication, and download verification: 715 source records, 544 producer events, 546 stored events, 33 messages, 127 tools, one plan, and four downloaded attachments verified. Its 177 remaining gaps comprise 143 other attachment records, eight queue operations, six file-history records, three turn-duration records, and 17 agent-name records. No raw session contents were committed.

@@ -915,3 +915,11 @@ The reference watcher now implements that separation and interactive space/q con
 Keep optional presentation checkpoints separate from the durable receipt cursor. Bind each checkpoint to the server origin, stream, revision, event sequence, and JSONL prefix hash. Validate it against the retained cache before reconstructing state. Persist progress after successful output writes and at completed cached ranges; a failed output does not advance saved presentation.
 
 The terminal watcher exposes opt-in `--resume-view` and an explicit `--restart-view` reset that retains receipt history. Restoration shows current state and continues with later events. Receipt recovery must work without this metadata, including when presentation metadata is corrupt. This does not provide exactly-once external output: a crash after output but before checkpoint persistence may repeat that output. Persisted pause/speed/follow preferences, indexed state snapshots, interactive reseeking, and paged state remain required.
+
+### Claude retained file attachments
+
+Claude native attachment rows include context/reminder records as well as file content. Convert only validated retained text-file, edited-snippet, and embedded-plan shapes into immutable attachments using their recorded bytes. Do not replace them with current filesystem contents. Label file excerpts with recorded line metadata and edit snippets as snippets, and filter supported text before persistence.
+
+Embedded plans also update typed plan state with an attachment reference. A file reference alone does not establish activity, so plan status supports `unknown`. Other attachment/reminder forms, goal/task observations, monitor/ledger semantics, binary file forms, and multi-file associations remain required work.
+
+This conversion advances Claude import/live policy identity to `claude-history-3`; earlier converter bindings require explicit migration or a separate publication binding. Do not silently reuse source-effect keys with different normalized content.

@@ -388,3 +388,127 @@ it("publishes Claude retained tool state and follows a partial result across res
     await rm(root, { recursive: true, force: true });
   }
 }, 30000);
+
+it("imports retained file excerpts, edit snippets and plans without reading current files", async () => {
+  const { importClaudeRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const { startServer } = await import("../../packages/server/src/http.js");
+  const { initialState, apply, renderTerminalSnapshot } =
+    await import("../../packages/playback/src/index.js");
+  const root = await mkdtemp(join(tmpdir(), "agentlive-claude-files-"));
+  const ownerCredential = "b".repeat(64);
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: ownerCredential,
+    port: 0,
+  });
+  try {
+    const sourcePath = join(root, "session.jsonl");
+    const attachments = [
+      {
+        type: "file",
+        filename: "/missing/private-key/source.ts",
+        content: {
+          type: "text",
+          file: {
+            filePath: "/missing/private-key/source.ts",
+            content: "captured private-key code",
+            startLine: 10,
+            numLines: 2,
+            totalLines: 100,
+          },
+        },
+      },
+      {
+        type: "edited_text_file",
+        filename: "/missing/source.ts",
+        snippet: "edited private-key snippet",
+      },
+      {
+        type: "plan_file_reference",
+        planFilePath: "/missing/plan.md",
+        planContent: "# Plan\nprivate-key content",
+      },
+      {
+        type: "file",
+        filename: "/missing/unsupported",
+        content: { type: "binary" },
+      },
+    ];
+    await writeFile(
+      sourcePath,
+      attachments
+        .map((attachment, index) =>
+          JSON.stringify({
+            type: "attachment",
+            uuid: "a" + index,
+            sessionId: "files_claude",
+            timestamp: "2026-09-01T00:00:00.000Z",
+            attachment,
+          }),
+        )
+        .join("\n") + "\n",
+    );
+    const options = {
+      sourcePath,
+      publisherRoot: join(root, "publisher"),
+      serverOrigin: server.url,
+      ownerCredential,
+      title: "Files",
+      visibility: "private" as const,
+      secrets: ["private-key"],
+      signal: AbortSignal.timeout(10000),
+    };
+    const imported = await importClaudeRecording(options);
+    expect(imported.report.availableAttachments).toBe(3);
+    expect(imported.report.unsupported).toEqual({ attachment: 1 });
+    const session = await server.store.get(imported.streamId);
+    let state = initialState();
+    for await (const event of session.history(0, session.boundary.sequence))
+      state = apply(state, event);
+    expect(state.references.size).toBe(3);
+    expect(state.plans.size).toBe(1);
+    expect([...state.plans.values()][0]).toMatchObject({
+      status: "unknown",
+      sourceReference: "/missing/plan.md",
+    });
+    expect([...state.plans.values()][0]?.attachment).toBeDefined();
+    const downloads: string[] = [];
+    for (const artifact of state.artifacts.values()) {
+      const attachment = [...artifact.versions.values()][0]!;
+      expect(attachment.provenance).toBe("historical-version");
+      const url =
+        server.url +
+        "/api/v1/streams/" +
+        imported.streamId +
+        "/attachments/" +
+        attachment.hash;
+      expect((await fetch(url)).status).toBe(403);
+      const response = await fetch(url, {
+        headers: { authorization: "Bearer " + ownerCredential },
+      });
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).not.toContain("private-key");
+      downloads.push(text);
+    }
+    expect(downloads.join("\n")).toContain(
+      "Start line: 10; captured lines: 2; source total lines: 100",
+    );
+    expect(downloads.join("\n")).toContain("edited [REDACTED] snippet");
+    expect(downloads).toContain("# Plan\n[REDACTED] content");
+    const rendered = [
+      ...renderTerminalSnapshot(state, server.url, imported.streamId),
+    ].join("");
+    expect(rendered).toContain("Recorded file excerpt");
+    expect(rendered).toContain("Recorded edit snippet");
+    expect(rendered).toContain("Recorded plan");
+    expect(rendered).not.toContain("private-key");
+    const before = session.boundary.sequence;
+    await importClaudeRecording(options);
+    expect(session.boundary.sequence).toBe(before);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

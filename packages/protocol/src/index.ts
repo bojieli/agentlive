@@ -113,7 +113,7 @@ export const contentSchema = z.discriminatedUnion("kind", [
   event("plan.updated", {
     planId: idSchema,
     agentId: idSchema.optional(),
-    status: z.enum(["active", "inactive"]),
+    status: z.enum(["active", "inactive", "unknown"]),
     version: sequenceSchema.optional(),
     sourceHash: hashSchema.optional(),
     byteSize: cursorSchema.optional(),

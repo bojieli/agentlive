@@ -12,6 +12,7 @@ import {
   type SourceCursor,
   type SourceRecord,
 } from "./jsonl.js";
+import { claudeFileAttachment } from "./claude-file-attachments.js";
 import { chunkContent } from "./chunks.js";
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
@@ -404,6 +405,19 @@ export async function createClaudeHistoryConsumer(
             timestamp,
           );
       }
+    } else if (row.type === "attachment") {
+      const converted = await claudeFileAttachment(
+        row.attachment,
+        key,
+        filter,
+        resolveInline,
+      );
+      if (converted) {
+        await emit(key, converted.content, timestamp);
+        report.messages++;
+        if (converted.available) report.availableAttachments++;
+        else report.unavailableAttachments++;
+      } else await unsupported(key, "attachment", timestamp);
     } else if (
       row.type === "system" &&
       (typeof row.content === "string" ||
