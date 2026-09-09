@@ -43,3 +43,13 @@ export {
   type KimiCaptureSink,
 } from "./kimi-history.js";
 export { importKimiRecording, type KimiImportOptions } from "./import-kimi.js";
+export {
+  inspectOpenCodeHistory,
+  captureOpenCodeHistory,
+  type OpenCodeHistoryManifest,
+  type OpenCodeCaptureSink,
+} from "./opencode-history.js";
+export {
+  importOpenCodeRecording,
+  type OpenCodeImportOptions,
+} from "./import-opencode.js";

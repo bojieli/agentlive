@@ -8,6 +8,7 @@ import {
   importCodexRecording,
   importClaudeRecording,
   importKimiRecording,
+  importOpenCodeRecording,
 } from "../packages/adapters/dist/index.js";
 import { startServer } from "../packages/server/dist/index.js";
 import { initialState, apply } from "../packages/playback/dist/index.js";
@@ -17,17 +18,21 @@ const agent =
     ? (args.shift(), "claude")
     : args[0] === "--kimi"
       ? (args.shift(), "kimi")
-      : "codex";
+      : args[0] === "--opencode"
+        ? (args.shift(), "opencode")
+        : "codex";
 const sourcePath = args[0];
 const importRecording =
   agent === "claude"
     ? importClaudeRecording
     : agent === "kimi"
       ? importKimiRecording
-      : importCodexRecording;
+      : agent === "opencode"
+        ? importOpenCodeRecording
+        : importCodexRecording;
 if (!sourcePath)
   throw new Error(
-    "Usage: node scripts/probe-history-import.mjs <codex-session.jsonl>",
+    "Usage: node scripts/probe-history-import.mjs [--claude|--kimi|--opencode] <native-history> [artifact-roots...]",
   );
 const root = await mkdtemp(join(tmpdir(), "agentlive-history-import-"));
 const ownerCredential = randomBytes(32).toString("hex");
