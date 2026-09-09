@@ -37,6 +37,11 @@ export const attachmentSchema = z.strictObject({
   filename: z.string().min(1).max(255),
   mediaType: z.string().min(1).max(128),
   byteSize: cursorSchema,
+  capturedAt: z.iso.datetime().optional(),
+  sourceHash: hashSchema.optional(),
+  provenance: z
+    .enum(["live-capture", "historical-version", "current-file"])
+    .optional(),
 });
 
 export const contentSchema = z.discriminatedUnion("kind", [

@@ -819,3 +819,9 @@ Recommended license direction is MIT for protocol, adapters, server, and viewers
 | License | MIT | Before publication |
 
 The architecture decisions in section 1 are settled for the initial implementation. Remaining choices can be resolved at their stated gates; unsupported upstream capture/recovery capabilities must narrow the advertised matrix rather than weaken durability or invent missing history.
+
+### Artifact provenance and durable publisher capture
+
+Artifact capture must commit immutable local bytes and a stable source-reference/version binding before upload or announcing availability. Retries and publisher restarts reuse those bytes even if the original path changes or disappears. The binding includes the capture policy fingerprint; changing the policy requires explicit reconciliation instead of silently reusing a differently filtered artifact. Upload retries query the server by hash and size to reconcile a lost acknowledgment. Availability and resolved references follow server durability acknowledgment.
+
+Historical imports label a local file without an original source hash as `current-file`. Only verified original bytes may be labeled `historical-version`; live captures use `live-capture`. Keep capture time, original-byte hash, and the filtered broadcast-byte hash separately. A missing original file must produce an unavailable representation, never a fabricated historical version. Resolve paths only within configured source roots, bound file sizes, reject malformed UTF-8 in declared text artifacts, filter known secrets before hashing broadcast bytes, and preserve immutable versions. Extend the same pipeline to inline images and authenticated provider artifact resolvers; those are separate implementation gates from local-file capture.

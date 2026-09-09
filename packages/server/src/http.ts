@@ -241,11 +241,14 @@ export async function startServer(options: ServerOptions) {
       hash: hashSchema.parse(c.req.header("x-attachment-sha256")),
       byteSize: integer(c.req.header("x-attachment-bytes")),
     };
-    if (!c.req.raw.body)
+    if (!c.req.raw.body && descriptor.byteSize !== 0)
       throw new ProtocolError("invalid_request", "Missing upload body");
-    const source = Readable.fromWeb(
-      c.req.raw.body as import("node:stream/web").ReadableStream<Uint8Array>,
-    );
+    const source = c.req.raw.body
+      ? Readable.fromWeb(
+          c.req.raw
+            .body as import("node:stream/web").ReadableStream<Uint8Array>,
+        )
+      : Readable.from([]);
     try {
       const uploaded = await session.uploadAttachment(
         secret,
