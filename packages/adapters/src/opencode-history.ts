@@ -122,6 +122,20 @@ export async function inspectOpenCodeHistory(
     records: data.messages.length,
   };
 }
+/** Read the exact export inspected before creating an import binding. */
+export async function readOpenCodeImportSnapshot(
+  path: string,
+  manifest: OpenCodeHistoryManifest,
+  signal?: AbortSignal,
+) {
+  const { data, boundary } = await readExport(path, signal);
+  if (
+    data.info.id !== manifest.nativeSessionId ||
+    canonicalJson(boundary) !== canonicalJson(manifest.boundary)
+  )
+    throw new Error("OpenCode export changed since preflight");
+  return data;
+}
 export type OpenCodeCaptureSink = Pick<
   PublisherJournal,
   "identity" | "capture"

@@ -23,7 +23,7 @@ Commands:
   agentlive serve [--host 127.0.0.1] [--port 7331] [--max-cached-sessions 128] [--shutdown-timeout-ms 30000]
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
-  agentlive publish --agent opencode --native-server <origin> --native-session <id>
+  agentlive publish --agent opencode --native-server <origin> --native-session <id> [--source <original-export> --resume-import]
   agentlive watch --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive] [--resume-view | --restart-view]
   agentlive replay --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive] [--from-ms <position>]
 
@@ -249,9 +249,7 @@ async function main() {
         "OpenCode publishing requires --native-server and --native-session",
       );
     if (
-      values.source ||
       values["native-agent"] ||
-      values["resume-import"] ||
       values["record-format"] ||
       values["artifact-base"]
     )
@@ -273,6 +271,8 @@ async function main() {
       ...(values["artifact-root"]
         ? { artifactRoots: values["artifact-root"] }
         : {}),
+      ...(values.source ? { sourcePath: resolve(values.source) } : {}),
+      resumeImport: values["resume-import"] ?? false,
       publisherRoot: join(stateDir, "publisher"),
       serverOrigin: values.server ?? "http://127.0.0.1:7331",
       ownerCredential: secret,

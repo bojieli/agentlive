@@ -395,3 +395,135 @@ it("continues durable capture while the AgentLive server is offline and sends th
   }
   if (failure) throw failure;
 }, 20000);
+
+it("continues a snapshot import in the same stream and deduplicates restart", async () => {
+  const { importOpenCodeRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const root = await mkdtemp(
+    join(tmpdir(), "agentlive-opencode-resume-import-"),
+  );
+  cleanup.push(() => rm(root, { recursive: true, force: true }));
+  const native = await nativeServer();
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: "b".repeat(64),
+    port: 0,
+  });
+  cleanup.push(() => server.close());
+  const headers = {
+    authorization: `Basic ${Buffer.from("opencode:native-password").toString("base64")}`,
+  };
+  const info = await (
+    await fetch(native.url + "/session/ses_test", { headers })
+  ).json();
+  const messages = await (
+    await fetch(native.url + "/session/ses_test/message", { headers })
+  ).json();
+  const sourcePath = join(root, "export.json");
+  await writeFile(sourcePath, JSON.stringify({ info, messages }));
+  const options = {
+    publisherRoot: join(root, "publisher"),
+    serverOrigin: server.url,
+    ownerCredential: "b".repeat(64),
+    title: "Imported then live",
+    visibility: "private" as const,
+    secrets: ["native-password"],
+    sourcePath,
+  };
+  const imported = await importOpenCodeRecording({
+    ...options,
+    signal: AbortSignal.timeout(10000),
+  });
+  const session = await server.store.get(imported.streamId);
+  const before = [];
+  for await (const event of session.history(0, session.boundary.sequence))
+    before.push(event);
+  const live = {
+    ...options,
+    nativeServerOrigin: native.url,
+    nativeSessionId: "ses_test",
+    nativePassword: "native-password",
+  };
+  await expect(
+    publishOpenCodeRecording({ ...live, signal: AbortSignal.timeout(5000) }),
+  ).rejects.toThrow("--resume-import");
+  expect(session.info.lifecycle).toBe("ended");
+  const originalExport = await readFile(sourcePath, "utf8");
+  await writeFile(sourcePath, originalExport + " ");
+  await expect(
+    publishOpenCodeRecording({
+      ...live,
+      resumeImport: true,
+      signal: AbortSignal.timeout(5000),
+    }),
+  ).rejects.toThrow("changed since import");
+  expect(session.info.lifecycle).toBe("ended");
+  await writeFile(sourcePath, originalExport);
+  await expect(
+    publishOpenCodeRecording({
+      ...live,
+      resumeImport: true,
+      secrets: ["changed-filter"],
+      signal: AbortSignal.timeout(5000),
+    }),
+  ).rejects.toThrow("filtering policy changed");
+  expect(session.info.lifecycle).toBe("ended");
+  let abort = new AbortController();
+  let failure: unknown;
+  let captured = 0;
+  const begin = (resumeImport: boolean) =>
+    publishOpenCodeRecording({
+      ...live,
+      resumeImport,
+      signal: abort.signal,
+      onReady: (recording) => {
+        expect(recording.streamId).toBe(imported.streamId);
+      },
+      onCaptured: (boundary) => {
+        captured = boundary.producerEvents;
+      },
+    }).catch((error) => {
+      failure = error;
+    });
+  let running = begin(true);
+  const waitFor = async (text: string) => {
+    await expect
+      .poll(
+        async () => {
+          if (failure) throw failure;
+          if (!captured) return false;
+          let state = initialState();
+          for await (const event of session.history(
+            0,
+            session.boundary.sequence,
+          ))
+            state = apply(state, event);
+          return (
+            state.messages.size === 1 &&
+            [...state.messages.values()][0]?.text === text &&
+            session.info.lifecycle === "open"
+          );
+        },
+        { timeout: 10000 },
+      )
+      .toBe(true);
+  };
+  try {
+    await waitFor("retained");
+    expect(session.boundary.sequence).toBe(before.length + 1);
+    abort.abort();
+    await running;
+    native.update("continued after import");
+    abort = new AbortController();
+    captured = 0;
+    running = begin(false);
+    await waitFor("continued after import");
+    const prefix = [];
+    for await (const event of session.history(0, before.length))
+      prefix.push(event);
+    expect(prefix).toEqual(before);
+  } finally {
+    abort.abort();
+    await running;
+  }
+});

@@ -7,7 +7,10 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
-import { publishOpenCodeRecording } from "../packages/adapters/dist/index.js";
+import {
+  publishOpenCodeRecording,
+  importOpenCodeRecording,
+} from "../packages/adapters/dist/index.js";
 import { startServer } from "../packages/server/dist/index.js";
 import {
   initialState,
@@ -19,6 +22,8 @@ import { watchRecording } from "../packages/cli/dist/watch.js";
 const root = await realpath(
   await mkdtemp(join(tmpdir(), "agentlive-opencode-live-")),
 );
+const resumeImport = process.argv.includes("--resume-import");
+const importSource = join(root, "native-export.json");
 const password = randomBytes(32).toString("hex");
 const allocator = createServer();
 await new Promise((resolve) => allocator.listen(0, "127.0.0.1", resolve));
@@ -158,6 +163,7 @@ function attach() {
   captured = 0;
   publisherAbort = new AbortController();
   publishing = publishOpenCodeRecording({
+    ...(resumeImport ? { sourcePath: importSource, resumeImport: true } : {}),
     publisherRoot: join(root, "publisher"),
     serverOrigin: target.url,
     ownerCredential: password,
@@ -218,6 +224,27 @@ try {
     await native("/session", { title: "Synthetic AgentLive resume probe" })
   ).id;
   await prompt("AGENTLIVE_INITIAL_OK", true);
+  if (resumeImport) {
+    await writeFile(
+      importSource,
+      JSON.stringify({
+        info: await native(`/session/${nativeId}`),
+        messages: await native(`/session/${nativeId}/message`),
+      }),
+    );
+    const imported = await importOpenCodeRecording({
+      sourcePath: importSource,
+      publisherRoot: join(root, "publisher"),
+      serverOrigin: target.url,
+      ownerCredential: password,
+      title: "Synthetic OpenCode publishing",
+      visibility: "private",
+      secrets: ["probe-private-key"],
+      artifactRoots: [],
+      signal,
+    });
+    streamId = imported.streamId;
+  }
   attach();
   await until("AGENTLIVE_INITIAL_OK");
   await stopNative();
@@ -341,6 +368,7 @@ try {
       detachedHistoryRecovered: true,
       publisherRestartDeduplicated: true,
       liveConverterMigration: true,
+      resumedSnapshotImport: resumeImport,
       storedEvents: final,
       verifiedAttachments,
     }),

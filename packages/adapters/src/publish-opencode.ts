@@ -1,3 +1,4 @@
+import { resumeImportedRecording } from "./resume-import.js";
 import { readFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -19,6 +20,8 @@ import { OpenCodeCapture } from "./opencode-capture.js";
 import { observeOpenCodeSession } from "./observe-opencode.js";
 export interface OpenCodePublishOptions {
   artifactRoots?: readonly string[];
+  sourcePath?: string;
+  resumeImport?: boolean;
   publisherRoot: string;
   serverOrigin: string;
   ownerCredential: string;
@@ -89,23 +92,55 @@ export async function publishOpenCodeRecording(
         }
       }
     }
+    let imported:
+      { artifactBaseDirectory: string; artifactRoots: string[] } | undefined;
     try {
-      await readFile(join(journal.directory, "import.json"));
-      throw new Error(
-        "OpenCode historical imports require snapshot converter migration before live continuation",
+      imported = JSON.parse(
+        await readFile(join(journal.directory, "import.json"), "utf8"),
       );
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    if (!imported && options.resumeImport)
+      throw new Error(
+        "No import exists for this server and native session binding",
+      );
     const secrets = [
       ...(options.secrets ?? []),
       options.ownerCredential,
       journal.identity.writeSecret,
       ...(options.nativePassword ? [options.nativePassword] : []),
     ];
-    const roots = (options.artifactRoots ?? [])
+    const roots = (options.artifactRoots ?? imported?.artifactRoots ?? [])
       .map((root) => resolve(root))
       .sort();
+    if (imported) {
+      if (!options.sourcePath)
+        throw new Error(
+          "OpenCode import continuation requires the original export --source",
+        );
+      // Verify the capture filter before remotely reopening an ended recording.
+      const retained = await OpenCodeCapture.open(journal, secrets);
+      await retained.close();
+      await resumeImportedRecording({
+        journal,
+        sourcePath: options.sourcePath,
+        requested: options.resumeImport ?? false,
+        signal,
+        identity: {
+          version: 1,
+          converterVersion: "opencode-snapshot-4",
+          recordFormat: "snapshot",
+          baseDirectory: imported.artifactBaseDirectory,
+          roots,
+          title: options.title,
+          visibility: options.visibility,
+          filterFingerprint: createHash("sha256")
+            .update(canonicalJson([...new Set(options.secrets ?? [])].sort()))
+            .digest("hex"),
+        },
+      });
+    }
     const identity = {
       artifactRoots: roots,
       version: 1,
@@ -152,7 +187,7 @@ export async function publishOpenCodeRecording(
     artifacts = await localArtifactResolver({
       directory: join(journal.directory, "artifacts"),
       roots,
-      baseDirectory: "/",
+      baseDirectory: imported?.artifactBaseDirectory ?? "/",
       secrets,
       serverOrigin: journal.identity.serverOrigin,
       streamId: journal.identity.streamId!,

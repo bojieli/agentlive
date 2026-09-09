@@ -204,3 +204,13 @@ Server shutdown stops admission and drains accepted work. Configure its waiting 
 
 
 To watch with recorded timing, use `agentlive watch --stream <id> --speed 1 --interactive`. Space pauses presentation, +/- changes speed, `l` resumes immediate live catch-up, and `q` exits. Receipt continues while playback is paused or slowed. Without `--speed`, watch catches up immediately. Catch-up preserves every event in order; it does not discard intervening history. `--resume-view` also restores the timing anchor at the saved presentation position.
+
+
+New OpenCode snapshot imports can continue in the same shared recording:
+
+```sh
+agentlive import --agent opencode --source session-export.json --title "My session"
+agentlive publish --agent opencode --native-server http://127.0.0.1:4096 --native-session <native-session-id> --source session-export.json --resume-import --title "My session"
+```
+
+Use the same state directory, target server, title, visibility, filtering secrets, and artifact settings. Retain the original export unchanged. After the first successful transition, publishing can restart with the same arguments; `--resume-import` is then optional, but `--source` remains required to verify the imported prefix. Native authentication secrets must already be included in the import’s filtering policy if they add to that policy. The importer now uses converter `opencode-snapshot-4`; earlier export converters still require migration before continuation.

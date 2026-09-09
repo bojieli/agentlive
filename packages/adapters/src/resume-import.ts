@@ -1,3 +1,4 @@
+import { inspectOpenCodeHistory } from "./opencode-history.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -82,12 +83,22 @@ export async function resumeImportedRecording(options: {
       prefixHash: z.string().regex(/^[a-f0-9]{64}$/),
     })
     .parse({ offset: imported.sourceBytes, prefixHash: imported.sourcePrefix });
-  for await (const _ of readJsonlSource(options.sourcePath, {
-    after: cursor,
-    through: cursor.offset,
-    signal,
-  }))
-    void _;
+  if (journal.identity.nativeAgent === "opencode") {
+    const source = await inspectOpenCodeHistory(options.sourcePath, signal);
+    if (
+      source.nativeSessionId !== journal.identity.nativeSessionId ||
+      source.boundary.offset !== cursor.offset ||
+      source.boundary.prefixHash !== cursor.prefixHash
+    )
+      throw new Error("OpenCode export changed since import");
+  } else {
+    for await (const _ of readJsonlSource(options.sourcePath, {
+      after: cursor,
+      through: cursor.offset,
+      signal,
+    }))
+      void _;
+  }
   if (journal.identity.nativeAgent === "codex") {
     let structured = false;
     for await (const record of readJsonlSource(options.sourcePath, {
