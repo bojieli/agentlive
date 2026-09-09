@@ -900,3 +900,60 @@ it("remembers control changes while paused and restores timed mode without block
     await cache.close();
   }
 });
+
+it("seeks cached timelines across equal-time index boundaries and rebuilds on reopen", async () => {
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { root, server, session, publish } = await setup();
+  for (let batch = 0; batch < 4; batch++) await publish(100);
+  const events = [];
+  for await (const event of session.history(0, session.boundary.sequence))
+    events.push({
+      ...event,
+      timelineMs: Math.floor((event.serverSeq - 1) / 200) * 1000,
+    });
+  const cacheRoot = join(root, "timeline-index");
+  const settings = {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    initialize: async () => ({ revision: session.info.revision }),
+  };
+  let cache = await SubscriberCache.open(cacheRoot, settings);
+  try {
+    expect(await cache.sequenceAt(0)).toBe(0);
+    await cache.commit(events, { ...cache.cursor, serverSeq: events.length });
+    for (let restart = 0; restart < 2; restart++) {
+      expect(await cache.sequenceAt(0)).toBe(200);
+      expect(await cache.sequenceAt(999)).toBe(200);
+      expect(await cache.sequenceAt(1000)).toBe(400);
+      expect(await cache.sequenceAt(1000, 257)).toBe(257);
+      expect(await cache.sequenceAt(0, 128)).toBe(128);
+      expect(await cache.sequenceAt(9999)).toBe(events.length);
+      expect(await cache.sequenceAt(9999, 0)).toBe(0);
+      await expect(cache.sequenceAt(-1)).rejects.toThrow("timeline");
+      await expect(cache.sequenceAt(NaN)).rejects.toThrow("timeline");
+      await expect(cache.sequenceAt(1000, events.length + 1)).rejects.toThrow(
+        "receipt",
+      );
+      await cache.close();
+      cache = await SubscriberCache.open(cacheRoot, settings);
+    }
+    const position = events.length;
+    const bad = { ...events.at(-1)!, serverSeq: position + 1, timelineMs: 0 };
+    await expect(
+      cache.commit([bad], { ...cache.cursor, serverSeq: position + 1 }),
+    ).rejects.toThrow("backwards");
+    expect(cache.cursor.serverSeq).toBe(position);
+    expect(await cache.sequenceAt(2000)).toBe(position);
+    const pending = cache.commit([{ ...bad, timelineMs: 3000 }], {
+      ...cache.cursor,
+      serverSeq: position + 1,
+    });
+    const frozen = cache.sequenceAt(9999);
+    await pending;
+    expect(await frozen).toBe(position);
+    expect(await cache.sequenceAt(9999)).toBe(position + 1);
+  } finally {
+    await cache.close();
+  }
+});

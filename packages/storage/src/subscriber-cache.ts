@@ -39,6 +39,8 @@ function playbackPreferences(value: unknown): PlaybackPreferences {
 }
 /** The durable event prefix is the receipt cursor; no separately updated cursor file. */
 export class SubscriberCache {
+  private timelineIndex: { sequence: number; timelineMs: number }[] = [];
+  private lastTimelineMs = 0;
   private tail: Promise<unknown> = Promise.resolve();
   private closed = false;
   private presentationTail: Promise<unknown> = Promise.resolve();
@@ -113,17 +115,21 @@ export class SubscriberCache {
       });
       if (log.boundary.byteOffset > maxBytes)
         throw new Error("Subscriber cache exceeds its storage limit");
-      for await (const entry of log.read()) {
-        if (entry.value.serverSeq !== entry.sequence)
-          throw new Error("Subscriber cache sequence mismatch");
-      }
-      return new SubscriberCache(
+      const cache = new SubscriberCache(
         log,
         lock,
         Object.freeze({ serverOrigin, streamId, revision }),
         maxBytes,
         directory,
       );
+      for await (const entry of log.read()) {
+        if (entry.value.serverSeq !== entry.sequence)
+          throw new Error("Subscriber cache sequence mismatch");
+        if (entry.value.timelineMs < cache.lastTimelineMs)
+          throw new Error("Subscriber cache timeline moved backwards");
+        cache.indexTimeline(entry.value);
+      }
+      return cache;
     } catch (error) {
       await log?.close();
       await lock.release();
@@ -135,6 +141,44 @@ export class SubscriberCache {
   }
   async *events(after = 0, through = this.cursor.serverSeq) {
     for await (const entry of this.log.read(after, through)) yield entry.value;
+  }
+  private indexTimeline(event: StoredEvent) {
+    if ((event.serverSeq - 1) % 128 === 0)
+      this.timelineIndex.push({
+        sequence: event.serverSeq,
+        timelineMs: event.timelineMs,
+      });
+    this.lastTimelineMs = event.timelineMs;
+  }
+  /** Inclusive timeline seek within a frozen durable prefix; equal timestamps stay in sequence order. */
+  async sequenceAt(
+    timelineMs: number,
+    through = this.cursor.serverSeq,
+  ): Promise<number> {
+    if (!Number.isFinite(timelineMs) || timelineMs < 0)
+      throw new RangeError("Invalid timeline position");
+    cursorSchema.parse(through);
+    if (through > this.cursor.serverSeq)
+      throw new Error("Timeline seek exceeds durable receipt");
+    await this.tail;
+    if (this.closed) throw new Error("Subscriber cache is closed");
+    let low = 0,
+      high = this.timelineIndex.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      const entry = this.timelineIndex[middle]!;
+      if (entry.sequence <= through && entry.timelineMs <= timelineMs)
+        low = middle + 1;
+      else high = middle;
+    }
+    if (!low) return 0;
+    const anchor = this.timelineIndex[low - 1]!;
+    let sequence = anchor.sequence - 1;
+    for await (const entry of this.log.read(sequence, through)) {
+      if (entry.value.timelineMs > timelineMs) break;
+      sequence = entry.sequence;
+    }
+    return sequence;
   }
   private async presentationHash(serverSeq: number): Promise<string> {
     cursorSchema.parse(serverSeq);
@@ -278,9 +322,14 @@ export class SubscriberCache {
       )
         throw new Error("Subscriber cache revision changed");
       let sequence = this.log.boundary.sequence;
-      for (const event of copied)
+      let timelineMs = this.lastTimelineMs;
+      for (const event of copied) {
         if (event.serverSeq !== ++sequence)
           throw new Error("Subscriber cache commit is not contiguous");
+        if (event.timelineMs < timelineMs)
+          throw new Error("Subscriber cache timeline moved backwards");
+        timelineMs = event.timelineMs;
+      }
       if (sequence !== receipt.serverSeq)
         throw new Error("Subscriber cache receipt does not match events");
       // Include the JSONL envelope and hash overhead, conservatively, before allocating append buffers.
@@ -291,6 +340,7 @@ export class SubscriberCache {
       if (this.log.boundary.byteOffset + added > this.maxBytes)
         throw new Error("Subscriber cache storage limit reached");
       await this.log.append(copied);
+      for (const event of copied) this.indexTimeline(event);
       for (const wake of [...this.readers]) wake();
     });
     this.tail = work.catch(() => {});

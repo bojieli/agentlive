@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { SubscriberCache } from "../packages/storage/dist/index.js";
 import { PublisherJournal } from "../packages/publisher/dist/index.js";
 /** Real native server restart and offline-history catch-up using supported OpenCode APIs. */
 import { spawn } from "node:child_process";
@@ -355,10 +356,31 @@ try {
     throw new Error(
       "Native viewer restart did not reconstruct exactly its saved presentation state",
     );
+  const cached = await SubscriberCache.open(join(root, "subscriber"), {
+    serverOrigin: target.url,
+    streamId,
+    initialize: async () => {
+      throw new Error("Expected retained viewer cache");
+    },
+  });
+  try {
+    const position = replay.timelineMs / 2;
+    let expected = 0;
+    for await (const event of cached.events())
+      if (event.timelineMs <= position) expected = event.serverSeq;
+    if (
+      (await cached.sequenceAt(position)) !== expected ||
+      (await cached.sequenceAt(replay.timelineMs)) !== final
+    )
+      throw new Error("Indexed native timeline seek differs from replay");
+  } finally {
+    await cached.close();
+  }
   console.log(
     JSON.stringify({
       success: true,
       restoredViewerPosition: true,
+      indexedTimelineSeek: true,
       sessionCacheCapacity: 1,
       pausedViewerReceipt: true,
       orderedViewerCatchup: true,
