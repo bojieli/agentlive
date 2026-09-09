@@ -84,3 +84,10 @@ All 35 failures were `Claude source lacks session identity or timestamp`, matchi
 ## Activity search on a native session
 
 On 2026-09-09, a fresh two-turn Kimi Code probe passed with 35 stored events, seven messages, and 19 activity cards. The shared verifier found an actual captured message using the production snapshot-search API, retaining only a success flag and aggregate counts/hash. Native resume, full-history backfill, live suffix capture, publisher restart deduplication, and browser-model playback restoration also passed. This verifies search data flow, not rendered browser search interaction or complete upstream capture fidelity.
+
+
+## Bounded text-page rendering
+
+On 2026-09-09, the native Codex probe passed with 117 stored events, five messages, one tool, six activity cards, and no reported capture gaps. Native restart/resume, deduplication, replay equivalence, activity search, and browser-model playback restoration passed using the updated production card renderer.
+
+The read-only corpus sweep with bounded text-page markup passed 527/527 Codex files (107,327 cards), 1,563/1,598 Claude files (215,258 cards), 462/462 Kimi files (44,039 cards), and 12/12 retained OpenCode exports (30 cards). The 35 Claude failures again lacked source session identity or timestamps. These totals cover initial rendered pages and their navigation markup; separate exact-reassembly tests establish that page boundaries preserve the complete input text. They do not establish real-browser control behavior, search-to-page scrolling, overall browser memory use, or complete capture fidelity. Raw histories and generated markup remain excluded from repository evidence.

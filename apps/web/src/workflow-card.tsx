@@ -1,3 +1,4 @@
+import { PagedText } from "./paged-text.js";
 import { Disclosure } from "./disclosure.js";
 import type { ReactNode } from "react";
 import type { RecordingState } from "@agentlive/playback";
@@ -99,7 +100,12 @@ export function WorkflowCard({
       owner = task.agentId;
       body = (
         <>
-          <pre>{task.description || "No description recorded."}</pre>
+          <PagedText
+            text={task.description || "No description recorded."}
+            group={`${kind}/${id}`}
+            choice={`${kind}/${id}/description`}
+            label="Task description"
+          />
           {task.detached !== undefined && (
             <p className="muted">
               {task.detached
@@ -121,7 +127,12 @@ export function WorkflowCard({
       owner = goal.agentId;
       body = (
         <>
-          <pre>{goal.objective || "No objective recorded."}</pre>
+          <PagedText
+            text={goal.objective || "No objective recorded."}
+            group={`${kind}/${id}`}
+            choice={`${kind}/${id}/objective`}
+            label="Goal objective"
+          />
           <dl>
             <Field
               name="Completion criterion"
@@ -153,7 +164,12 @@ export function WorkflowCard({
       body = (
         <>
           <p className="muted">Recorded {interaction.interactionType}</p>
-          <pre>{interaction.prompt}</pre>
+          <PagedText
+            text={interaction.prompt}
+            group={`${kind}/${id}`}
+            choice={`${kind}/${id}/prompt`}
+            label="Recorded prompt"
+          />
           {interaction.questions?.map((question, index) => (
             <section className="recorded-question" key={index}>
               {question.header && <strong>{question.header}</strong>}
@@ -286,7 +302,12 @@ export function WorkflowCard({
         className="recorded-data"
       >
         <summary>Recorded data</summary>
-        <pre>{JSON.stringify(value, null, 2)}</pre>
+        <PagedText
+          text={JSON.stringify(value, null, 2)}
+          group={`${kind}/${id}`}
+          choice={`${kind}/${id}/data`}
+          label="Recorded data"
+        />
       </Disclosure>
     </article>
   );

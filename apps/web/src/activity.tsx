@@ -7,6 +7,7 @@ import {
   workflowKinds,
   type WorkflowKind,
 } from "./workflow-card.js";
+import { PagedText } from "./paged-text.js";
 import { Disclosure } from "./disclosure.js";
 export type ActivityKind =
   WorkflowKind | "messages" | "tools" | "changes" | "artifacts" | "gaps";
@@ -72,7 +73,12 @@ export function ActivityCard({
             {...(message.agentId ? { id: message.agentId } : {})}
             state={state}
           />
-          <pre>{message.text || "…"}</pre>
+          <PagedText
+            text={message.text || "…"}
+            group={row.key}
+            choice={`${row.key}/text`}
+            label="Message"
+          />
         </article>
       );
     }
@@ -88,9 +94,19 @@ export function ActivityCard({
             state={state}
           />
           <h4>Input</h4>
-          <pre>{tool.input}</pre>
+          <PagedText
+            text={tool.input}
+            group={row.key}
+            choice={`${row.key}/input`}
+            label="Tool input"
+          />
           <h4>Output</h4>
-          <pre>{tool.output}</pre>
+          <PagedText
+            text={tool.output}
+            group={row.key}
+            choice={`${row.key}/output`}
+            label="Tool output"
+          />
         </Disclosure>
       );
     }
@@ -99,7 +115,12 @@ export function ActivityCard({
       return (
         <Disclosure choice={row.key} className="card" id={row.anchor}>
           <summary>{change.path}</summary>
-          <pre>{change.patch}</pre>
+          <PagedText
+            text={change.patch}
+            group={row.key}
+            choice={`${row.key}/patch`}
+            label="Diff"
+          />
         </Disclosure>
       );
     }

@@ -1136,3 +1136,16 @@ Return one match per object with its first matching field excerpt, at most 50 ob
 Yield to the event loop after bounded scanning work, check cancellation between fields/chunks, and cancel on query changes, position changes, explicit cancel, or unmount. Bind displayed pages to both query and presentation sequence, hiding stale results during render before effect cleanup. Keep result pages bounded rather than accumulating every match. Selecting a result opens the applicable tool/edit or recorded-data disclosure and uses the virtual feed's navigation/focus path.
 
 Validate chunk-spanning Unicode/literal syntax, case distinction, bounded pages without duplicates, hidden-object exclusion, cancellation during large unmatched content, invalid inputs, and excerpt boundaries. Native probe verification locates an actual captured message through the same search API without logging its text. Real-browser interaction and accessibility checks, case-insensitive/normalization options, field-specific filters, and search over paged historical versions remain separate acceptance work.
+
+
+### Bounded text pages inside activity cards
+
+Render message text, tool input/output, diff patches, task descriptions, goal objectives, recorded interaction prompts, and formatted Recorded data through one shared PagedText component. Each field displays one 16,384-unit logical page, extending by at most one UTF-16 unit where needed to preserve a surrogate pair. Adjacent page boundaries coincide so concatenating all pages reproduces the source string exactly once, without omissions or duplicates. Do not truncate the canonical text or silently hide inaccessible suffixes.
+
+Provide first/previous/next controls and an explicit Follow latest text toggle. Initially uninspected text follows its last page while the viewer follows live; persist that choice in the joined viewer before a pause so pausing does not jump back to page one. Manual page selection stops text following for that field. Clamp retained page numbers when seeking to shorter text without erasing the retained inspection choice.
+
+Keep page choices and handled search-request generations above virtual rows. Unmount/remount must retain manual page choices and must not reapply an already handled search request. Search selection reveals the first matching page in applicable text fields, in addition to opening disclosures and focusing the row. These inspection preferences last for the joined viewer and are not yet saved across leave/reload.
+
+Validate exact reassembly, supplementary Unicode at boundaries, offset-to-page lookup, empty text, retained-page clamping, invalid inputs, bounded production markup, and access to the final suffix. Exercise production card markup with retained native histories and fresh native-session probes. Real-browser paging, search-to-page focus/scroll interaction, and mobile control layout remain release gates.
+
+This is bounded DOM presentation of text fields, not storage-backed transcript paging. Complete source strings remain in the reducer; Recorded data formatting can still allocate a full JSON string before slicing. Other long inline fields/collections and artifact-version lists remain subject to their current rendering behavior. Immutable content pages, bounded reconstruction working sets, and persisted inspection preferences still require implementation.

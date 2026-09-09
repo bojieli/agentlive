@@ -10,7 +10,7 @@ export function ActivitySearchPanel({
 }: {
   state: RecordingState;
   rows: readonly ActivityRow[];
-  onSelect: (index: number) => void;
+  onSelect: (index: number, query: string) => void;
   onPause: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -107,7 +107,7 @@ export function ActivitySearchPanel({
           <ul>
             {page.matches.map((match) => (
               <li key={match.key}>
-                <button onClick={() => onSelect(match.index)}>
+                <button onClick={() => onSelect(match.index, query)}>
                   <strong>{rows[match.index]?.kind}</strong>
                   <span>{match.excerpt}</span>
                 </button>

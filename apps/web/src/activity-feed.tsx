@@ -10,6 +10,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import type { RecordingState } from "@agentlive/playback";
 import type { Attachment } from "./attachments.js";
 import { ActivityCard, activityRows } from "./activity.js";
+import { TextPagesProvider, useRevealText } from "./paged-text.js";
 import { ActivitySearchPanel } from "./activity-search-panel.js";
 import { activityRange } from "./activity-range.js";
 import { ExpansionProvider, useRevealDisclosure } from "./disclosure.js";
@@ -22,7 +23,9 @@ export function ActivityFeed(props: {
 }) {
   return (
     <ExpansionProvider>
-      <VirtualActivity {...props} />
+      <TextPagesProvider following={props.following}>
+        <VirtualActivity {...props} />
+      </TextPagesProvider>
     </ExpansionProvider>
   );
 }
@@ -38,6 +41,7 @@ function VirtualActivity({
     [state, state.appliedSeq, order],
   );
   const revealDisclosure = useRevealDisclosure();
+  const revealText = useRevealText();
   const parent = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState<string>();
   const [pending, setPending] = useState<string>();
@@ -111,9 +115,10 @@ function VirtualActivity({
       <ActivitySearchPanel
         state={state}
         rows={rows}
-        onSelect={(index) => {
+        onSelect={(index, query) => {
           const row = rows[index];
           if (!row) return;
+          revealText(row.key, query);
           revealDisclosure(row.key);
           revealDisclosure(`${row.key}/recorded-data`);
           navigate(index);
