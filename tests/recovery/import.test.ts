@@ -668,3 +668,148 @@ it("captures while a bound server is offline and sends the backlog after restart
   }
   if (failure) throw failure;
 }, 25000);
+
+it("continues an ended import in the same recording and recovers a lost reopen acknowledgment", async () => {
+  const { publishCodexRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const { vi } = await import("vitest");
+  const { server, options } = await setup();
+  const { readFile } = await import("node:fs/promises");
+  await writeFile(
+    options.sourcePath,
+    (await readFile(options.sourcePath, "utf8")).trimEnd(),
+  );
+  await expect(
+    publishCodexRecording({ ...options, resumeImport: true }),
+  ).rejects.toThrow("No import exists");
+  const imported = await importCodexRecording(options);
+  const session = await server.store.get(imported.streamId);
+  const baseline = session.boundary.sequence;
+  await expect(
+    publishCodexRecording({
+      ...options,
+      resumeImport: true,
+      secrets: ["different-filter"],
+    }),
+  ).rejects.toThrow("original import options");
+  expect(session.info.lifecycle).toBe("ended");
+  await expect(
+    publishCodexRecording({
+      ...options,
+      resumeImport: true,
+      recordFormat: "legacy",
+    }),
+  ).rejects.toThrow("record format");
+  const originalSource = await readFile(options.sourcePath, "utf8");
+  await writeFile(
+    options.sourcePath,
+    originalSource.replace("Imported", "Replaced"),
+  );
+  await expect(
+    publishCodexRecording({ ...options, resumeImport: true }),
+  ).rejects.toThrow("Source prefix changed");
+  expect(session.info.lifecycle).toBe("ended");
+  await writeFile(options.sourcePath, originalSource);
+  const first = new AbortController();
+  const realFetch = globalThis.fetch;
+  let lost = false;
+  const intercepted = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(async (input, init) => {
+      const response = await realFetch(input, init);
+      if (String(input).endsWith("/reopen") && !lost) {
+        lost = true;
+        first.abort();
+        throw new TypeError("Lost reopen response");
+      }
+      return response;
+    });
+  try {
+    await publishCodexRecording({
+      ...options,
+      resumeImport: true,
+      signal: first.signal,
+    });
+  } finally {
+    intercepted.mockRestore();
+  }
+  expect(lost).toBe(true);
+  expect(session.info.lifecycle).toBe("open");
+  expect(session.boundary.sequence).toBe(baseline + 1);
+  await expect(importCodexRecording(options)).rejects.toThrow(
+    "pending live transition",
+  );
+  await appendFile(
+    options.sourcePath,
+    "\n" +
+      JSON.stringify({
+        type: "event_msg",
+        timestamp: "2026-09-01T00:00:06.000Z",
+        payload: {
+          type: "item_completed",
+          item: {
+            type: "AgentMessage",
+            id: "after_import",
+            content: [{ type: "Text", text: "Continued imported session" }],
+          },
+        },
+      }) +
+      "\n",
+  );
+  async function resume() {
+    const controller = new AbortController();
+    let captured = 0;
+    let failure: unknown;
+    const running = publishCodexRecording({
+      ...options,
+      signal: controller.signal,
+      onReady: (recording) => {
+        expect(recording.streamId).toBe(imported.streamId);
+      },
+      onCaughtUp: async (boundary) => {
+        captured = boundary.producerEvents;
+      },
+    }).catch((error) => {
+      failure = error;
+    });
+    try {
+      await expect
+        .poll(
+          async () => {
+            if (failure) throw failure;
+            if (!captured) return false;
+            let state = initialState();
+            let through = 0;
+            for await (const event of session.history(
+              0,
+              session.boundary.sequence,
+            )) {
+              state = apply(state, event);
+              if (event.origin.type === "publisher")
+                through = event.origin.event.producerSeq;
+            }
+            return (
+              through >= captured &&
+              [...state.messages.values()].some(
+                (message) => message.text === "Continued imported session",
+              )
+            );
+          },
+          { timeout: 10000 },
+        )
+        .toBe(true);
+    } finally {
+      controller.abort();
+      await running;
+    }
+    if (failure) throw failure;
+  }
+  await resume();
+  const after = session.boundary.sequence;
+  await resume();
+  expect(session.boundary.sequence).toBe(after);
+  const reopens = [];
+  for await (const event of session.history(0, session.boundary.sequence))
+    if (event.content.kind === "recording.reopened") reopens.push(event);
+  expect(reopens).toHaveLength(1);
+}, 30000);

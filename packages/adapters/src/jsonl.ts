@@ -59,7 +59,8 @@ export async function* readJsonlSource(
       throw new Error(
         "Source prefix changed; explicit reconciliation is required",
       );
-    if (after && after < info.size) {
+    // Prefix-only verification may end at a parsed closed-file suffix. Reading new records must start after LF.
+    if (after && after < through) {
       const previous = Buffer.alloc(1);
       await file.read(previous, 0, 1, after - 1);
       if (previous[0] !== 10)

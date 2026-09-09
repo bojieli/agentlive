@@ -7,11 +7,13 @@ import { join } from "node:path";
 import { randomUUID, randomBytes } from "node:crypto";
 import {
   publishClaudeRecording,
+  importClaudeRecording,
   inspectClaudeHistory,
 } from "../packages/adapters/dist/index.js";
 import { startServer } from "../packages/server/dist/index.js";
 import { initialState, apply } from "../packages/playback/dist/index.js";
 const root = await mkdtemp(join(tmpdir(), "agentlive-claude-live-"));
+const resumeImport = process.argv.includes("--resume-import");
 const nativeId = randomUUID();
 const ownerCredential = randomBytes(32).toString("hex");
 const signal = AbortSignal.timeout(180000);
@@ -98,6 +100,18 @@ const server = await startServer({
 let streamId;
 let baseline;
 try {
+  if (resumeImport) {
+    const imported = await importClaudeRecording({
+      sourcePath,
+      publisherRoot: join(root, "publisher"),
+      serverOrigin: server.url,
+      ownerCredential,
+      title: "Synthetic Claude live integration",
+      visibility: "private",
+      signal,
+    });
+    streamId = imported.streamId;
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     const controller = new AbortController();
     let caughtUp = false;
@@ -106,6 +120,7 @@ try {
     let failure;
     const running = publishClaudeRecording({
       sourcePath,
+      resumeImport,
       publisherRoot: join(root, "publisher"),
       serverOrigin: server.url,
       ownerCredential,
@@ -177,6 +192,7 @@ try {
     JSON.stringify({
       success: true,
       nativeTurns: 2,
+      importedThenResumed: resumeImport,
       nativeResume: true,
       historyBackfilled: true,
       liveSuffixCaptured: true,

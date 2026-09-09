@@ -107,7 +107,7 @@ npx --yes pnpm@12.3.4 agentlive publish --agent codex --source /path/to/session.
 
 Start `serve` first using the same state directory. Publishing defaults to private visibility. Use `--record-format legacy` for older histories without structured item records. Stop with Ctrl-C and run the same command to resume the same recording; it stays open, and pending captured events remain on disk. The initial retained history is included. Source catch-up and remote delivery are separate states: `source-caught-up` reports local conversion, while publisher status reports network progress.
 
-This command currently supports Codex, Claude Code, and Kimi Code. Initial recording creation needs connectivity; an existing binding can capture text while disconnected. Attachment upload can pause conversion until connectivity returns. Switching an ended import into a live recording still requires an explicit migration that is not yet implemented.
+This command currently supports Codex, Claude Code, and Kimi Code. Initial recording creation needs connectivity; an existing binding can capture text while disconnected. Attachment upload can pause conversion until connectivity returns. Compatible ended imports can continue live with `--resume-import` and their original import options.
 
 A read-only native transport/restart probe is available:
 
@@ -153,3 +153,14 @@ The installed Kimi CLI integration test creates a synthetic session, discovers i
 ```sh
 node scripts/probe-kimi-publish.mjs
 ```
+
+Continue an imported session as a live recording:
+
+```sh
+npx --yes pnpm@12.3.4 agentlive publish --agent claude \
+  --source /path/to/session.jsonl --resume-import
+```
+
+Use the same state directory, server, source prefix, filtering policy, title, visibility, and artifact settings as the import. With `--resume-import`, the default title matches the import command's default. For Codex, select the same structured/legacy format as the imported prefix. The transition preserves the recording ID, producer sequence, and existing attachment identities. Its durable intent and idempotent reopen operation allow retrying the same command after a lost response or process restart.
+
+The import must already be fully uploaded and ended. Changed converters or filtering policies still require a separate migration. OpenCode live continuation remains pending its live adapter. Once the transition starts, the import command rejects that binding to avoid ending a recording being continued live.

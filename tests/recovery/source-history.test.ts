@@ -135,3 +135,18 @@ it("leaves failed consumer commits replayable and rejects a rewritten acknowledg
   ).rejects.toThrow("prefix changed");
   expect(commits).toBe(0);
 });
+it("verifies an imported suffix without LF after growth but requires LF for reading new records", async () => {
+  const path = await source('{"n":1}');
+  const cursor = (await read(path, { tail: "parse" }))[0]!.cursor;
+  await appendFile(path, '\n{"n":2}\n');
+  expect(await read(path, { after: cursor, through: cursor.offset })).toEqual(
+    [],
+  );
+  await expect(read(path, { after: cursor })).rejects.toThrow(
+    "complete-line boundary",
+  );
+  expect((await read(path)).map((record) => record.value)).toEqual([
+    { n: 1 },
+    { n: 2 },
+  ]);
+});

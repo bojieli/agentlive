@@ -356,6 +356,7 @@ it("preserves Kimi goal, task and approval state across live publisher restart",
     const running = publishKimiRecording({
       ...settings,
       signal: controller.signal,
+      resumeImport: true,
       onReady: (recording) => {
         if (streamId) expect(recording.streamId).toBe(streamId);
         streamId = recording.streamId;
@@ -406,6 +407,11 @@ it("preserves Kimi goal, task and approval state across live publisher restart",
     if (failure) throw failure;
   }
   try {
+    const imported = await importKimiRecording({
+      ...settings,
+      signal: AbortSignal.timeout(5000),
+    });
+    streamId = imported.streamId;
     await attach(false);
     await appendFile(
       sourcePath,

@@ -36,6 +36,7 @@ Import options:
   --title <text>          Recording title
   --artifact-root <path>  Allowed local artifact root; repeat for multiple roots
   --artifact-base <path>  Base directory for relative artifact paths
+  --resume-import        Continue an ended import with its original options
   --native-session <id>   Kimi session ID for a moved wire export
   --native-agent <id>     Kimi agent ID for a moved wire export
 
@@ -88,6 +89,7 @@ async function main() {
     args,
     options: {
       help: { type: "boolean" },
+      "resume-import": { type: "boolean" },
       "record-format": { type: "string" },
       stream: { type: "string" },
       anonymous: { type: "boolean" },
@@ -121,7 +123,9 @@ async function main() {
       : command === "replay" || command === "watch"
         ? ["server", "stream", "anonymous"]
         : [
-            ...(command === "publish" ? ["record-format"] : []),
+            ...(command === "publish"
+              ? ["record-format", "resume-import"]
+              : []),
             "agent",
             "source",
             "server",
@@ -228,7 +232,7 @@ async function main() {
     ownerCredential: secret,
     title:
       values.title ??
-      `${command === "publish" ? "Live" : "Imported"} ${agent} session`,
+      `${command === "publish" && !values["resume-import"] ? "Live" : "Imported"} ${agent} session`,
     visibility,
     secrets,
     signal: controller.signal,
@@ -258,6 +262,7 @@ async function main() {
     )({
       ...options,
       recordFormat,
+      resumeImport: values["resume-import"] ?? false,
       ...(values["native-session"] && values["native-agent"]
         ? {
             nativeIdentity: {

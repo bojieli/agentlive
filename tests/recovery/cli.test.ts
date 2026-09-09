@@ -8,10 +8,10 @@ import { join, resolve } from "node:path";
 const exec = promisify(execFile),
   cli = resolve("packages/cli/dist/main.js");
 const env = { PATH: process.env.PATH ?? "" };
-async function start(stateDir: string) {
+async function start(stateDir: string, port = "0") {
   const child = spawn(
     process.execPath,
-    [cli, "serve", "--state-dir", stateDir, "--port", "0"],
+    [cli, "serve", "--state-dir", stateDir, "--port", port],
     { env, stdio: ["ignore", "pipe", "pipe"] },
   );
   let diagnostic = "";
@@ -176,10 +176,11 @@ it("runs local serve/import across processes with private credentials and restar
     }
     const secret = JSON.parse(credential).secret;
     expect(first).not.toHaveProperty("writeSecret");
+    const serverPort = new URL(server.url).port;
     server.child.kill("SIGTERM");
     expect(await server.exited).toBe(143);
     server = undefined;
-    server = await start(root);
+    server = await start(root, serverPort);
     expect(await readFile(server.ownerFile, "utf8")).toBe(credential);
     const response = await fetch(
       `${server.url}/api/v1/streams/${first.streamId}`,
@@ -187,6 +188,55 @@ it("runs local serve/import across processes with private credentials and restar
     );
     expect(response.status).toBe(200);
     expect((await response.json()).lifecycle).toBe("ended");
+    const publisher = spawn(
+      process.execPath,
+      [
+        cli,
+        "publish",
+        "--agent",
+        "claude",
+        "--source",
+        source,
+        "--state-dir",
+        root,
+        "--server",
+        server.url,
+        "--resume-import",
+      ],
+      { env, stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let publisherOutput = "";
+    let publisherError = "";
+    publisher.stdout.on("data", (chunk) => {
+      publisherOutput += chunk.toString();
+    });
+    publisher.stderr.on("data", (chunk) => {
+      publisherError += chunk.toString();
+    });
+    const publisherExit = new Promise((resolve, reject) => {
+      publisher.once("exit", resolve);
+      publisher.once("error", reject);
+    });
+    try {
+      await expect
+        .poll(
+          () => {
+            if (publisherError) throw new Error(publisherError);
+            return publisherOutput;
+          },
+          { timeout: 10000 },
+        )
+        .toContain('"event":"source-caught-up"');
+      expect(publisherOutput).toContain(first.streamId);
+      const reopened = await fetch(
+        `${server.url}/api/v1/streams/${first.streamId}`,
+        { headers: { authorization: `Bearer ${secret}` } },
+      );
+      expect((await reopened.json()).lifecycle).toBe("open");
+    } finally {
+      publisher.kill("SIGTERM");
+      await publisherExit;
+    }
   } finally {
     if (server) {
       server.child.kill("SIGTERM");

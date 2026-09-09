@@ -1,3 +1,4 @@
+import { resumeImportedRecording } from "./resume-import.js";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve, join } from "node:path";
 import { createHash } from "node:crypto";
@@ -15,6 +16,7 @@ import { type SourceCursor, readJsonlSource } from "./jsonl.js";
 import { localArtifactResolver } from "./local-artifacts.js";
 
 export interface NativePublishOptions extends NativeImportOptions {
+  resumeImport?: boolean;
   onProgress?: (progress: {
     sourceCursor: SourceCursor;
     producerEvents: number;
@@ -54,14 +56,6 @@ export async function publishNativeRecording(
   let running: Promise<void> | undefined;
   let networkFailure: unknown;
   try {
-    try {
-      await readFile(join(journal.directory, "import.json"));
-      throw new Error(
-        "This binding is a historical import; reopening imports for live publishing requires explicit migration",
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
     const baseDirectory = resolve(
       options.artifactBaseDirectory ?? dirname(options.sourcePath),
     );
@@ -80,6 +74,13 @@ export async function publishNativeRecording(
         .update(canonicalJson([...new Set(options.secrets ?? [])].sort()))
         .digest("hex"),
     };
+    await resumeImportedRecording({
+      journal,
+      sourcePath: options.sourcePath,
+      identity,
+      requested: options.resumeImport ?? false,
+      signal,
+    });
     const manifestPath = join(journal.directory, "publish.json");
     try {
       if (

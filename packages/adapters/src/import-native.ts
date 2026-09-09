@@ -44,13 +44,15 @@ export async function importNativeRecording<Report>(
   });
   let artifacts: Awaited<ReturnType<typeof localArtifactResolver>> | undefined;
   try {
-    try {
-      await readFile(join(journal.directory, "publish.json"));
-      throw new Error(
-        "This binding is a live publisher; ending and importing it requires explicit migration",
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    for (const file of ["publish.json", "resume-import.json"]) {
+      try {
+        await readFile(join(journal.directory, file));
+        throw new Error(
+          "This binding is a live publisher or has a pending live transition; ending and importing it requires explicit migration",
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
     }
     const artifactBaseDirectory = resolve(
       options.artifactBaseDirectory ?? dirname(options.sourcePath),
