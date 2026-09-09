@@ -233,3 +233,95 @@ it("isolates subscriber callback mutation from other subscribers and the durable
   for await (const value of session.history(1, 2)) stored.push(value);
   expect(stored[0]?.serverSeq).toBe(2);
 });
+
+it("publishes attachment versions only after durable upload and preserves them across restart", async () => {
+  const { createHash } = await import("node:crypto");
+  const { root, store, session, input, lease } = await setup();
+  const bytes = Buffer.from("synthetic image");
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  const descriptor = { hash, byteSize: bytes.length };
+  const available: PublishedEvent = {
+    ...event(session.info.id, 1),
+    content: {
+      kind: "attachment.available",
+      payload: {
+        attachment: {
+          ...descriptor,
+          artifactId: "image",
+          version: 1,
+          filename: "image.png",
+          mediaType: "image/png",
+        },
+      },
+    },
+  };
+  await expect(session.append(lease, [available])).rejects.toMatchObject({
+    code: "precondition_failed",
+  });
+  await session.uploadAttachment(
+    input.writeSecret,
+    descriptor,
+    (async function* () {
+      yield bytes;
+    })(),
+  );
+  expect(await session.attachmentStatus(input.writeSecret, descriptor)).toBe(
+    true,
+  );
+  await expect(session.openAttachment(hash)).rejects.toMatchObject({
+    code: "precondition_failed",
+  });
+  await session.append(lease, [available]);
+  const file = await session.openAttachment(hash);
+  expect(await file.readFile()).toEqual(bytes);
+  await file.close();
+  expect(await session.collectUnreferencedAttachments(Date.now() + 1000)).toBe(
+    0,
+  );
+  const id = session.info.id;
+  await store.close();
+  stores.splice(stores.indexOf(store), 1);
+  const reopened = await RecordingStore.open(root);
+  stores.push(reopened);
+  const recovered = await reopened.get(id);
+  const recoveredFile = await recovered.openAttachment(hash);
+  expect(await recoveredFile.readFile()).toEqual(bytes);
+  await recoveredFile.close();
+});
+it("rejects a reference whose uploaded bytes were collected before commit, without advancing the publisher cursor", async () => {
+  const { createHash } = await import("node:crypto");
+  const { session, input, lease } = await setup();
+  const bytes = Buffer.from("orphan");
+  const descriptor = {
+    hash: createHash("sha256").update(bytes).digest("hex"),
+    byteSize: bytes.length,
+  };
+  await session.uploadAttachment(
+    input.writeSecret,
+    descriptor,
+    (async function* () {
+      yield bytes;
+    })(),
+  );
+  await session.collectUnreferencedAttachments(Date.now() + 1000);
+  await expect(
+    session.append(lease, [
+      {
+        ...event(session.info.id, 1),
+        content: {
+          kind: "attachment.available",
+          payload: {
+            attachment: {
+              ...descriptor,
+              artifactId: "a",
+              version: 1,
+              filename: "a.txt",
+              mediaType: "text/plain",
+            },
+          },
+        },
+      },
+    ]),
+  ).rejects.toMatchObject({ code: "precondition_failed" });
+  expect(session.boundary.sequence).toBe(1);
+});

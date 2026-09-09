@@ -2,7 +2,13 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
-import { atomicJson, JsonlLog, type LogBoundary } from "@agentlive/storage";
+import {
+  atomicJson,
+  JsonlLog,
+  BlobStore,
+  type BlobDescriptor,
+  type LogBoundary,
+} from "@agentlive/storage";
 import {
   canonicalJson,
   idSchema,
@@ -66,6 +72,11 @@ export class RecordingSession {
     { elapsedMs: number; timelineMs: number; lastElapsedMs: number }
   >();
   private readonly subscribers = new Set<Subscriber>();
+  private readonly attachmentVersions = new Map<
+    string,
+    Map<number, BlobDescriptor>
+  >();
+  private readonly referencedBlobs = new Set<string>();
   private readonly operations = new Map<
     string,
     { digest: string; result: StoredEvent }
@@ -74,6 +85,7 @@ export class RecordingSession {
     readonly directory: string,
     private metadata: SessionMetadata,
     private readonly log: JsonlLog<StoredEvent>,
+    private readonly blobs: BlobStore,
   ) {}
   static async open(directory: string): Promise<RecordingSession> {
     const metadata = sessionMetadataSchema.parse(
@@ -82,14 +94,35 @@ export class RecordingSession {
     const log = await JsonlLog.open(join(directory, "events.jsonl"), {
       parse: (value) => storedEventSchema.parse(value),
     });
-    const session = new RecordingSession(directory, metadata, log);
+    let blobs: BlobStore;
     try {
+      blobs = await BlobStore.open(join(directory, "attachments"));
+    } catch (error) {
+      await log.close();
+      throw error;
+    }
+    const session = new RecordingSession(directory, metadata, log, blobs);
+    try {
+      const verified = new Map<string, number>();
       for await (const record of log.read()) {
         if (record.sequence !== record.value.serverSeq)
           throw new ProtocolError(
             "corrupt_storage",
             "Stored sequence disagrees with log sequence",
           );
+        if (record.value.content.kind === "attachment.available") {
+          const attachment = record.value.content.payload.attachment;
+          const size = verified.get(attachment.hash);
+          if (size !== undefined && size !== attachment.byteSize)
+            throw new ProtocolError(
+              "corrupt_storage",
+              "Inconsistent recorded attachment size",
+            );
+          if (size === undefined) {
+            await blobs.verify(attachment);
+            verified.set(attachment.hash, attachment.byteSize);
+          }
+        }
         session.applyCommitted(record.value, true);
       }
       if (log.boundary.sequence === 0)
@@ -99,6 +132,7 @@ export class RecordingSession {
         );
       return session;
     } catch (error) {
+      await blobs.close();
       await log.close();
       throw error;
     }
@@ -258,6 +292,13 @@ export class RecordingSession {
         [...this.segments].map(([key, value]) => [key, { ...value }]),
       );
       const additions: StoredEvent[] = [];
+      const versions = new Map(
+        [...this.attachmentVersions].map(([id, entries]) => [
+          id,
+          new Map(entries),
+        ]),
+      );
+      const verified = new Map<string, number>();
       const retries = new Map<number, string>();
       for (const event of events)
         if (event.producerSeq <= this.producerThrough)
@@ -306,12 +347,40 @@ export class RecordingSession {
             { expected },
           );
         expected++;
-        // Availability validation is added with the attachment store; reject dangling references now.
-        if (event.content.kind === "attachment.available")
-          throw new ProtocolError(
-            "precondition_failed",
-            "Attachment bytes must be durably installed before publication",
-          );
+        if (event.content.kind === "attachment.available") {
+          const attachment = event.content.payload.attachment;
+          const previous =
+            versions.get(attachment.artifactId) ??
+            new Map<number, BlobDescriptor>();
+          if (attachment.version !== previous.size + 1)
+            throw new ProtocolError(
+              "event_conflict",
+              "Artifact versions must be immutable and contiguous",
+            );
+          const size = verified.get(attachment.hash);
+          if (size !== undefined && size !== attachment.byteSize)
+            throw new ProtocolError(
+              "event_conflict",
+              "Inconsistent attachment size",
+            );
+          if (size === undefined) {
+            await this.blobs.verify(attachment);
+            verified.set(attachment.hash, attachment.byteSize);
+          }
+          previous.set(attachment.version, {
+            hash: attachment.hash,
+            byteSize: attachment.byteSize,
+          });
+          versions.set(attachment.artifactId, previous);
+        }
+        if (event.content.kind === "reference.resolved") {
+          const reference = event.content.payload;
+          if (!versions.get(reference.artifactId)?.has(reference.version))
+            throw new ProtocolError(
+              "precondition_failed",
+              "Reference points to an unavailable artifact version",
+            );
+        }
         const segment = segments.get(event.clockSegmentId);
         if (segment) {
           if (event.elapsedMs < segment.lastElapsedMs)
@@ -364,6 +433,35 @@ export class RecordingSession {
         "Recording timeline moved backward",
       );
     this.timeline = event.timelineMs;
+    if (event.content.kind === "attachment.available") {
+      const attachment = event.content.payload.attachment;
+      const versions =
+        this.attachmentVersions.get(attachment.artifactId) ??
+        new Map<number, BlobDescriptor>();
+      if (attachment.version !== versions.size + 1)
+        throw new ProtocolError(
+          "corrupt_storage",
+          "Invalid recorded artifact version",
+        );
+      versions.set(attachment.version, {
+        hash: attachment.hash,
+        byteSize: attachment.byteSize,
+      });
+      this.attachmentVersions.set(attachment.artifactId, versions);
+      this.referencedBlobs.add(attachment.hash);
+    }
+    if (event.content.kind === "reference.resolved") {
+      const reference = event.content.payload;
+      if (
+        !this.attachmentVersions
+          .get(reference.artifactId)
+          ?.has(reference.version)
+      )
+        throw new ProtocolError(
+          "corrupt_storage",
+          "Recorded reference has no artifact version",
+        );
+    }
     if (event.origin.type === "publisher") {
       const published = event.origin.event;
       if (
@@ -430,6 +528,64 @@ export class RecordingSession {
         } catch {}
       }
     }
+  }
+  async uploadAttachment(
+    secret: string,
+    descriptor: BlobDescriptor,
+    source: AsyncIterable<Uint8Array>,
+    signal?: AbortSignal,
+  ): Promise<BlobDescriptor> {
+    this.authorize(secret);
+    if (this.closing)
+      throw new ProtocolError("stream_gone", "Session is closing");
+    const staged = await this.blobs.stage(descriptor, source, signal);
+    try {
+      return await this.serial(async () => {
+        this.authorize(secret);
+        return this.blobs.install(staged);
+      });
+    } finally {
+      await this.blobs.discard(staged);
+    }
+  }
+  async attachmentStatus(
+    secret: string,
+    descriptor: BlobDescriptor,
+  ): Promise<boolean> {
+    this.authorize(secret);
+    return this.serial(async () => {
+      try {
+        await this.blobs.verify(descriptor);
+        return true;
+      } catch (error) {
+        if (
+          error instanceof ProtocolError &&
+          error.code === "precondition_failed"
+        )
+          return false;
+        throw error;
+      }
+    });
+  }
+  /** Authorization is performed by the API; unannounced uploaded bytes are never viewer-visible. */
+  openAttachment(hash: string): Promise<import("node:fs/promises").FileHandle> {
+    return this.serial(async () => {
+      if (!this.referencedBlobs.has(hash))
+        throw new ProtocolError(
+          "precondition_failed",
+          "Attachment has not been published",
+        );
+      return this.blobs.openFile(hash);
+    });
+  }
+  collectUnreferencedAttachments(olderThan: number): Promise<number> {
+    if (!Number.isFinite(olderThan))
+      return Promise.reject(
+        new ProtocolError("invalid_request", "Invalid collection cutoff"),
+      );
+    return this.serial(() =>
+      this.blobs.collect(this.referencedBlobs, olderThan),
+    );
   }
   subscribe(subscriber: Subscriber): Promise<{
     boundary: LogBoundary;
@@ -517,6 +673,7 @@ export class RecordingSession {
       } catch {}
     }
     this.subscribers.clear();
+    await this.blobs.close();
     await this.log.close();
   }
 }

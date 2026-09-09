@@ -98,6 +98,10 @@ Node 26 is the required runtime, currently the latest Current release line. Use 
 
 Use one server process and local filesystem storage initially in both deployment modes. Multiple sessions use independent directories and serialized writers in the same process; they do not require a database. Active subscriptions and bounded recent-event buffers live in memory. A database for richer account/query requirements, object storage, and multiple fan-out workers are later options.
 
+### Model-provider independence
+
+OpenCode may use any supported, available provider, including Gemini or a configured OpenAI-compatible third-party provider such as Krill. Provider selection belongs to the local agent configuration; AgentLive captures the agent transport and does not require a particular model vendor. Keep API keys in the local environment or agent credential store, never in recordings, attachment metadata, exports, or committed configuration. For Krill, use the endpoint and model identifiers actually configured and verified locally rather than assuming public OpenAI endpoints or model-name compatibility. Verify streaming, tool calls, errors, and resume behavior for each provider used in acceptance tests. The successful initial OpenCode streaming probe used an available Anthropic configuration; Krill credentials were detected but Krill inference has not yet been validated.
+
 ## 4. System boundaries
 
 ```mermaid

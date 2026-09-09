@@ -2,7 +2,7 @@
 
 Broadcast and replay coding-agent sessions from one stable session URL, with structured messages, tools, file changes, and versioned attachments.
 
-**Implementation is in progress.** This repository currently contains the implementation plan, live-agent transport probes, and tested recorder/publisher/playback foundations. It is not yet an installable broadcast server or finished viewer. See [implementation status](IMPLEMENTATION_STATUS.md) for verified work and remaining release gates.
+**Implementation is in progress.** This repository currently contains the implementation plan, live-agent transport probes, and tested recorder/publisher/playback foundations plus a programmatic HTTP/WebSocket server and immutable attachment storage. It is not yet an installable broadcast server or finished viewer. See [implementation status](IMPLEMENTATION_STATUS.md) for verified work and remaining release gates.
 
 ## Development
 

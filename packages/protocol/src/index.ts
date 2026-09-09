@@ -221,3 +221,36 @@ export function canonicalJson(value: unknown): string {
   }
   return encode(value, 0);
 }
+
+const requestFields = {
+  protocolVersion: z.literal(PROTOCOL_VERSION),
+  requestId: idSchema,
+};
+export const publisherMessageSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    ...requestFields,
+    type: z.literal("resume"),
+    streamId: idSchema,
+    revision: idSchema,
+    publisherId: idSchema,
+    producerEpoch: idSchema,
+    attempt: sequenceSchema,
+  }),
+  z.strictObject({
+    ...requestFields,
+    type: z.literal("batch"),
+    events: z.array(publishedEventSchema).max(100),
+  }),
+  z.strictObject({ ...requestFields, type: z.literal("heartbeat") }),
+]);
+export const subscriberMessageSchema = z.discriminatedUnion("type", [
+  z.strictObject({
+    ...requestFields,
+    type: z.literal("subscribe"),
+    streamId: idSchema,
+    revision: idSchema,
+    afterServerSeq: cursorSchema,
+  }),
+  z.strictObject({ ...requestFields, type: z.literal("unsubscribe") }),
+  z.strictObject({ ...requestFields, type: z.literal("heartbeat") }),
+]);
