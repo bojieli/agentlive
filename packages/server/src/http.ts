@@ -9,6 +9,7 @@ import {
 import type { WSContext } from "hono/ws";
 import { WebSocketServer, type WebSocket } from "ws";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import {
@@ -226,6 +227,30 @@ export async function startServer(options: ServerOptions) {
       store.release(session);
     }
   });
+  for (const [route, filename, mime] of [
+    ["/", "index.html", "text/html; charset=utf-8"],
+    ["/app.js", "app.js", "text/javascript; charset=utf-8"],
+    ["/app.css", "app.css", "text/css; charset=utf-8"],
+  ] as const) {
+    app.get(route, async (c) => {
+      c.header(
+        "Content-Security-Policy",
+        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      );
+      c.header("Referrer-Policy", "no-referrer");
+      c.header("Content-Type", mime);
+      try {
+        return c.body(
+          await readFile(new URL(`./web/${filename}`, import.meta.url)),
+        );
+      } catch {
+        return c.text(
+          "Browser assets are unavailable. Build or reinstall AgentLive.",
+          503,
+        );
+      }
+    });
+  }
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/readyz", (c) => c.json({ ready: !closing }));
   app.get("/api/v1/streams", async (c) => {

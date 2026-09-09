@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { verifyBrowserSession } from "./verify-browser-session.mjs";
 import { listRecordings } from "../packages/client/dist/index.js";
 import { SubscriberCache } from "../packages/storage/dist/index.js";
 import { PublisherJournal } from "../packages/publisher/dist/index.js";
@@ -428,9 +429,16 @@ try {
   });
   if (seekCount !== 2)
     throw new Error("Native viewer did not finish both seeks");
+  const browserModel = await verifyBrowserSession(
+    target.url,
+    streamId,
+    password,
+    signal,
+  );
   console.log(
     JSON.stringify({
       success: true,
+      browserModel,
       restoredViewerPosition: true,
       indexedTimelineSeek: true,
       ownerDiscovery: true,

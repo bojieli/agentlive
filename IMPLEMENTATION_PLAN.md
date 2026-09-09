@@ -86,7 +86,7 @@ Sources: [inspected claude-replay watch implementation](https://github.com/es617
 | Workspace | pnpm workspaces | One lockfile and explicit package dependency boundaries. |
 | Server | Hono, `@hono/node-server`, `ws` | HTTP API and bundled web assets; WebSocket publishing/subscription. |
 | Schemas | Zod | Validate external input and generate a versioned protocol reference. |
-| Web | React, Vite, Tailwind/CSS | DOM-based text, responsive layout, accessible controls. |
+| Web | React, esbuild, CSS | DOM-based text, responsive layout, accessible controls. |
 | Large lists | Windowed rendering | Select and verify a virtualization library during the player phase; test dynamic-height diffs. |
 | Terminal | Ink and React | Share state reconstruction and controls, not browser layout components. |
 | Storage | Per-session JSONL log and JSON metadata | Serialized appends; in-memory live delivery; rebuildable seek indexes and snapshots. Kernel advisory locks through `fs-native-extensions` protect local writer ownership across process suspension/death. |
@@ -1052,3 +1052,12 @@ Package verification rebuilds against an unreachable registry and compares tarba
 Expiry reports `CancellationTimeoutError` (`cancellation_timeout`). It bounds the caller's wait, not the lifetime of accepted I/O. The original task continues draining and retains cache ownership until its normal cleanup completes. The error's `whenDrained` promise exposes eventual completion or failure; late rejection is observed even if a caller ignores it. Do not force-unlock the cache or terminate the process from library code. A restarted subscriber must wait for ownership or fail clearly, never overlap an uncertain writer. JavaScript deadlines require a responsive event loop; a supervisor is needed for a hard process termination deadline.
 
 Validate a stalled receipt commit: cancellation reports timeout, another cache open remains excluded, releasing the commit completes cleanup, and reopening recovers the durable prefix. Also validate invalid deadlines and existing stalled-output/join cancellation cases. This checkpoint applies to the reference watch client; other publisher and viewer cancellation policies must be assessed separately.
+
+
+### Initial server-hosted browser viewer
+
+Build the React viewer with the existing pinned esbuild dependency and CSS; bundle it during workspace/package builds and ship the three static assets in the tarball. This keeps installation free of frontend build steps. Serve only explicit asset paths with a restrictive same-origin CSP, frame denial, no-sniff, no-referrer, and no-store headers. Keep credentials in memory and out of URLs. Retain the credential associated with each join for attachment requests even if the input field later changes.
+
+Use the shared subscriber transport and reducer. The initial receipt buffer permits at most 64 MiB of encoded events and starts at zero on refresh; this is not a total heap/DOM bound. Pausing and timed playback do not stop receipt. Seek reconstructs a contiguous prefix including every event at the selected timestamp; follow applies the latest receipt. Preserve first-event object ordering across different object types. Owner listing replaces one bounded page at a time. Attachment downloads are authenticated, bounded to 25 MiB, verified against the announced hash, and offered as opaque downloads.
+
+This implementation establishes the browser transport/model and packaged delivery. Keep the full M4 gate: persistent/evictable browser cache, paged reducer and DOM, foreground revalidation, richer structured object presentation, safe image/artifact previews, and actual desktop/mobile interaction and visual checks remain required. A model test on Node is evidence for shared state/transport, not a rendered-browser test.

@@ -2,7 +2,7 @@
 
 Broadcast and replay coding-agent sessions from one stable session URL, with structured messages, tools, file changes, and versioned attachments.
 
-**Implementation is in progress.** This repository currently contains the implementation plan, live-agent transport probes, and tested recorder/publisher/playback foundations plus a programmatic HTTP/WebSocket server, shared synchronization engines, and immutable attachment storage. A workspace CLI can start the server, import recordings from all four agents, publish live sessions, and watch with a durable local cache. The distributable installer and viewers are unfinished. See [implementation status](IMPLEMENTATION_STATUS.md) for verified work and remaining release gates.
+**Implementation is in progress.** This repository currently contains the implementation plan, live-agent transport probes, and tested recorder/publisher/playback foundations plus a programmatic HTTP/WebSocket server, shared synchronization engines, and immutable attachment storage. A workspace CLI can start the server, import recordings from all four agents, publish live sessions, and watch with a durable local cache. A standalone npm tarball includes an initial browser viewer; production viewer and release gates remain unfinished. See [implementation status](IMPLEMENTATION_STATUS.md) for verified work and remaining release gates.
 
 ## Development
 
@@ -35,7 +35,7 @@ npx --yes pnpm@12.3.4 agentlive import --agent kimi --source /path/to/session_ID
 npx --yes pnpm@12.3.4 agentlive import --agent opencode --source /path/to/opencode-export.json
 ```
 
-Imports are private by default. Use `--visibility unlisted` or `--visibility public` to make a completed import readable without credentials. Import output includes the recording ID and conversion report; unsupported source objects remain visible in the report. Interactive viewers are not yet included; use terminal replay below.
+Imports are private by default. Use `--visibility unlisted` or `--visibility public` to make a completed import readable without credentials. Import output includes the recording ID and conversion report; unsupported source objects remain visible in the report. Open the server URL in a browser and join using the recording ID. Private recordings require an access key; the owner secret in your local owner credential file can be used for viewing and listing. Keys stay in browser memory and are not included in share URLs.
 
 Use `--state-dir` on both commands for isolated state, `--server` on imports for another server, and `--owner-file` for its credential JSON. An existing owner secret may instead be supplied through `AGENTLIVE_OWNER_SECRET`. Local artifact access defaults to the source directory; add explicit `--artifact-root` paths where needed. Moved Kimi exports require both `--native-session` and `--native-agent`. See `agentlive --help` for all options.
 
@@ -49,7 +49,7 @@ npx --yes pnpm@12.3.4 agentlive replay --stream <recording-id> --server https://
 
 Replay downloads a fixed history boundary and prints timestamped messages, tools, file changes, attachment links, and capture gaps. Terminal control characters are escaped. By default it prints immediately. Add `--speed 2` for timing at twice the recorded speed, or `--interactive` for terminal controls: space pauses/resumes, `+`/`-` changes speed, and `q` quits. Timed replay starts at the first event and preserves subsequent recorded gaps. Add `--from-ms 30000` to reconstruct the state at 30 seconds and continue from there; all events at that timestamp are included in the state view. Positions beyond the fixed history boundary show its final state. It caps normalized events at 64 MiB; interactive backward/forward seeking, paged state, and interactive live playback remain unfinished. Private replay uses the same owner credential options as import.
 
-These commands run from the source checkout. Clean standalone installation, automatic native-session discovery, live publishing commands, and interactive terminal/browser viewers remain release requirements.
+These commands run from the source checkout. `pnpm package:build` also produces a standalone tarball with prebuilt browser assets. Automatic native-session discovery, production viewers, and the remaining release gates are tracked in the implementation status.
 
 ## Live integration probes
 
@@ -243,3 +243,10 @@ The build bundles AgentLive workspace code into one CLI and includes a shrinkwra
 
 
 Package builds use the reviewed dependency tree in `packaging/runtime-lock.json` and do not resolve new runtime versions. After intentionally changing runtime dependencies, run `npx --yes pnpm@12.3.4 package:lock` and review the lock diff. `package:verify` rebuilds with an unreachable registry and requires byte-identical tarballs before testing installation. Installing external dependencies still requires registry access or an existing npm cache.
+
+
+## Browser viewer
+
+The server root serves the React viewer on the same origin as recording APIs. Join or leave a recording, browse an owner-authorized page of sessions, pause while receipt continues, seek with the timeline, select playback speed, or follow incoming events. Messages, tools, file changes, and versioned attachments appear in first-event order. Other structured objects currently have expandable data views. Downloads use the joined session's credential, a 25 MiB limit, and SHA-256 verification; executable attachment previews are not enabled.
+
+The current browser receipt buffer is bounded to 64 MiB of encoded events. Reload and rejoin fetch history again; no receipt cursor is persisted without its event prefix. Paged state, persistent browser caching, background/foreground recovery, rich artifact previews, and desktop/mobile visual verification remain release work. The memory quota covers encoded events rather than total JavaScript/DOM overhead.

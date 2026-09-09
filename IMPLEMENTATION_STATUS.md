@@ -321,3 +321,12 @@ Validation: all 202 tests pass after the dependency update, frozen-lockfile inst
 Normal package builds now use committed packaging/runtime-lock.json rather than resolving runtime transitives. Validation rejects root metadata drift, unpinned artifacts, workspace links, and unsupported sources. package:lock is the explicit refresh path. Package verification rebuilds with an unreachable registry, requires identical tarball bytes, then tests isolated installation and clean shutdown.
 
 Validation: 205 tests across 26 files pass. Repeat-build verification passed, as did clean installation/import/list/replay/retry for both a synthetic recording and the retained real Claude integration recording (1,490 rendered bytes). The earlier packaging CI run 34346391862 completed successfully on macOS and Linux. These new lock changes have local verification; their CI run follows the push. Cross-toolchain artifact equivalence, signing, browser assets, and public release remain required.
+
+
+### Browser viewer foundation (2026-09-09)
+
+Added a React/CSS browser viewer served from the server root, built with esbuild and included in the standalone tarball. It supports join/leave, owner discovery, independent live receipt, pause/play/speed/follow, timeline seeking, first-event object ordering, structured messages/tools/changes, expandable remaining objects, and authenticated hash-verified attachment downloads. Browser keys are held in memory. Receipt has a 64 MiB encoded-event limit; attachment downloads have a 25 MiB limit.
+
+Validation: all 213 tests across 27 files pass, including interleaved object ordering, private-access rejection, continued receipt while paused, and seek/leave/rejoin. The isolated package probe verified HTML/JS/CSS MIME and CSP, reproducible rebuild, clean installation, import/list/replay/retry, and clean shutdown. A real two-turn Claude resume/publisher-restart probe passed; its recording reconstructed through the browser model with 27 imported events and four messages. The real three-turn OpenCode import-continuation probe passed browser-model seek comparison against its retained 26 events and one attachment, alongside native/publisher restarts and paused terminal receipt.
+
+Visual verification is pending: the browser runtime returned no available browsers and an empty discovery list. This is not evidence of rendered UI correctness. Persistent browser cache, paged state/DOM, mobile lifecycle recovery, rich artifact previews, and full cross-client recovery remain incomplete; the overall implementation goal remains active.

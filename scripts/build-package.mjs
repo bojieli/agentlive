@@ -11,6 +11,7 @@ import {
   chmod,
   rename,
   copyFile,
+  cp,
 } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { execFile } from "node:child_process";
@@ -75,7 +76,7 @@ await writeFile(
       license: "UNLICENSED",
       engines: cli.engines,
       bin: { agentlive: "cli.mjs" },
-      files: ["cli.mjs", "npm-shrinkwrap.json", "README.md"],
+      files: ["cli.mjs", "npm-shrinkwrap.json", "README.md", "web"],
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
     },
     null,
@@ -83,6 +84,9 @@ await writeFile(
   ) + "\n",
 );
 await copyFile(join(root, "README.md"), join(staging, "README.md"));
+await cp(join(root, "packages/server/dist/web"), join(staging, "web"), {
+  recursive: true,
+});
 const lockPath = join(root, "packaging", "runtime-lock.json");
 const updateLock = process.argv.includes("--update-lock");
 if (updateLock) {

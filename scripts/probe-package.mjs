@@ -104,6 +104,22 @@ try {
       reject(new Error("Installed server exited during startup"));
     }, reject);
   });
+  for (const [path, mime, marker] of [
+    ["/", "text/html", '<div id="root">'],
+    ["/app.js", "text/javascript", "AgentLive"],
+    ["/app.css", "text/css", ".shell"],
+  ]) {
+    const asset = await fetch(new URL(path, ready.url));
+    if (
+      !asset.ok ||
+      !asset.headers.get("content-type")?.includes(mime) ||
+      !asset.headers
+        .get("content-security-policy")
+        ?.includes("frame-ancestors 'none'") ||
+      !(await asset.text()).includes(marker)
+    )
+      throw new Error(`Installed browser asset failed: ${path}`);
+  }
   let source = process.argv[2]
     ? resolve(process.argv[2])
     : join(root, "source.jsonl");
@@ -182,6 +198,7 @@ try {
     reproducibleRebuild: true,
     installScriptsDisabled: true,
     server: true,
+    browserAssets: true,
     imported: true,
     ownerDiscovery: true,
     replay: true,

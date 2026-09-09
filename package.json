@@ -8,14 +8,14 @@
     "node": ">=26.8.1 <27"
   },
   "scripts": {
-    "build": "tsc -b",
-    "typecheck": "tsc -b --pretty false",
+    "build": "tsc -b && node scripts/build-web.mjs",
+    "typecheck": "tsc -b --pretty false && node scripts/build-web.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "probe:agents": "node scripts/probe-agents.mjs",
     "check": "pnpm format:check && pnpm typecheck && pnpm test",
-    "format": "prettier --write packages tests scripts packaging *.json *.ts *.yaml .github/workflows/*.yml",
-    "format:check": "prettier --check packages tests scripts packaging *.json *.ts *.yaml .github/workflows/*.yml",
+    "format": "prettier --write apps packages tests scripts packaging *.json *.ts *.yaml .github/workflows/*.yml",
+    "format:check": "prettier --check apps packages tests scripts packaging *.json *.ts *.yaml .github/workflows/*.yml",
     "agentlive": "node packages/cli/dist/main.js",
     "package:build": "pnpm build && node scripts/build-package.mjs",
     "package:verify": "pnpm package:build && node scripts/probe-package.mjs",
