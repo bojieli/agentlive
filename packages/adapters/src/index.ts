@@ -68,3 +68,11 @@ export {
   publishKimiRecording,
   type KimiPublishOptions,
 } from "./publish-kimi.js";
+export {
+  observeOpenCodeSession,
+  type OpenCodeObserveOptions,
+} from "./observe-opencode.js";
+export {
+  parseOpenCodeSnapshot,
+  type OpenCodeSnapshot,
+} from "./opencode-history.js";

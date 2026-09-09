@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Opt-in synthetic live-server probe. Raw events remain in ignored local output. */
+import { observeOpenCodeSession } from "../packages/adapters/dist/index.js";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -89,6 +90,10 @@ const record = (event) => {
     }
 };
 let readerTask;
+let observerTask;
+let observerFailure;
+let observedSnapshots = 0;
+let observedComplete = false;
 try {
   for (let i = 0; i < 150; i++) {
     if (processEnded) throw new Error("Server exited during startup");
@@ -138,6 +143,37 @@ try {
       : { title: "AgentLive synthetic live capture" },
   );
   sessionId = session.id;
+  if (agent === "opencode") {
+    observerTask = observeOpenCodeSession({
+      serverOrigin: base,
+      nativeSessionId: sessionId,
+      password,
+      signal: abort.signal,
+      commit: async (snapshot) => {
+        observedSnapshots++;
+        observedComplete = snapshot.messages.some(
+          (message) =>
+            message.info.role === "assistant" &&
+            message.info.time.completed !== undefined &&
+            message.parts.some(
+              (part) =>
+                part.type === "text" &&
+                typeof part.text === "string" &&
+                part.text.includes("AGENTLIVE_SERVER_OK"),
+            ),
+        );
+      },
+    }).catch((error) => {
+      observerFailure = error;
+      abort.abort(error);
+    });
+    while (!observedSnapshots) {
+      abort.signal.throwIfAborted();
+      if (observerFailure) throw observerFailure;
+      await delay(25);
+    }
+  }
+
   if (!sessionId) throw new Error("No native session ID");
   if (agent === "kimi") {
     await request(`/api/v1/sessions/${sessionId}/profile`, {
@@ -234,6 +270,11 @@ try {
     if (events.some((x) => x.event.type === "session.error"))
       throw new Error("OpenCode emitted session.error; see private trace");
     finished = true;
+    while (!observedComplete) {
+      abort.signal.throwIfAborted();
+      if (observerFailure) throw observerFailure;
+      await delay(25);
+    }
     await delay(300);
   }
   const types = {};
@@ -245,6 +286,7 @@ try {
     finished,
     elapsedMs: Math.round(performance.now() - start),
     eventCount: events.length,
+    ...(agent === "opencode" ? { observedSnapshots, observedComplete } : {}),
     types,
     markerObserved:
       agent === "kimi"
@@ -277,6 +319,7 @@ try {
   ws?.close();
   abort.abort();
   await readerTask?.catch(() => {});
+  await observerTask;
   kill();
   await writeFile(
     join(output, "events.jsonl"),

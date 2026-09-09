@@ -40,6 +40,27 @@ const exportSchema = z.object({
 });
 const hash = (value: string | Uint8Array) =>
   createHash("sha256").update(value).digest("hex");
+/** Validate ownership and uniqueness for either native exports or server snapshots. */
+export function parseOpenCodeSnapshot(input: unknown) {
+  const data = exportSchema.parse(input);
+  const ids = new Set<string>();
+  for (const message of data.messages) {
+    if (message.info.sessionID !== data.info.id || ids.has(message.info.id))
+      throw new Error("OpenCode export has conflicting message identities");
+    ids.add(message.info.id);
+    for (const part of message.parts) {
+      if (
+        part.sessionID !== data.info.id ||
+        part.messageID !== message.info.id ||
+        ids.has(part.id)
+      )
+        throw new Error("OpenCode export has conflicting part identities");
+      ids.add(part.id);
+    }
+  }
+  return data;
+}
+export type OpenCodeSnapshot = ReturnType<typeof parseOpenCodeSnapshot>;
 async function readExport(path: string, signal?: AbortSignal) {
   const file = await open(path, "r");
   try {
@@ -68,24 +89,9 @@ async function readExport(path: string, signal?: AbortSignal) {
       before.ctimeNs !== after.ctimeNs
     )
       throw new Error("OpenCode export changed during read");
-    const data = exportSchema.parse(
+    const data = parseOpenCodeSnapshot(
       JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)),
     );
-    const ids = new Set<string>();
-    for (const message of data.messages) {
-      if (message.info.sessionID !== data.info.id || ids.has(message.info.id))
-        throw new Error("OpenCode export has conflicting message identities");
-      ids.add(message.info.id);
-      for (const part of message.parts) {
-        if (
-          part.sessionID !== data.info.id ||
-          part.messageID !== message.info.id ||
-          ids.has(part.id)
-        )
-          throw new Error("OpenCode export has conflicting part identities");
-        ids.add(part.id);
-      }
-    }
     return {
       data,
       boundary: { offset: bytes.length, prefixHash: hash(bytes) },
