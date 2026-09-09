@@ -1,11 +1,13 @@
 #!/usr/bin/env node
+import { isDeepStrictEqual } from "node:util";
+import { TextStore } from "../packages/storage/dist/index.js";
 /** Read-only full-corpus reducer/terminal validation. Persist aggregate counts and hashes only. */
 import {
   renderBrowserActivity,
   renderBrowserWorkflows,
 } from "./render-browser-workflows.mjs";
-import { readdir, mkdir, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { readdir, mkdir, writeFile, mkdtemp, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import {
@@ -21,6 +23,8 @@ import {
 } from "../packages/adapters/dist/index.js";
 import {
   initialState,
+  PagedReducer,
+  initialPagedState,
   apply,
   renderTerminalEvent,
   renderTerminalSnapshot,
@@ -83,20 +87,26 @@ const configurations = [
     capture: captureOpenCodeHistory,
   },
 ];
-const requested = process.argv.slice(2);
+const verifyPaged = process.argv.includes("--paged");
+const requested = process.argv.slice(2).filter((arg) => arg !== "--paged");
 if (
   requested.some(
     (agent) => !configurations.some((config) => config.agent === agent),
   )
 )
   throw new Error("Expected agent names: codex claude kimi opencode");
-const output = resolve("probe-results/native-replay-validation");
+const output = resolve(
+  verifyPaged
+    ? "probe-results/native-paged-replay-validation"
+    : "probe-results/native-replay-validation",
+);
 await mkdir(output, { recursive: true, mode: 0o700 });
 for (const config of configurations.filter(
   (config) => !requested.length || requested.includes(config.agent),
 )) {
   const summary = {
     agent: config.agent,
+    pagedReducer: verifyPaged,
     files: 0,
     passed: 0,
     failed: 0,
@@ -119,7 +129,16 @@ for (const config of configurations.filter(
     for await (const path of files(root, config.extension)) {
       const result = { sourceId: hash(path), status: "passed" };
       summary.files++;
+      let pagedDirectory, pagedStore, pagedReducer, pagedState;
       try {
+        if (verifyPaged) {
+          pagedDirectory = await mkdtemp(
+            join(tmpdir(), "agentlive-paged-corpus-"),
+          );
+          pagedStore = await TextStore.open(pagedDirectory);
+          pagedReducer = new PagedReducer(pagedStore);
+          pagedState = initialPagedState();
+        }
         const manifest = await config.inspect(path),
           sources = new Map();
         let state = initialState(),
@@ -156,6 +175,8 @@ for (const config of configurations.filter(
               });
               const previous = state;
               state = apply(state, event);
+              if (pagedReducer)
+                pagedState = await pagedReducer.apply(pagedState, event);
               const text = renderTerminalEvent(
                 event,
                 state,
@@ -178,6 +199,22 @@ for (const config of configurations.filter(
         await config.capture(path, manifest, sink);
         if (state.replacements.size)
           throw new Error("incomplete_text_replacement");
+        if (pagedReducer) {
+          const binding = { streamId: "corpus", revision: "corpus-revision" };
+          const saved = await pagedReducer.checkpoint(pagedState, binding);
+          await pagedStore.close();
+          pagedStore = await TextStore.open(pagedDirectory);
+          pagedReducer = new PagedReducer(pagedStore);
+          pagedState = await pagedReducer.open(saved, binding);
+          if (
+            !isDeepStrictEqual(
+              await pagedReducer.materialize(pagedState),
+              state,
+            )
+          )
+            throw new Error("paged_replay_mismatch");
+          result.pagedReplayVerified = true;
+        }
         let snapshotBytes = 0;
         const snapshotHash = createHash("sha256");
         for (const text of renderTerminalSnapshot(
@@ -254,6 +291,7 @@ for (const config of configurations.filter(
           "event_exceeds_publish_budget",
           "unsafe_terminal_control",
           "incomplete_text_replacement",
+          "paged_replay_mismatch",
         ];
         result.category =
           typeof error.code === "string"
@@ -268,6 +306,13 @@ for (const config of configurations.filter(
         summary.failed++;
         summary.failureCategories[result.category] =
           (summary.failureCategories[result.category] ?? 0) + 1;
+      } finally {
+        try {
+          await pagedStore?.close();
+        } finally {
+          if (pagedDirectory)
+            await rm(pagedDirectory, { recursive: true, force: true });
+        }
       }
       results.push(result);
       if (summary.files % 100 === 0)

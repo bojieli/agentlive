@@ -48,7 +48,9 @@ function integer(value: unknown): value is number {
 function ordinal(value: number) {
   return String(value).padStart(16, "0");
 }
-function copy(input: OrderedMapRoot | null): OrderedMapRoot {
+export function copyOrderedMapRoot(
+  input: OrderedMapRoot | null,
+): OrderedMapRoot {
   if (input === null)
     return { version: 1, size: 0, nextOrdinal: 0, byKey: null, byOrder: null };
   if (integer(input?.version) && input.version > 1)
@@ -169,7 +171,7 @@ export class OrderedContentMap {
     name: OrderedMapKey,
     signal?: AbortSignal,
   ): Promise<ContentReference | undefined> {
-    const root = copy(input);
+    const root = copyOrderedMapRoot(input);
     name = key(name);
     const found = await this.lookup(
       root,
@@ -186,7 +188,7 @@ export class OrderedContentMap {
     limit: number,
     signal?: AbortSignal,
   ): Promise<Array<[OrderedMapKey, ContentReference]>> {
-    const root = copy(input),
+    const root = copyOrderedMapRoot(input),
       selected = await this.index.entries(root.byOrder, offset, limit, signal);
     const result: Array<[OrderedMapKey, ContentReference]> = [];
     for (const [position, ref] of selected) {
@@ -213,7 +215,7 @@ export class OrderedContentMap {
     value: ContentReference,
     signal?: AbortSignal,
   ): Promise<OrderedMapRoot> {
-    const root = copy(input);
+    const root = copyOrderedMapRoot(input);
     name = key(name);
     value = reference(value);
     const hash = await this.hash(name, signal),
@@ -255,7 +257,7 @@ export class OrderedContentMap {
     name: OrderedMapKey,
     signal?: AbortSignal,
   ): Promise<OrderedMapRoot> {
-    const root = copy(input);
+    const root = copyOrderedMapRoot(input);
     name = key(name);
     const hash = await this.hash(name, signal),
       previous = await this.lookup(root, name, hash, signal);

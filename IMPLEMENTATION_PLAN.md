@@ -1236,3 +1236,12 @@ Keep old roots readable across updates, deletion and reopening. Identical writes
 Validate order against a JavaScript Map through inserts, updates, deletion/reinsertion, emptying and reuse; numeric/string/zero keys; long escaped and Unicode keys; reopen and historical reads; mixed root rejection; unsupported versions and key limits; and cancellation between index writes. Native verification stores text references under numeric keys, reopens storage and compares ordered ranges with the original sequence.
 
 This completes the initial persistent map primitive, not production paged reduction. State/value codecs, applying every event kind with bounded active objects, snapshot-format integration, browser/terminal adoption, efficient bulk map creation, publication/pins/collection and measured long-session performance remain required. Writes currently inherit per-node TextStore durability cost.
+
+
+### Persistent paged event reduction
+
+Apply every canonical event family through `PagedReducer`, preserving reference replay semantics while keeping message/tool/edit text in immutable content references and object collections in persistent ordered maps. Pending replacements retain both chunk order and an aggregate reference across checkpoint recovery. Reference index keys are hashed with the original key retained and verified, so protocol-valid long references remain representable.
+
+Publish only completed roots under caller-owned serialization and durable atomic publication. Cancellation can leave unreferenced content but cannot mutate the prior root. The versioned `agentlive.paged-state` checkpoint is distinct from the initial snapshot codec; server catalogs, client dispatch and viewers require explicit integration. See [PAGED_STATE.md](docs/protocol/PAGED_STATE.md) for API bounds and recovery semantics.
+
+Validate every event kind against reference state after each application, reopen mid-replacement, retain old roots after cancellation, reject invalid transitions and artifact identity/version mismatches, and compare real native histories after checkpoint recovery. Production paged snapshot generation, browser/terminal adoption, browser content persistence, batching, pins/collection and long-session measurements remain required.

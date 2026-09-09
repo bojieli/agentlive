@@ -1,3 +1,4 @@
+import { verifyPagedReducer } from "./verify-paged-reducer.mjs";
 import { verifyServerSnapshot } from "./verify-server-snapshot.mjs";
 /** Exercise the actual browser transport/model against a native probe's recording. */
 import { verifyContentStore } from "./verify-content-store.mjs";
@@ -136,8 +137,10 @@ export async function verifyBrowserSession(
       viewer.state,
       signal,
     );
+    const pagedReducer = await verifyPagedReducer(events, viewer.state, signal);
     const counts = {
       contentStore,
+      pagedReducer,
       serverSnapshot,
       renderedActivityItems: rows.length,
       activitySearchVerified,

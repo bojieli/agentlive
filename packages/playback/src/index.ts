@@ -526,3 +526,9 @@ export {
   type OrderedMapRoot,
   type OrderedMapKey,
 } from "./ordered-map.js";
+export {
+  PagedReducer,
+  initialPagedState,
+  type PagedContent,
+  type PagedRecordingState,
+} from "./paged-reducer.js";
