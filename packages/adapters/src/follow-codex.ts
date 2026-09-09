@@ -7,6 +7,7 @@ import {
   createCodexHistoryConsumer,
   inspectCodexHistory,
 } from "./codex-history.js";
+import type { SourceCursor } from "./jsonl.js";
 import { followJsonlSource } from "./follow-jsonl.js";
 /** Full retained backfill on each attach reconstructs converter state; journal source keys deduplicate it. */
 export async function followCodexHistory(options: {
@@ -17,6 +18,7 @@ export async function followCodexHistory(options: {
   secrets?: readonly string[];
   resolveArtifact?: CodexArtifactResolver;
   pollMs?: number;
+  onRecordCommitted?: (cursor: SourceCursor) => Promise<void>;
   onCaughtUp?: () => Promise<void>;
 }): Promise<void> {
   const manifest = await inspectCodexHistory(
@@ -43,7 +45,10 @@ export async function followCodexHistory(options: {
   await followJsonlSource(options.sourcePath, {
     signal: options.signal,
     ...(options.pollMs === undefined ? {} : { pollMs: options.pollMs }),
-    commit: consumer.accept,
+    commit: async (record) => {
+      await consumer.accept(record);
+      await options.onRecordCommitted?.(record.cursor);
+    },
     onCaughtUp: async () => {
       await options.onCaughtUp?.();
     },

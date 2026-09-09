@@ -98,3 +98,19 @@ node scripts/probe-history-import.mjs /path/to/codex-session.jsonl
 ```
 
 The distributable npm package is not yet built. See [native-history corpus coverage](docs/adapters/NATIVE_HISTORY_CORPUS.md) for tested behavior and unresolved object/artifact types.
+
+Follow a retained Codex JSONL history and publish subsequent appends:
+
+```sh
+npx --yes pnpm@12.3.4 agentlive publish --agent codex --source /path/to/session.jsonl
+```
+
+Start `serve` first using the same state directory. Publishing defaults to private visibility. Use `--record-format legacy` for older histories without structured item records. Stop with Ctrl-C and run the same command to resume the same recording; it stays open, and pending captured events remain on disk. The initial retained history is included. Source catch-up and remote delivery are separate states: `source-caught-up` reports local conversion, while publisher status reports network progress.
+
+This command currently supports Codex only. Initial recording creation needs connectivity; an existing binding can capture text while disconnected. Attachment upload can pause conversion until connectivity returns. Switching an ended import into a live recording still requires an explicit migration that is not yet implemented.
+
+A read-only native transport/restart probe is available:
+
+```sh
+node scripts/probe-codex-publish.mjs /path/to/archived-session.jsonl
+```

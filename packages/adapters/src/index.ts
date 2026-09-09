@@ -55,3 +55,8 @@ export {
 } from "./import-opencode.js";
 
 export type { FileArtifactResolver } from "./artifact-types.js";
+
+export {
+  publishCodexRecording,
+  type CodexPublishOptions,
+} from "./publish-codex.js";

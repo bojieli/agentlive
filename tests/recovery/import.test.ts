@@ -481,3 +481,190 @@ it("imports Codex source goal updates as replayable progress instead of gaps", a
   });
   expect(result.report.unsupportedRecordTypes).toEqual({});
 });
+
+it("publishes retained history, resumes the same recording, and rejects a rewritten source prefix", async () => {
+  const { publishCodexRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const { server, options } = await setup();
+  let streamId = "";
+  async function attach(expectedText: string) {
+    const controller = new AbortController();
+    let caughtUp = false;
+    let producerEvents = 0;
+    let failure: unknown;
+    const running = publishCodexRecording({
+      ...options,
+      signal: controller.signal,
+      onReady: (recording) => {
+        if (streamId) expect(recording.streamId).toBe(streamId);
+        streamId = recording.streamId;
+      },
+      onCaughtUp: async (boundary) => {
+        producerEvents = boundary.producerEvents;
+        caughtUp = true;
+      },
+    }).catch((error) => {
+      failure = error;
+    });
+    try {
+      await expect
+        .poll(
+          async () => {
+            if (failure) throw failure;
+            if (!streamId || !caughtUp) return false;
+            const session = await server.store.get(streamId);
+            let state = initialState();
+            let through = 0;
+            for await (const event of session.history(
+              0,
+              session.boundary.sequence,
+            )) {
+              state = apply(state, event);
+              if (event.origin.type === "publisher")
+                through = Math.max(through, event.origin.event.producerSeq);
+            }
+            return (
+              through >= producerEvents &&
+              [...state.messages.values()].some(
+                (message) => message.text === expectedText,
+              )
+            );
+          },
+          { timeout: 10000 },
+        )
+        .toBe(true);
+    } finally {
+      controller.abort();
+      await running;
+    }
+    if (failure) throw failure;
+    return (await server.store.get(streamId)).boundary.sequence;
+  }
+  const baseline = await attach("Imported [REDACTED] text");
+  expect(await attach("Imported [REDACTED] text")).toBe(baseline);
+  await appendFile(
+    options.sourcePath,
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-09-01T00:00:06.000Z",
+      payload: {
+        type: "item_completed",
+        item: {
+          type: "AgentMessage",
+          id: "resumed_message",
+          content: [{ type: "Text", text: "After restart" }],
+        },
+      },
+    }) + "\n",
+  );
+  expect(await attach("After restart")).toBeGreaterThan(baseline);
+  expect((await server.store.get(streamId)).info.lifecycle).toBe("open");
+  const { readFile } = await import("node:fs/promises");
+  const original = await readFile(options.sourcePath, "utf8");
+  await writeFile(options.sourcePath, original.replace("Imported", "Replaced"));
+  await expect(publishCodexRecording(options)).rejects.toThrow(
+    "Source prefix changed",
+  );
+  await writeFile(options.sourcePath, original);
+  await attach("After restart"); // Failure released the journal and artifact locks.
+}, 30000);
+
+it("rejects attaching an ended import as live without migrating its binding", async () => {
+  const { publishCodexRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const { options } = await setup();
+  await importCodexRecording(options);
+  await expect(publishCodexRecording(options)).rejects.toThrow(
+    "historical import",
+  );
+});
+
+it("captures while a bound server is offline and sends the backlog after restart", async () => {
+  const { publishCodexRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const { readdir, readFile } = await import("node:fs/promises");
+  const { root, server, options } = await setup();
+  let streamId = "";
+  const first = new AbortController();
+  await publishCodexRecording({
+    ...options,
+    signal: first.signal,
+    onReady: (recording) => {
+      streamId = recording.streamId;
+    },
+    onCaughtUp: async () => {
+      first.abort();
+    },
+  });
+  await expect(importCodexRecording(options)).rejects.toThrow("live publisher");
+  await server.close();
+  await appendFile(
+    options.sourcePath,
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-09-01T00:00:07.000Z",
+      payload: {
+        type: "item_completed",
+        item: {
+          type: "AgentMessage",
+          id: "offline_message",
+          content: [{ type: "Text", text: "Captured offline" }],
+        },
+      },
+    }) + "\n",
+  );
+  const controller = new AbortController();
+  let caughtUp = false;
+  let failure: unknown;
+  const running = publishCodexRecording({
+    ...options,
+    signal: controller.signal,
+    onCaughtUp: async () => {
+      caughtUp = true;
+    },
+  }).catch((error) => {
+    failure = error;
+  });
+  try {
+    await expect
+      .poll(() => {
+        if (failure) throw failure;
+        return caughtUp;
+      })
+      .toBe(true);
+    const directories = await readdir(options.publisherRoot);
+    const journalText = await readFile(
+      join(options.publisherRoot, directories[0]!, "capture.jsonl"),
+      "utf8",
+    );
+    expect(journalText).toContain("Captured offline");
+    const restarted = await startServer({
+      directory: join(root, "server"),
+      ownerSecret: options.ownerCredential,
+      port: Number(new URL(server.url).port),
+    });
+    servers.push(restarted);
+    await expect
+      .poll(
+        async () => {
+          if (failure) throw failure;
+          const session = await restarted.store.get(streamId);
+          let state = initialState();
+          for await (const event of session.history(
+            0,
+            session.boundary.sequence,
+          ))
+            state = apply(state, event);
+          return [...state.messages.values()].some(
+            (message) => message.text === "Captured offline",
+          );
+        },
+        { timeout: 15000 },
+      )
+      .toBe(true);
+  } finally {
+    controller.abort();
+    await running;
+  }
+  if (failure) throw failure;
+}, 25000);

@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { startServer } from "@agentlive/server";
 import {
+  publishCodexRecording,
   importClaudeRecording,
   importCodexRecording,
   importKimiRecording,
@@ -17,6 +18,7 @@ const help = `AgentLive — record and share coding-agent sessions
 Commands:
   agentlive serve [--host 127.0.0.1] [--port 7331]
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
+  agentlive publish --agent codex --source <file> [--record-format structured|legacy]
   agentlive replay --stream <recording-id> [--server <origin>] [--anonymous]
 
 Shared options:
@@ -70,12 +72,18 @@ async function main() {
     process.stdout.write(help);
     return;
   }
-  if (command !== "serve" && command !== "import" && command !== "replay")
+  if (
+    command !== "serve" &&
+    command !== "import" &&
+    command !== "replay" &&
+    command !== "publish"
+  )
     throw new Error("Unknown command; use agentlive --help");
   const { values } = parseArgs({
     args,
     options: {
       help: { type: "boolean" },
+      "record-format": { type: "string" },
       stream: { type: "string" },
       anonymous: { type: "boolean" },
       "state-dir": { type: "string" },
@@ -108,6 +116,7 @@ async function main() {
       : command === "replay"
         ? ["server", "stream", "anonymous"]
         : [
+            ...(command === "publish" ? ["record-format"] : []),
             "agent",
             "source",
             "server",
@@ -211,7 +220,9 @@ async function main() {
     publisherRoot: join(stateDir, "publisher"),
     serverOrigin: values.server ?? "http://127.0.0.1:7331",
     ownerCredential: secret,
-    title: values.title ?? `Imported ${agent} session`,
+    title:
+      values.title ??
+      `${command === "publish" ? "Live" : "Imported"} ${agent} session`,
     visibility,
     secrets,
     signal: controller.signal,
@@ -222,6 +233,33 @@ async function main() {
       ? { artifactBaseDirectory: values["artifact-base"] }
       : {}),
   };
+  if (command === "publish") {
+    if (agent !== "codex")
+      throw new Error("Live file publishing currently supports Codex only");
+    const recordFormat = values["record-format"] ?? "structured";
+    if (recordFormat !== "structured" && recordFormat !== "legacy")
+      throw new Error("Record format must be structured or legacy");
+    await publishCodexRecording({
+      ...options,
+      recordFormat,
+      onReady: (recording) => {
+        process.stdout.write(
+          JSON.stringify({ event: "publishing", ...recording }) + "\n",
+        );
+      },
+      onStatus: (status) => {
+        process.stdout.write(
+          JSON.stringify({ event: "publisher-status", status }) + "\n",
+        );
+      },
+      onCaughtUp: async () => {
+        process.stdout.write(
+          JSON.stringify({ event: "source-caught-up" }) + "\n",
+        );
+      },
+    });
+    return;
+  }
   const result =
     agent === "codex"
       ? await importCodexRecording(options)
