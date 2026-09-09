@@ -13,6 +13,8 @@ import {
 } from "@agentlive/protocol";
 import {
   PagedReducer,
+  ActivityIndex,
+  initialActivityIndex,
   initialPagedState,
   openRecordingSnapshot,
   type ContentReference,
@@ -176,15 +178,24 @@ export class RecordingSnapshots {
       const existing = entries.find((entry) => entry.serverSeq === through);
       if (existing) return this.verify(existing, combined);
       const store = await this.store(),
-        reducer = new PagedReducer(store);
+        reducer = new PagedReducer(store),
+        activityIndex = new ActivityIndex(store);
       const previous = entries.findLast(
         (entry) =>
-          entry.serverSeq < through && entry.format === "agentlive.paged-state",
+          entry.serverSeq < through &&
+          entry.format === "agentlive.paged-state" &&
+          !!entry.activity,
       );
-      let state = initialPagedState();
+      let state = initialPagedState(),
+        rows = initialActivityIndex();
       if (previous) {
         await this.verify(previous, combined);
         state = await reducer.open(previous.ref, this.binding, combined);
+        rows = await activityIndex.open(
+          previous.activity!,
+          this.binding,
+          combined,
+        );
       }
       for await (const event of history(state.appliedSeq)) {
         combined.throwIfAborted();
@@ -197,6 +208,7 @@ export class RecordingSnapshots {
             "Snapshot history is not the requested contiguous suffix",
           );
         state = await reducer.apply(state, event, combined);
+        rows = await activityIndex.apply(rows, event, state, reducer, combined);
       }
       if (state.appliedSeq !== through)
         throw new ProtocolError(
@@ -209,6 +221,7 @@ export class RecordingSnapshots {
         serverSeq: through,
         timelineMs: state.timelineMs,
         ref,
+        activity: await activityIndex.checkpoint(rows, this.binding, combined),
       };
       await this.verify(entry, combined);
       combined.throwIfAborted();

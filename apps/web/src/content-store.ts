@@ -11,18 +11,12 @@ import {
   ProtocolError,
   type TextReference,
   snapshotDescriptorSchema,
-  snapshotContentReferenceSchema,
   type SnapshotDescriptor,
 } from "@agentlive/protocol";
 import type { BrowserView, CacheBinding } from "./history-cache.js";
 export type BrowserCheckpoint = SnapshotDescriptor & {
   activity?: TextReference;
 };
-const browserCheckpointSchema = snapshotDescriptorSchema.extend({
-  activity: snapshotContentReferenceSchema
-    .extend({ units: snapshotContentReferenceSchema.shape.units.max(32768) })
-    .optional(),
-});
 const DATABASE = "agentlive-content-v1",
   MAX_TOTAL = 512 * 1024 * 1024;
 const encoder = new TextEncoder();
@@ -285,7 +279,7 @@ export class BrowserContentStore {
     );
   }
   private checkpoint(value: unknown): BrowserCheckpoint {
-    const parsed = browserCheckpointSchema.safeParse(value);
+    const parsed = snapshotDescriptorSchema.safeParse(value);
     if (!parsed.success || parsed.data.format !== "agentlive.paged-state")
       bad();
     const { activity, ...state } = parsed.data;

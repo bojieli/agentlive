@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomBytes, createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
-import { promisify } from "node:util";
+import { promisify, isDeepStrictEqual } from "node:util";
 const run = promisify(execFile);
 const workspace = resolve(import.meta.dirname, "..");
 const root = await realpath(
@@ -220,8 +220,23 @@ try {
   const selected = await snapshotRequest(
     `/snapshots?${new URLSearchParams({ revision: metadata.revision, throughServerSeq: String(metadata.serverSeq) })}`,
   );
-  if (JSON.stringify(published) !== JSON.stringify(selected))
+  if (!isDeepStrictEqual(published, selected))
     throw new Error("Installed snapshot selection differs");
+  const activityRef = selected.snapshot.activity;
+  if (!activityRef)
+    throw new Error("Installed snapshot omitted activity ordering");
+  const activityContent = await snapshotRequest(
+    `/snapshot-content/${activityRef.hash}?${new URLSearchParams({ revision: metadata.revision, byteSize: String(activityRef.byteSize), units: String(activityRef.units), offset: "0", length: String(activityRef.units) })}`,
+  );
+  const activityManifest = JSON.parse(activityContent.text);
+  if (
+    activityManifest.format !== "agentlive.activity-index" ||
+    activityManifest.version !== 1 ||
+    activityManifest.streamId !== imported.streamId ||
+    activityManifest.revision !== metadata.revision ||
+    activityManifest.root.appliedSeq !== metadata.serverSeq
+  )
+    throw new Error("Installed activity snapshot binding or boundary differs");
   const ref = selected.snapshot.ref;
   const content = await snapshotRequest(
     `/snapshot-content/${ref.hash}?${new URLSearchParams({ revision: metadata.revision, byteSize: String(ref.byteSize), units: String(ref.units), offset: "0", length: String(ref.units) })}`,

@@ -153,6 +153,7 @@ export async function verifyBrowserSession(
         history.metadata.revision,
         viewer.state,
         signal,
+        events,
       ),
     );
     const pagedReducer = await measured("pagedReducer", () =>

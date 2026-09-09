@@ -160,6 +160,7 @@ export class RecordingSnapshotClient {
         "Snapshot descriptor boundary differs from manifest",
       );
     Object.freeze(descriptor.ref);
+    if (descriptor.activity) Object.freeze(descriptor.activity);
     Object.freeze(descriptor);
     return { descriptor, reader };
   }

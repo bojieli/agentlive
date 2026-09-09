@@ -1,3 +1,4 @@
+import { ActivityIndex, type ActivityIndexRoot } from "./activity-index.js";
 import {
   type SnapshotDescriptor,
   ProtocolError,
@@ -22,6 +23,10 @@ export class PagedSnapshotReader {
     private readonly reducer: PagedReducer,
     private readonly content: SnapshotContent,
     binding: SnapshotBinding,
+    private readonly activity: {
+      index: ActivityIndex;
+      root: ActivityIndexRoot;
+    } | null,
   ) {
     this.manifest = Object.freeze({
       ...binding,
@@ -34,7 +39,13 @@ export class PagedSnapshotReader {
     binding: SnapshotBinding,
     content: SnapshotContent,
     signal?: AbortSignal,
+    activityReference?: ContentReference,
   ) {
+    ref = { ...ref };
+    binding = { streamId: binding.streamId, revision: binding.revision };
+    activityReference = activityReference
+      ? { ...activityReference }
+      : undefined;
     const reducer = new PagedReducer({
       read: content.read.bind(content),
       put: async () => {
@@ -45,11 +56,52 @@ export class PagedSnapshotReader {
       },
     });
     const root = await reducer.open(ref, binding, signal);
-    return new PagedSnapshotReader(root, reducer, content, {
-      streamId: binding.streamId,
-      revision: binding.revision,
-    });
+    let activity: { index: ActivityIndex; root: ActivityIndexRoot } | null =
+      null;
+    if (activityReference) {
+      const index = new ActivityIndex(content);
+      const rows = await index.open(activityReference, binding, signal);
+      if (
+        rows.appliedSeq !== root.appliedSeq ||
+        rows.gaps !== (root.maps.gaps?.size ?? 0)
+      )
+        throw new ProtocolError(
+          "corrupt_storage",
+          "Snapshot activity boundary differs from state",
+        );
+      activity = { index, root: rows };
+    }
+    return new PagedSnapshotReader(
+      root,
+      reducer,
+      content,
+      {
+        streamId: binding.streamId,
+        revision: binding.revision,
+      },
+      activity,
+    );
   }
+  get activityState() {
+    return this.activity ? structuredClone(this.activity.root) : null;
+  }
+  private indexed() {
+    if (!this.activity)
+      throw new ProtocolError(
+        "precondition_failed",
+        "Snapshot has no activity index",
+      );
+    return this.activity;
+  }
+  async activityRows(offset: number, limit: number, signal?: AbortSignal) {
+    const { index, root } = this.indexed();
+    return index.entries(root, offset, limit, signal);
+  }
+  async activityPosition(key: string, signal?: AbortSignal) {
+    const { index, root } = this.indexed();
+    return index.position(root, key, signal);
+  }
+
   get state(): PagedRecordingState {
     return structuredClone(this.root);
   }
@@ -88,9 +140,21 @@ export async function openRecordingSnapshot(
   signal?: AbortSignal,
 ) {
   descriptor = snapshotDescriptorSchema.parse(descriptor);
+  binding = { streamId: binding.streamId, revision: binding.revision };
+  if (descriptor.activity && descriptor.format !== "agentlive.paged-state")
+    throw new ProtocolError(
+      "corrupt_storage",
+      "Legacy snapshot cannot contain an activity index",
+    );
   const reader =
     descriptor.format === "agentlive.paged-state"
-      ? await PagedSnapshotReader.open(descriptor.ref, binding, content, signal)
+      ? await PagedSnapshotReader.open(
+          descriptor.ref,
+          binding,
+          content,
+          signal,
+          descriptor.activity,
+        )
       : await SnapshotReader.open(descriptor.ref, binding, content, signal);
   if (
     reader.manifest.serverSeq !== descriptor.serverSeq ||

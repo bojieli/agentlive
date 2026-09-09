@@ -25,6 +25,9 @@ export const snapshotContentReferenceSchema = z.strictObject({
 });
 export const snapshotDescriptorSchema = z.strictObject({
   format: z.literal("agentlive.paged-state").optional(),
+  activity: snapshotContentReferenceSchema
+    .extend({ units: z.number().int().min(0).max(32768) })
+    .optional(),
   serverSeq: cursorSchema,
   timelineMs: z.number().finite().nonnegative(),
   ref: snapshotContentReferenceSchema.extend({
