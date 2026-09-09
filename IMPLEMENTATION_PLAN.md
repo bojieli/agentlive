@@ -1051,7 +1051,7 @@ Package verification rebuilds against an unreachable registry and compares tarba
 
 Expiry reports `CancellationTimeoutError` (`cancellation_timeout`). It bounds the caller's wait, not the lifetime of accepted I/O. The original task continues draining and retains cache ownership until its normal cleanup completes. The error's `whenDrained` promise exposes eventual completion or failure; late rejection is observed even if a caller ignores it. Do not force-unlock the cache or terminate the process from library code. A restarted subscriber must wait for ownership or fail clearly, never overlap an uncertain writer. JavaScript deadlines require a responsive event loop; a supervisor is needed for a hard process termination deadline.
 
-Validate a stalled receipt commit: cancellation reports timeout, another cache open remains excluded, releasing the commit completes cleanup, and reopening recovers the durable prefix. Also validate invalid deadlines and existing stalled-output/join cancellation cases. This checkpoint applies to the reference watch client; other publisher and viewer cancellation policies must be assessed separately.
+Validate a stalled receipt commit: cancellation reports timeout, another cache open remains excluded, releasing the commit completes cleanup, and reopening recovers the durable prefix. Also validate a cleanup failure after timeout: the original timeout result stays unchanged, `whenDrained` rejects with the late failure, and completed cleanup permits cache recovery. Validate invalid deadlines and existing stalled-output/join cancellation cases. This checkpoint applies to the reference watch client; other publisher and viewer cancellation policies must be assessed separately.
 
 
 ### Initial server-hosted browser viewer
