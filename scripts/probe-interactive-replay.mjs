@@ -51,7 +51,11 @@ watching = "watch" in command
 for quit_early in (True, False):
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
-    child = subprocess.Popen(command, stdin=slave, stdout=slave, stderr=slave)
+    attempt_command = list(command)
+    if watching and not quit_early:
+        index = attempt_command.index("--from-ms")
+        del attempt_command[index:index + 2]
+    child = subprocess.Popen(attempt_command, stdin=slave, stdout=slave, stderr=slave)
     output = b""
     def read_until(marker, timeout=10):
         global output
@@ -106,7 +110,7 @@ for quit_early in (True, False):
             child.wait()
         os.close(master)
         os.close(slave)
-print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "liveCatchup": watching, "quit": True, "terminalRestored": True, "seekState": True, "watchControls": watching, "persistedPreferences": watching, "inSessionSeek": watching}))
+print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "liveCatchup": watching, "quit": True, "terminalRestored": True, "seekState": True, "watchControls": watching, "persistedPreferences": watching, "inSessionSeek": watching, "restoredSeekTime": watching}))
 `;
   const result = await promisify(execFile)(
     "python3",

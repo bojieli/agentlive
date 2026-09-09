@@ -223,3 +223,6 @@ Start a live viewer at a particular recorded time with `agentlive watch --stream
 
 
 During interactive watch, `[` seeks back 30 seconds, `]` seeks forward 30 seconds, and `0` returns to the beginning. These controls pause presentation for inspection; space resumes and `l` catches up live. Seeking uses the currently received cache, so it also works during a network outage once history is cached. Programmatic viewers can call `PlaybackPacer.seek(milliseconds)` for an exact target and observe completion through `onPositioned`. Programmatic seeking preserves the controller’s pause state. Requests beyond received history clamp to its latest event.
+
+
+Saved viewer positions retain an explicit seek time between events. For example, seeking to 30 seconds between events at 0 and 60 seconds and restarting with `--resume-view` restores the 30-second snapshot and timing anchor. Older sequence-only checkpoints still load at their event timestamp. This preserves selected seek positions; continuously elapsed playback time between events is not checkpointed on every clock tick.

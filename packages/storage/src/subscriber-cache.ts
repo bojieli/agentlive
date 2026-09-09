@@ -189,8 +189,35 @@ export class SubscriberCache {
       return entry.hash;
     throw new Error("Presentation checkpoint prefix is missing");
   }
+  private async presentationTime(
+    serverSeq: number,
+    requested?: number,
+  ): Promise<number> {
+    let lower = 0;
+    if (serverSeq)
+      for await (const event of this.events(serverSeq - 1, serverSeq))
+        lower = event.timelineMs;
+    let upper = lower;
+    if (serverSeq < this.cursor.serverSeq)
+      for await (const event of this.events(serverSeq, serverSeq + 1))
+        upper = event.timelineMs;
+    const timelineMs = requested === undefined ? lower : requested;
+    if (
+      !Number.isFinite(timelineMs) ||
+      timelineMs < lower ||
+      timelineMs > upper
+    )
+      throw new Error("Presentation timeline lies outside its event interval");
+    return timelineMs;
+  }
   /** Presentation is optional metadata; receipt recovery never depends on it. */
   async loadPresentation(): Promise<number> {
+    return (await this.loadPresentationPosition()).serverSeq;
+  }
+  async loadPresentationPosition(): Promise<{
+    serverSeq: number;
+    timelineMs: number;
+  }> {
     if (this.closed) throw new Error("Subscriber cache is closed");
     await this.presentationTail;
     const path = join(this.directory, "presentation.json");
@@ -200,17 +227,20 @@ export class SubscriberCache {
         throw new Error("Presentation checkpoint is oversized");
       saved = JSON.parse(await readFile(path, "utf8"));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return { serverSeq: 0, timelineMs: 0 };
       throw error;
     }
     if (
       !saved ||
-      saved.version !== 1 ||
+      ![1, 2].includes(saved.version) ||
       saved.serverOrigin !== this.binding.serverOrigin ||
       saved.streamId !== this.binding.streamId ||
       saved.revision !== this.binding.revision ||
       Object.keys(saved).sort().join(",") !==
-        "hash,revision,serverOrigin,serverSeq,streamId,version"
+        (saved.version === 1
+          ? "hash,revision,serverOrigin,serverSeq,streamId,version"
+          : "hash,revision,serverOrigin,serverSeq,streamId,timelineMs,version")
     )
       throw new Error("Presentation checkpoint identity is invalid");
     const serverSeq = cursorSchema.parse(saved.serverSeq);
@@ -218,16 +248,22 @@ export class SubscriberCache {
       hashSchema.parse(saved.hash) !== (await this.presentationHash(serverSeq))
     )
       throw new Error("Presentation checkpoint prefix hash changed");
-    return serverSeq;
+    const timelineMs = await this.presentationTime(
+      serverSeq,
+      saved.version === 2 ? saved.timelineMs : undefined,
+    );
+    return { serverSeq, timelineMs };
   }
-  savePresentation(serverSeq: number): Promise<void> {
+  savePresentation(serverSeq: number, timelineMs?: number): Promise<void> {
     if (this.closed)
       return Promise.reject(new Error("Subscriber cache is closed"));
     cursorSchema.parse(serverSeq);
     const work = this.presentationTail.then(async () => {
       const hash = await this.presentationHash(serverSeq);
+      const position = await this.presentationTime(serverSeq, timelineMs);
       await atomicJson(join(this.directory, "presentation.json"), {
-        version: 1,
+        version: 2,
+        timelineMs: position,
         ...this.binding,
         serverSeq,
         hash,

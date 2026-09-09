@@ -54,7 +54,7 @@ async function setup(visibility: "public" | "private" = "public") {
     revision: session.info.revision,
   });
   let producerSeq = 0;
-  const publish = async (count: number) => {
+  const publish = async (count: number, spacingMs = 1) => {
     const events: PublishedEvent[] = Array.from({ length: count }, () => ({
       protocolVersion: 1,
       streamId: session.info.id,
@@ -62,7 +62,7 @@ async function setup(visibility: "public" | "private" = "public") {
       producerSeq: ++producerSeq,
       observedAt: new Date().toISOString(),
       clockSegmentId: "clock1",
-      elapsedMs: producerSeq,
+      elapsedMs: producerSeq * spacingMs,
       fidelity: "delta",
       source: { agent: "synthetic", sessionId: "native1" },
       content: {
@@ -1145,5 +1145,84 @@ it("finishes an accepted output write before rendering a requested seek snapshot
     release.resolve();
     abort.abort();
     await done;
+  }
+});
+
+it("retains a seek between events across viewer restart and reads legacy positions", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { PlaybackPacer } =
+    await import("../../packages/playback/src/index.js");
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { readdir, readFile, writeFile } = await import("node:fs/promises");
+  const { root, server, session, publish } = await setup();
+  await publish(6, 10000);
+  const events = [];
+  for await (const event of session.history(0, session.boundary.sequence))
+    events.push(event);
+  const target = (events[3]!.timelineMs + events[4]!.timelineMs) / 2;
+  const cacheRoot = join(root, "idle-position");
+  const settings = {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    cacheRoot,
+    resumeView: true,
+    write: async () => {},
+  };
+  const positions: { serverSeq: number; timelineMs: number }[] = [];
+  for (const fromMs of [target, undefined]) {
+    const abort = new AbortController();
+    const playback = new PlaybackPacer();
+    playback.setPaused(true);
+    const done = watchRecording({
+      ...settings,
+      ...(fromMs === undefined ? {} : { fromMs }),
+      presentation: playback,
+      signal: abort.signal,
+      onPositioned: (position) => {
+        positions.push(position);
+        abort.abort();
+      },
+    });
+    runs.push({ abort, done });
+    await done;
+  }
+  expect(positions).toEqual([
+    { serverSeq: 4, timelineMs: target },
+    { serverSeq: 4, timelineMs: target },
+  ]);
+  const cache = await SubscriberCache.open(cacheRoot, {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    initialize: async () => ({ revision: session.info.revision }),
+  });
+  try {
+    expect(await cache.loadPresentation()).toBe(4);
+    await expect(
+      cache.savePresentation(4, events[4]!.timelineMs + 1),
+    ).rejects.toThrow("interval");
+    await expect(
+      cache.savePresentation(4, events[3]!.timelineMs - 1),
+    ).rejects.toThrow("interval");
+    await expect(cache.savePresentation(4, NaN)).rejects.toThrow("interval");
+    const path = join(
+      cacheRoot,
+      (await readdir(cacheRoot))[0]!,
+      "presentation.json",
+    );
+    const saved = JSON.parse(await readFile(path, "utf8"));
+    expect(saved.version).toBe(2);
+    saved.timelineMs = null;
+    await writeFile(path, JSON.stringify(saved));
+    await expect(cache.loadPresentationPosition()).rejects.toThrow("interval");
+    saved.version = 1;
+    delete saved.timelineMs;
+    await writeFile(path, JSON.stringify(saved));
+    expect(await cache.loadPresentationPosition()).toEqual({
+      serverSeq: 4,
+      timelineMs: events[3]!.timelineMs,
+    });
+  } finally {
+    await cache.close();
   }
 });

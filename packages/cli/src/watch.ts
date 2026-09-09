@@ -97,11 +97,15 @@ export async function watchRecording(options: {
   };
   const present = async (cache: SubscriberCache) => {
     if (options.restartView) await cache.savePresentation(0);
-    let saved =
+    const resumed =
       options.fromMs === undefined && rememberPosition
-        ? await cache.loadPresentation()
-        : 0;
-    let positionedAt: number | undefined;
+        ? await cache.loadPresentationPosition()
+        : undefined;
+    let saved = resumed?.serverSeq ?? 0;
+    let positionedAt =
+      resumed && (resumed.serverSeq > 0 || resumed.timelineMs > 0)
+        ? resumed.timelineMs
+        : undefined;
     if (options.fromMs !== undefined) {
       const through = seekMetadata!.serverSeq;
       while (cache.cursor.serverSeq < through)
@@ -131,7 +135,8 @@ export async function watchRecording(options: {
         signal.throwIfAborted();
         await interruptible(write(text, signal), signal);
       }
-      if (rememberPosition) await cache.savePresentation(saved);
+      if (rememberPosition)
+        await cache.savePresentation(saved, positionedAt ?? state.timelineMs);
       viewedTime = positionedAt ?? state.timelineMs;
       presentation?.reset(viewedTime);
       options.onPositioned?.({ serverSeq: saved, timelineMs: viewedTime });
@@ -187,7 +192,8 @@ export async function watchRecording(options: {
           viewedTime = state.timelineMs;
           options.onPresented?.(state.appliedSeq);
         }
-        if (rememberPosition) await cache.savePresentation(state.appliedSeq);
+        if (rememberPosition)
+          await cache.savePresentation(state.appliedSeq, viewedTime);
         if (pendingSeek) continue;
         await cache.waitForEvents(state.appliedSeq, navigation);
       } catch (error) {

@@ -1014,3 +1014,10 @@ Expose arbitrary time requests through PlaybackPacer.seek and completed position
 Wake paused/timed presentation waits and waits for additional cache events when a seek arrives. Keep only the latest pending request. Finish accepted output before displaying a replacement snapshot, avoiding overlapping sink writes; process a newer pending request after the active reconstruction/output completes. Use the active target immediately for relative keypresses during snapshot rendering. Keep cancellation separate so quit can still stop a blocked output sink. Preserve pause for programmatic seeks, reset the timing anchor after reconstruction, and persist a selected sequence only after snapshot output succeeds.
 
 Each reconstruction retains the existing 64 MiB event budget; reset that counter when replacing state so repeated seeks do not consume a cumulative budget. Seeking works on cached history during receipt outages and clamps beyond received history. Paged reconstruction, browser/mobile interfaces, and seek support in the standalone replay command remain separate work.
+
+
+### Preserve selected timeline positions across restart
+
+Presentation checkpoint version 2 stores timelineMs alongside the sequence and checksummed prefix binding. Validate the selected time within the saved event’s interval: at or after that event, and no later than the next cached event; at the receipt boundary it cannot exceed the final event time. Keep version-1 reading support by deriving its event timestamp, and preserve the existing sequence-only load API while exposing loadPresentationPosition for timeline-aware callers.
+
+Watch reconstructs the saved event state, displays the selected timeline position, and anchors pacing there. Snapshot persistence and idle-loop checkpointing must retain this selected time instead of replacing it with the preceding event timestamp. New presented events advance the position normally. Validate a mid-gap seek through restart, malformed/out-of-interval metadata rejection, and legacy checkpoints. Clock-tick progress between events is not continuously persisted.

@@ -293,3 +293,10 @@ Validation: all 198 tests across 25 files pass. Tests cover zero/interior/beyond
 Watch now supports exact programmatic seeks and interactive backward/forward 30-second steps plus return-to-beginning. Keyboard seeking pauses for inspection. Requests use a frozen received prefix, coalesce the latest pending target, wake presentation waits, and leave receipt connected. Accepted output finishes before snapshot output begins. Relative keys use the active target during rendering; successful position callbacks follow completed snapshots. Programmatic seeking preserves pause.
 
 Validation: all 200 tests across 25 files pass, including paused backward/forward seeks, request coalescing, continued receipt on one connection, ordered suffix playback, listener removal, and a stalled sink without overlapping writes. The PTY probe passed repeated seeks and future-state isolation. The installed OpenCode import-continuation probe passed a second seek in the running viewer, native/publisher restart, 26 stored events, and one verified attachment. Reconstruction remains bounded to 64 MiB per pass; paged state and production browser/mobile viewers remain outstanding.
+
+
+### Selected timeline checkpoint recovery
+
+Presentation checkpoints now retain both event sequence and selected timeline time. Watch restores the selected time in its snapshot and pacing anchor, including explicit seeks between events. Version-1 checkpoints remain readable at their event timestamp, and sequence-only callers retain the existing API. Invalid times outside the saved event interval are rejected independently of durable receipt.
+
+Validation: all 201 tests across 25 files pass. Tests cover mid-gap seek/restart, interval bounds, malformed timestamps, and legacy checkpoint loading. The PTY probe restored a 30-second seek without passing from-ms on restart. The installed OpenCode import-continuation probe passed viewer restoration, in-session seeking, native/publisher restarts, 26 events, and one verified attachment. This preserves selected positions; clock-tick playback progress and paged/browser/mobile viewer work remain outstanding.
