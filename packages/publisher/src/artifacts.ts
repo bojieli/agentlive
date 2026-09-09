@@ -253,7 +253,7 @@ export class ArtifactSpool {
     if (existing) {
       if (existing.requestHash !== requestHash)
         throw new ProtocolError(
-          "precondition_failed",
+          "event_conflict",
           "Artifact source identity or capture policy changed",
         );
       await this.blobs.verify(existing.attachment);

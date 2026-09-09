@@ -338,10 +338,22 @@ it("captures live attachment versions and reuses announced versions after restar
     capture = undefined;
     await artifacts.close();
     artifacts = undefined;
+    // Simulate the previous flat outcome format before restarting without the source file.
+    const { readdir } = await import("node:fs/promises");
+    const outcomes = join(settings.directory, "outcomes");
+    for (const filename of await readdir(outcomes)) {
+      const path = join(outcomes, filename);
+      const saved = JSON.parse(await readFile(path, "utf8"));
+      await writeFile(path, JSON.stringify(saved.result));
+    }
     await rm(file);
     artifacts = await localArtifactResolver(settings);
     capture = await OpenCodeCapture.open(journal, ["secret-value"], artifacts);
     await capture.accept(withFile(original));
+    for (const filename of await readdir(outcomes))
+      expect(
+        JSON.parse(await readFile(join(outcomes, filename), "utf8")).version,
+      ).toBe(1);
     const before = journal.capturedThrough;
     await capture.accept(withFile(original));
     expect(journal.capturedThrough).toBe(before);

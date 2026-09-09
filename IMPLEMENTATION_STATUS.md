@@ -159,3 +159,11 @@ Message/tool reopening and explicit object visibility now preserve identity thro
 Validation: 134 tests across 22 files pass with Node 26.8.1, including restart while hidden, restoration without duplicate starts, legacy completion/presence repair, and hidden attachment updates. These are deterministic recovery tests; native revert metadata and the full native object matrix remain unfinished.
 
 The refreshed full local corpus replay passed 512/512 Codex, 1,556/1,591 Claude, 460/460 Kimi, and 12/12 discovered OpenCode exports. The 35 Claude failures lack standalone identity/timing and require parent-session association. Explicit unsupported gaps remain; detailed counts are in the native-history corpus document. No raw histories or rendered transcript text were committed.
+
+## Artifact outcome integrity checkpoint — 2026-09-09
+
+Local artifact outcomes now pin canonical request and capture-policy fingerprints before reuse. Conflicting concurrent calls serialize, caller inputs are copied before queuing, and missing-file outcomes remain stable after source files appear. Changed source path, artifact identity, provenance, expected hash, or filtering policy fails explicitly. Spool identity conflicts after a lost outcome checkpoint remain fatal instead of becoming unavailable events.
+
+Older successful outcomes upgrade against their durable attachment binding, including after deletion of the original source file. Older unavailable outcomes have no verifiable request identity and still need explicit migration/reconciliation; they are not silently rebound. Validation: all 138 tests across 23 files pass on Node 26.8.1, including real HTTP upload/download and successful legacy migration.
+
+The installed OpenCode live publication probe also passed after this change: three native turns, native-server restart under the same session, history recovered after publisher detachment, duplicate-free publisher restart, 24 stored events, and one downloaded attachment verified to contain the filtered text. Raw probe data remains ignored and local.
