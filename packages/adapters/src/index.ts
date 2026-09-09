@@ -25,3 +25,9 @@ export {
 export { localArtifactResolver } from "./local-artifacts.js";
 export { followJsonlSource, type FollowJsonlOptions } from "./follow-jsonl.js";
 export { followCodexHistory } from "./follow-codex.js";
+export {
+  inspectClaudeHistory,
+  captureClaudeHistory,
+  type ClaudeHistoryManifest,
+  type ClaudeCaptureSink,
+} from "./claude-history.js";
