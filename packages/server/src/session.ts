@@ -1,3 +1,5 @@
+import { RecordingSnapshots } from "./snapshots.js";
+import type { ContentReference } from "@agentlive/playback";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -59,6 +61,7 @@ export const sha256 = (value: string): string =>
 
 /** All authoritative recording mutations and subscription boundaries share this queue. */
 export class RecordingSession {
+  private snapshots: RecordingSnapshots;
   private queue: Promise<unknown> = Promise.resolve();
   private closing = false;
   private state: "open" | "ended" = "open";
@@ -86,7 +89,12 @@ export class RecordingSession {
     private metadata: SessionMetadata,
     private readonly log: JsonlLog<StoredEvent>,
     private readonly blobs: BlobStore,
-  ) {}
+  ) {
+    this.snapshots = new RecordingSnapshots(join(directory, "snapshots"), {
+      streamId: metadata.id,
+      revision: metadata.revision,
+    });
+  }
   static async open(directory: string): Promise<RecordingSession> {
     const metadata = sessionMetadataSchema.parse(
       JSON.parse(await readFile(join(directory, "metadata.json"), "utf8")),
@@ -162,6 +170,40 @@ export class RecordingSession {
   }
   get boundary(): LogBoundary {
     return this.log.boundary;
+  }
+  buildSnapshot(through: number, signal?: AbortSignal) {
+    this.snapshotBoundary(through);
+    return this.snapshots.build(
+      through,
+      () => this.history(0, through),
+      signal,
+    );
+  }
+  selectSnapshot(through: number, signal?: AbortSignal) {
+    this.snapshotBoundary(through);
+    return this.snapshots.select(through, signal);
+  }
+  readSnapshotContent(
+    ref: ContentReference,
+    offset: number,
+    length: number,
+    signal?: AbortSignal,
+  ) {
+    this.snapshotBoundary(0);
+    return this.snapshots.read(ref, offset, length, signal);
+  }
+  private snapshotBoundary(through: number) {
+    if (this.closing)
+      throw new ProtocolError("stream_gone", "Session is closing");
+    if (
+      !Number.isSafeInteger(through) ||
+      through < 0 ||
+      through > this.boundary.sequence
+    )
+      throw new ProtocolError(
+        "invalid_request",
+        "Invalid snapshot history boundary",
+      );
   }
   get subscriberCount(): number {
     return this.subscribers.size;
@@ -710,10 +752,11 @@ export class RecordingSession {
         } catch {}
       }
       this.subscribers.clear();
-      const results = await Promise.allSettled([
-        this.blobs.close(),
-        this.log.close(),
-      ]);
+      const snapshotResult = await Promise.allSettled([this.snapshots.close()]);
+      const results = [
+        ...snapshotResult,
+        ...(await Promise.allSettled([this.blobs.close(), this.log.close()])),
+      ];
       const errors = results.flatMap((result) =>
         result.status === "rejected" ? [result.reason] : [],
       );

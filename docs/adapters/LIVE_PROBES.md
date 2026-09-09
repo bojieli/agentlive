@@ -103,3 +103,12 @@ On 2026-09-09, OpenCode `--resume-import` passed three native turns with 26 stor
 On 2026-09-09, Claude `--resume-import` passed with two native turns, 28 stored events, four messages, and 16 rendered activity items. The shared content verifier wrote a paged snapshot, closed and reopened TextStore, and compared restored state with the native recording's reference-reducer state. The final rerun used strict deep equality, including Map and undefined-field semantics. Four text fields contained 468 UTF-16 units; combined content and snapshot storage used 12,272 bytes. Imported-history backfill, native resume, live suffix capture, publisher restart deduplication, search, seek, foreground revalidation, and paused playback restoration also passed.
 
 Only aggregate results are retained in documentation; temporary stored content is removed by the verifier. This establishes snapshot storage equivalence for the exercised native session. The browser model still receives and reduces events through its existing path; it does not yet load production snapshots, and this probe does not establish real-browser behavior or long-session memory bounds.
+
+
+## Server snapshot publication and HTTP reconstruction
+
+On 2026-09-09, a fresh Claude `--resume-import` probe passed two native turns, 28 stored events, four messages, and 16 rendered activity items. The shared verifier requested production server snapshot publication at sequence 28, selected the same descriptor, and reconstructed it through 32 bounded HTTP content reads. Strict deep equality matched the native session's reference state. Import backfill, native resume, live suffix, publisher deduplication, search, seeking and paused browser-model restoration also passed.
+
+This exercises the server endpoints with the native recording's credential, not an in-process snapshot shortcut. The verifier reports only the selected sequence, read count and success flag. The production browser still follows its existing event-based reducer; paged viewer loading, real browser behavior, and long-session performance remain unverified.
+
+The standalone package verifier additionally installs the actual tarball outside the workspace, imports a synthetic recording, publishes/selects its snapshot, and reads the root manifest through the installed server. The successful run also verifies reproducible rebuilding, disabled install scripts, CLI replay, import retry identity, browser assets, and clean shutdown.

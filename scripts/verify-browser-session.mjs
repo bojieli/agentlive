@@ -1,3 +1,4 @@
+import { verifyServerSnapshot } from "./verify-server-snapshot.mjs";
 /** Exercise the actual browser transport/model against a native probe's recording. */
 import { verifyContentStore } from "./verify-content-store.mjs";
 import { createRequire } from "node:module";
@@ -127,8 +128,17 @@ export async function verifyBrowserSession(
         ),
       );
     const contentStore = await verifyContentStore(viewer.state, signal);
+    const serverSnapshot = await verifyServerSnapshot(
+      serverOrigin,
+      streamId,
+      credential,
+      history.metadata.revision,
+      viewer.state,
+      signal,
+    );
     const counts = {
       contentStore,
+      serverSnapshot,
       renderedActivityItems: rows.length,
       activitySearchVerified,
       activityMarkupHash: rendered.digest("hex"),

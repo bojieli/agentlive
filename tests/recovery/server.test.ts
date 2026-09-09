@@ -445,3 +445,112 @@ it("attempts log cleanup even when attachment cleanup fails and does not repeat 
   await expect(store.close()).rejects.toThrow("Server store cleanup failed");
   expect(logClose).toHaveBeenCalledTimes(1);
 });
+
+it("retains published snapshot boundaries across appends and server reopen", async () => {
+  const { root, store, input, session, lease } = await setup();
+  const { SnapshotReader, initialState, apply } =
+    await import("../../packages/playback/src/index.js");
+  await session.append(lease, [
+    event(session.info.id, 1),
+    event(session.info.id, 2, "x".repeat(20000) + "🦊"),
+  ]);
+  const through = session.info.serverSeq;
+  const snapshot = await session.buildSnapshot(through);
+  await session.append(lease, [event(session.info.id, 3, "suffix")]);
+  const id = session.info.id,
+    revision = session.info.revision;
+  await store.close();
+  stores.splice(stores.indexOf(store), 1);
+  const reopened = await RecordingStore.open(root);
+  stores.push(reopened);
+  const recovered = await reopened.get(id);
+  expect(await recovered.selectSnapshot(through - 1)).toBeNull();
+  expect(await recovered.selectSnapshot(recovered.info.serverSeq)).toEqual(
+    snapshot,
+  );
+  const reader = await SnapshotReader.open(
+    snapshot.ref,
+    { streamId: id, revision },
+    {
+      put: async () => {
+        throw new Error("read-only");
+      },
+      read: (ref, offset, length, signal) =>
+        recovered.readSnapshotContent(ref, offset, length, signal),
+    },
+  );
+  let restored = (await reader.materialize()) as ReturnType<
+    typeof initialState
+  >;
+  expect(restored.appliedSeq).toBe(through);
+  for await (const suffix of recovered.history(
+    through,
+    recovered.info.serverSeq,
+  ))
+    restored = apply(restored, suffix);
+  let reference = initialState();
+  for await (const record of recovered.history(0, recovered.info.serverSeq))
+    reference = apply(reference, record);
+  expect(restored).toStrictEqual(reference);
+});
+
+it("keeps publishing during snapshot writes and drains cancelled snapshot ownership before close", async () => {
+  const { root, store, session, lease } = await setup();
+  const { TextStore } = await import("../../packages/storage/dist/index.js");
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const original = TextStore.prototype.put;
+  const delayed = vi
+    .spyOn(TextStore.prototype, "put")
+    .mockImplementationOnce(async function (input, signal) {
+      const ref = await original.call(this, input, signal);
+      entered();
+      await gate;
+      return ref;
+    });
+  const build = session.buildSnapshot(session.info.serverSeq);
+  const rejected = expect(build).rejects.toThrow("closing");
+  try {
+    await started;
+    await session.append(lease, [event(session.info.id, 1)]);
+    expect(session.info.serverSeq).toBe(2);
+    const closing = store.close();
+    await expect(RecordingStore.open(root)).rejects.toThrow();
+    release();
+    await rejected;
+    await closing;
+    stores.splice(stores.indexOf(store), 1);
+    const reopened = await RecordingStore.open(root);
+    stores.push(reopened);
+    const recovered = await reopened.get(session.info.id);
+    expect(await recovered.selectSnapshot(2)).toBeNull();
+    expect((await recovered.buildSnapshot(2)).serverSeq).toBe(2);
+  } finally {
+    release();
+    delayed.mockRestore();
+  }
+});
+
+it("rejects a corrupted snapshot catalog while retaining authoritative history", async () => {
+  const { session } = await setup();
+  const { atomicJson } = await import("../../packages/storage/src/index.js");
+  const published = await session.buildSnapshot(1);
+  await atomicJson(join(session.directory, "snapshots", "catalog.json"), {
+    version: 1,
+    streamId: session.info.id,
+    revision: session.info.revision,
+    entries: [{ ...published, timelineMs: published.timelineMs + 1 }],
+  });
+  await expect(session.selectSnapshot(1)).rejects.toMatchObject({
+    code: "corrupt_storage",
+  });
+  const history = [];
+  for await (const record of session.history(0, 1)) history.push(record);
+  expect(history).toHaveLength(1);
+  expect(history[0].content.kind).toBe("recording.created");
+});

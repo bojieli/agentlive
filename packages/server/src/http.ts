@@ -340,6 +340,78 @@ export async function startServer(options: ServerOptions) {
     c.header("Content-Type", "application/x-ndjson; charset=utf-8");
     return c.body(lines.join(""));
   });
+  app.post("/api/v1/streams/:id/snapshots", async (c) => {
+    const session = c.get("session");
+    const secret = token(c.req.header("authorization"));
+    if (!isOwner(secret)) session.authorize(secret);
+    const input = z
+      .strictObject({
+        revision: idSchema,
+        throughServerSeq: z.number().int().nonnegative().safe(),
+      })
+      .parse(await boundedJson(c.req.raw));
+    if (input.revision !== session.info.revision)
+      throw new ProtocolError("revision_changed", "Snapshot revision changed");
+    const snapshot = await session.buildSnapshot(
+      input.throughServerSeq,
+      c.req.raw.signal,
+    );
+    return c.json(
+      { streamId: session.info.id, revision: session.info.revision, snapshot },
+      201,
+    );
+  });
+  app.get("/api/v1/streams/:id/snapshots", async (c) => {
+    const session = c.get("session");
+    readable(session, token(c.req.header("authorization")));
+    if (c.req.query("revision") !== session.info.revision)
+      throw new ProtocolError("revision_changed", "Snapshot revision changed");
+    const snapshot = await session.selectSnapshot(
+      integer(c.req.query("throughServerSeq")),
+      c.req.raw.signal,
+    );
+    return c.json({
+      streamId: session.info.id,
+      revision: session.info.revision,
+      snapshot,
+    });
+  });
+  app.get("/api/v1/streams/:id/snapshot-content/:hash", async (c) => {
+    const session = c.get("session");
+    readable(session, token(c.req.header("authorization")));
+    if (c.req.query("revision") !== session.info.revision)
+      throw new ProtocolError(
+        "revision_changed",
+        "Snapshot content revision changed",
+      );
+    const ref = {
+      hash: hashSchema.parse(c.req.param("hash")),
+      byteSize: integer(c.req.query("byteSize")),
+      units: integer(c.req.query("units")),
+    };
+    const offset = integer(c.req.query("offset")),
+      length = integer(c.req.query("length"));
+    if (
+      ref.byteSize < 1 ||
+      ref.byteSize > 1048576 ||
+      ref.units > 67108864 ||
+      length > 65536 ||
+      offset > ref.units ||
+      length > ref.units - offset
+    )
+      throw new ProtocolError(
+        "invalid_request",
+        "Invalid snapshot content range",
+      );
+    const text = await session.readSnapshotContent(
+      ref,
+      offset,
+      length,
+      c.req.raw.signal,
+    );
+    // JSON preserves exact UTF-16 units, including slices through a surrogate pair.
+    return c.json({ text });
+  });
   app.post("/api/v1/streams/:id/attachments", async (c) => {
     const session = c.get("session");
     const secret = token(c.req.header("authorization"));

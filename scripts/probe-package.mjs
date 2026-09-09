@@ -192,6 +192,50 @@ try {
   );
   if (retry.streamId !== imported.streamId)
     throw new Error("Installed import retry changed recording");
+  const snapshotBase = `${ready.url}/api/v1/streams/${encodeURIComponent(imported.streamId)}`;
+  const snapshotSignal = AbortSignal.timeout(30000);
+  const snapshotRequest = async (path, options = {}) => {
+    const response = await fetch(snapshotBase + path, {
+      ...options,
+      headers: {
+        authorization: `Bearer ${env.AGENTLIVE_OWNER_SECRET}`,
+        "content-type": "application/json",
+      },
+      signal: snapshotSignal,
+      redirect: "error",
+      credentials: "omit",
+    });
+    if (!response.ok)
+      throw new Error(`Installed snapshot request failed (${response.status})`);
+    return response.json();
+  };
+  const metadata = await snapshotRequest("");
+  const published = await snapshotRequest("/snapshots", {
+    method: "POST",
+    body: JSON.stringify({
+      revision: metadata.revision,
+      throughServerSeq: metadata.serverSeq,
+    }),
+  });
+  const selected = await snapshotRequest(
+    `/snapshots?${new URLSearchParams({ revision: metadata.revision, throughServerSeq: String(metadata.serverSeq) })}`,
+  );
+  if (JSON.stringify(published) !== JSON.stringify(selected))
+    throw new Error("Installed snapshot selection differs");
+  const ref = selected.snapshot.ref;
+  const content = await snapshotRequest(
+    `/snapshot-content/${ref.hash}?${new URLSearchParams({ revision: metadata.revision, byteSize: String(ref.byteSize), units: String(ref.units), offset: "0", length: String(ref.units) })}`,
+  );
+  const snapshotManifest = JSON.parse(content.text);
+  if (
+    snapshotManifest.streamId !== imported.streamId ||
+    snapshotManifest.revision !== metadata.revision ||
+    snapshotManifest.serverSeq !== metadata.serverSeq ||
+    content.text.length !== ref.units
+  )
+    throw new Error(
+      "Installed snapshot snapshotManifest differs from recording",
+    );
   summary = {
     success: true,
     isolatedInstall: true,
@@ -201,6 +245,7 @@ try {
     browserAssets: true,
     imported: true,
     ownerDiscovery: true,
+    serverSnapshot: true,
     replay: true,
     retrySameRecording: true,
     nativeSource: !!process.argv[2],

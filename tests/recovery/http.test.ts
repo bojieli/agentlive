@@ -764,3 +764,96 @@ it("lists owner recordings in bounded pages without evicting active sessions or 
   ).toEqual(first);
   expect(restarted.store.cacheSize).toBe(0);
 });
+
+it("publishes revision-bound snapshots and serves verified content only to authorized readers", async () => {
+  const { server, base, streamId, revision } = await setup("private");
+  const { SnapshotReader } =
+    await import("../../packages/playback/src/index.js");
+  const headers = {
+    authorization: `Bearer ${writeSecret}`,
+    "content-type": "application/json",
+  };
+  const body = JSON.stringify({ revision, throughServerSeq: 1 });
+  expect(
+    (
+      await fetch(base + "/snapshots", {
+        method: "POST",
+        body,
+        headers: { "content-type": "application/json" },
+      })
+    ).status,
+  ).toBe(401);
+  expect(
+    (await fetch(base + `/snapshots?revision=${revision}&throughServerSeq=1`))
+      .status,
+  ).toBe(403);
+  const empty = await fetch(
+    base + `/snapshots?revision=${revision}&throughServerSeq=1`,
+    { headers },
+  );
+  expect((await empty.json()).snapshot).toBeNull();
+  const created = await fetch(base + "/snapshots", {
+    method: "POST",
+    body,
+    headers,
+  });
+  expect(created.status).toBe(201);
+  const descriptor = (await created.json()).snapshot;
+  const retry = await fetch(base + "/snapshots", {
+    method: "POST",
+    body,
+    headers,
+  });
+  expect((await retry.json()).snapshot).toEqual(descriptor);
+  const query = new URLSearchParams({
+    revision,
+    byteSize: String(descriptor.ref.byteSize),
+    units: String(descriptor.ref.units),
+    offset: "0",
+    length: String(descriptor.ref.units),
+  });
+  const contentUrl = base + `/snapshot-content/${descriptor.ref.hash}?${query}`;
+  expect((await fetch(contentUrl)).status).toBe(403);
+  const wrong = new URL(contentUrl);
+  wrong.searchParams.set("revision", "other");
+  expect((await fetch(wrong, { headers })).status).toBe(409);
+  const content = {
+    put: async () => {
+      throw new Error("Read-only HTTP content");
+    },
+    read: async (
+      ref: { hash: string; byteSize: number; units: number },
+      offset: number,
+      length: number,
+    ) => {
+      const query = new URLSearchParams({
+        revision,
+        byteSize: String(ref.byteSize),
+        units: String(ref.units),
+        offset: String(offset),
+        length: String(length),
+      });
+      const response = await fetch(
+        base + `/snapshot-content/${ref.hash}?${query}`,
+        { headers },
+      );
+      expect(response.status).toBe(200);
+      return (await response.json()).text;
+    },
+  };
+  const snapshot = await SnapshotReader.open(
+    descriptor.ref,
+    { streamId, revision },
+    content,
+  );
+  expect(await snapshot.materialize()).toMatchObject({
+    title: "HTTP test",
+    appliedSeq: 1,
+  });
+  const invalid = await fetch(base + "/snapshots", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ revision, throughServerSeq: 2 }),
+  });
+  expect(invalid.status).toBe(400);
+});
