@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { verifyBrowserSession } from "./verify-browser-session.mjs";
 import { promisify } from "node:util";
 /** Explicit live integration: two tool-free native Kimi turns in a new synthetic workspace. */
 import { spawn, execFile } from "node:child_process";
@@ -169,9 +170,16 @@ try {
     else if (count !== baseline)
       throw new Error("Restart changed event prefix");
   }
+  const browserModel = await verifyBrowserSession(
+    server.url,
+    streamId,
+    ownerCredential,
+    signal,
+  );
   console.log(
     JSON.stringify({
       success: true,
+      browserModel,
       nativeTurns: 2,
       nativeResume: true,
       historyBackfilled: true,

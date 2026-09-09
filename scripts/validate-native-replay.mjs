@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Read-only full-corpus reducer/terminal validation. Persist aggregate counts and hashes only. */
+import { renderBrowserWorkflows } from "./render-browser-workflows.mjs";
 import { readdir, mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -99,6 +100,8 @@ for (const config of configurations.filter(
     events: 0,
     renderedBytes: 0,
     snapshotBytes: 0,
+    workflowCards: 0,
+    workflowBytes: 0,
     messages: 0,
     tools: 0,
     monitors: 0,
@@ -186,7 +189,18 @@ for (const config of configurations.filter(
           snapshotBytes += Buffer.byteLength(text);
           snapshotHash.update(text);
         }
+        let workflowCards = 0,
+          workflowBytes = 0;
+        const workflowHash = createHash("sha256");
+        for (const html of renderBrowserWorkflows(state)) {
+          workflowCards++;
+          workflowBytes += Buffer.byteLength(html);
+          workflowHash.update(html);
+        }
         Object.assign(result, {
+          workflowCards,
+          workflowBytes,
+          workflowHash: workflowHash.digest("hex"),
           snapshotBytes,
           snapshotHash: snapshotHash.digest("hex"),
           events: sink.capturedThrough,
@@ -204,6 +218,8 @@ for (const config of configurations.filter(
           "events",
           "renderedBytes",
           "snapshotBytes",
+          "workflowCards",
+          "workflowBytes",
           "messages",
           "tools",
           "monitors",

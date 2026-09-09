@@ -5,6 +5,12 @@ import { ForegroundClock, bindPageLifecycle } from "./lifecycle.js";
 import { BrowserSession } from "./session.js";
 import { AttachmentViewer } from "./attachment-viewer.js";
 import type { Attachment } from "./attachments.js";
+import {
+  WorkflowCard,
+  workflowKinds,
+  AgentReference,
+  objectAnchor,
+} from "./workflow-card.js";
 import "./style.css";
 const seconds = (time: number) => `${(time / 1000).toFixed(1)}s`;
 function App() {
@@ -288,21 +294,34 @@ function App() {
                     <article
                       className={`message ${message.role}`}
                       key={`messages/${message.id}`}
+                      id={objectAnchor("messages", message.id)}
                     >
                       <div className="item-label">
                         {message.role}
                         <span>{message.completed ? "" : "in progress"}</span>
                       </div>
+                      <AgentReference
+                        {...(message.agentId ? { id: message.agentId } : {})}
+                        state={state!}
+                      />
                       <pre>{message.text || "…"}</pre>
                     </article>
                   )),
                 [...state!.tools.values()]
                   .filter((tool) => tool.visible !== false)
                   .map((tool) => (
-                    <details className="card" key={`tools/${tool.id}`}>
+                    <details
+                      className="card"
+                      key={`tools/${tool.id}`}
+                      id={objectAnchor("tools", tool.id)}
+                    >
                       <summary>
                         {tool.name} <span className="muted">{tool.status}</span>
                       </summary>
+                      <AgentReference
+                        {...(tool.agentId ? { id: tool.agentId } : {})}
+                        state={state!}
+                      />
                       <h4>Input</h4>
                       <pre>{tool.input}</pre>
                       <h4>Output</h4>
@@ -336,23 +355,15 @@ function App() {
                       ))}
                     </section>
                   )),
-                (
-                  [
-                    "agents",
-                    "tasks",
-                    "goals",
-                    "interactions",
-                    "plans",
-                    "monitors",
-                  ] as const
-                ).map((kind) =>
-                  [...state![kind].entries()].map(([id, value]) => (
-                    <details className="card" key={`${kind}/${id}`}>
-                      <summary>
-                        {kind.slice(0, -1)} · {id.slice(0, 12)}
-                      </summary>
-                      <pre>{JSON.stringify(value, null, 2)}</pre>
-                    </details>
+                workflowKinds.map((kind) =>
+                  [...state![kind].keys()].map((id) => (
+                    <WorkflowCard
+                      key={`${kind}/${id}`}
+                      kind={kind}
+                      id={id}
+                      state={state!}
+                      onAttachment={setAttachment}
+                    />
                   )),
                 ),
               ]

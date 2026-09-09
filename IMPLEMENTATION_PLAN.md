@@ -1079,3 +1079,12 @@ Open one attachment version at a time in a native dialog. The loader validates t
 Offer downloads as application/octet-stream. Decode eligible text only as strict UTF-8, bounded to 1 MiB; HTML, XML, and SVG source remain escaped React text. Static PNG previews use a preflight derived from the [W3C PNG chunk layout and image header](https://www.w3.org/TR/png-3/): cap encoded content at 8 MiB, dimensions at 8192 per axis and 16 megapixels total, and chunk count at 4096. Reject truncated chunks, duplicate headers, trailing data, animation chunks, and compressed ancillary metadata before handing the image to the browser decoder. Native decode failure leaves the verified original available for download. This preflight bounds preview inputs; it is not a replacement PNG decoder or proof of browser heap usage.
 
 Preserve the full artifact milestone: other raster formats, isolated rendered HTML/bundles, authenticated remote artifact rehosting, large content paging, and real browser/device rendering checks remain required. Do not label plain source display as a rendered artifact preview.
+
+
+### Structured browser workflow presentation
+
+Render canonical agents, tasks, goals, interactions, plans, and monitors as readable cards in the same first-event order as messages/tools/artifacts. Show explicit status, recorded descriptions, ownership and parent references, task detachment, goal criteria/reason/usage, question options and recorded responses, plan versions/captured files, and monitor baseline/thread state. Preserve zero counters, false flags, unknown states, and missing responses rather than inventing completion or root ownership.
+
+Agent and tool references use recording-local anchors. Hide links to tools absent or invisible at the selected position. Plan source references are text, never direct native URL links; offer an inspector action only for the captured, visible attachment version in the current reducer state. Approval/question cards remain passive history and must not resemble executable approval controls. Keep an expandable Recorded data section for all canonical fields. This presentation does not fill gaps in adapter capture or infer uncaptured subagent relationships.
+
+Validate production React card markup against synthetic lifecycle/visibility cases and retained native histories. Store only counts and hashes for corpus rendering. Server-side markup validation is not a substitute for browser layout, interaction, accessibility, or mobile checks.
