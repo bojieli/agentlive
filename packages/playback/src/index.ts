@@ -521,3 +521,8 @@ export {
   type IndexRoot,
   type IndexEntry,
 } from "./content-index.js";
+export {
+  OrderedContentMap,
+  type OrderedMapRoot,
+  type OrderedMapKey,
+} from "./ordered-map.js";

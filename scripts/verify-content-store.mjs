@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   ContentIndex,
+  OrderedContentMap,
   createSnapshot,
   SnapshotReader,
 } from "../packages/playback/dist/index.js";
@@ -41,6 +42,10 @@ export async function verifyContentStore(state, signal) {
       references.map((ref, index) => [fieldKey(index), ref]),
       signal,
     );
+    let orderedRoot = null;
+    const ordered = new OrderedContentMap(store);
+    for (const [index, ref] of references.entries())
+      orderedRoot = await ordered.set(orderedRoot, index, ref, signal);
     const storedBytes = store.usage.storedBytes;
     await store.close();
     store = await TextStore.open(root);
@@ -54,6 +59,15 @@ export async function verifyContentStore(state, signal) {
     if (!isDeepStrictEqual(restored, state))
       throw new Error("Native snapshot differs after reopening");
     const reopenedIndex = new ContentIndex(store);
+    const reopenedMap = new OrderedContentMap(store);
+    for (let offset = 0; offset < references.length; offset += 32) {
+      const actual = await reopenedMap.entries(orderedRoot, offset, 32, signal);
+      const expected = references
+        .slice(offset, offset + 32)
+        .map((ref, index) => [offset + index, ref]);
+      if (!isDeepStrictEqual(actual, expected))
+        throw new Error("Native content map order differs after reopening");
+    }
     let units = 0;
     for (const [index, ref] of references.entries()) {
       if (
@@ -84,6 +98,8 @@ export async function verifyContentStore(state, signal) {
       indexedFields: references.length,
       appendedFields: references.length,
       indexReopened: true,
+      orderedFields: references.length,
+      mapReopened: true,
     };
   } finally {
     try {

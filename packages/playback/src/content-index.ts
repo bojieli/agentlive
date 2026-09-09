@@ -27,7 +27,7 @@ function copyRef(value: unknown): ContentReference {
   if (!result.success) corrupt();
   return result.data;
 }
-function root(value: IndexRoot): IndexRoot {
+export function copyIndexRoot(value: IndexRoot): IndexRoot {
   if (
     !value ||
     Object.keys(value).sort().join(",") !== "count,first,last,ref" ||
@@ -109,7 +109,7 @@ export class ContentIndex {
     let count = 0,
       previous: string | undefined;
     for (let i = 0; i < node.children.length; i++) {
-      const child = root(node.children[i]!);
+      const child = copyIndexRoot(node.children[i]!);
       if (previous !== undefined && child.first <= previous) corrupt();
       count += child.count;
       previous = child.last;
@@ -163,7 +163,7 @@ export class ContentIndex {
             first: node.children[0]!.first,
             last: node.children.at(-1)!.last,
           };
-    return [root(span)];
+    return [copyIndexRoot(span)];
   }
   /** Build a sorted index in one pass without retaining the full key catalog. */
   async build(
@@ -246,7 +246,7 @@ export class ContentIndex {
   ): Promise<ContentReference | undefined> {
     if (!key(name)) throw new RangeError("Invalid content index key");
     signal?.throwIfAborted();
-    let span = input === null ? null : root(input);
+    let span = input === null ? null : copyIndexRoot(input);
     for (let depth = 0; span; depth++) {
       if (depth > 64) corrupt();
       const node = await this.load(span, signal);
@@ -266,7 +266,7 @@ export class ContentIndex {
     limit: number,
     signal?: AbortSignal,
   ): Promise<IndexEntry[]> {
-    const span = input === null ? null : root(input);
+    const span = input === null ? null : copyIndexRoot(input);
     if (
       !Number.isSafeInteger(offset) ||
       offset < 0 ||
@@ -332,7 +332,7 @@ export class ContentIndex {
   ): Promise<IndexRoot | null> {
     if (!key(name)) throw new RangeError("Invalid content index key");
     signal?.throwIfAborted();
-    const original = input === null ? null : root(input);
+    const original = input === null ? null : copyIndexRoot(input);
     const visit = async (
       span: IndexRoot,
       depth: number,
