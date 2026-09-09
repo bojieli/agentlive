@@ -507,3 +507,12 @@ export {
   renderTerminalSnapshot,
 } from "./terminal.js";
 export { PlaybackPacer } from "./pacer.js";
+export { createSnapshot, SnapshotReader } from "./snapshot.js";
+export type {
+  ContentReference,
+  SnapshotContent,
+  SnapshotBinding,
+  SnapshotManifest,
+  SnapshotValue,
+  SnapshotEntry,
+} from "./snapshot.js";

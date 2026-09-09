@@ -96,3 +96,10 @@ The read-only corpus sweep with bounded text-page markup passed 527/527 Codex fi
 ## Native text-store recovery
 
 On 2026-09-09, OpenCode `--resume-import` passed three native turns with 26 stored events, six messages, and one verified attachment. The shared verifier persisted six filtered text fields (814 UTF-16 units), closed and reopened the new TextStore, and compared bounded reads with the captured text; encoded storage was 1,657 bytes. Native-server restart, detached history, publisher deduplication, imported-history continuation, attachment verification, and browser-model playback/search checks also passed. Temporary content files were removed, and the result contains counts rather than text. This is storage-layer integration evidence; the production viewer still uses its existing in-memory reducer.
+
+
+## Native paged snapshot recovery
+
+On 2026-09-09, Claude `--resume-import` passed with two native turns, 28 stored events, four messages, and 16 rendered activity items. The shared content verifier wrote a paged snapshot, closed and reopened TextStore, and compared restored state with the native recording's reference-reducer state. The final rerun used strict deep equality, including Map and undefined-field semantics. Four text fields contained 468 UTF-16 units; combined content and snapshot storage used 12,272 bytes. Imported-history backfill, native resume, live suffix capture, publisher restart deduplication, search, seek, foreground revalidation, and paused playback restoration also passed.
+
+Only aggregate results are retained in documentation; temporary stored content is removed by the verifier. This establishes snapshot storage equivalence for the exercised native session. The browser model still receives and reduces events through its existing path; it does not yet load production snapshots, and this probe does not establish real-browser behavior or long-session memory bounds.

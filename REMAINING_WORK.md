@@ -1,8 +1,8 @@
 # Remaining work toward the full AgentLive goal
 
-Audited 2026-09-09 against implementation plan sections 6–15, current source, CLI commands, probe evidence, and CI for `2aee5ad`. This inventory preserves the full M0–M7 objective. Historical checkpoint notes are evidence of individual changes, not proof that an entire milestone is complete.
+Audited 2026-09-09 against implementation plan sections 6–15, current source, CLI commands, and probe evidence. CI was last confirmed for `182f447`; the snapshot checkpoint below has local validation. This inventory preserves the full M0–M7 objective. Historical checkpoint notes are evidence of individual changes, not proof that an entire milestone is complete.
 
-The committed checkpoint has 252 passing local tests, successful package installation/rebuild verification, successful macOS/Linux CI, and native import/live/recovery probes for all four agents across the recorded work. The latest corpus run passed 2,564 of 2,599 examined files; 35 Claude files lacked native identity/timestamps. Passing conversions still contain explicit capture gaps and unavailable artifacts.
+The project has successful package installation/rebuild verification, macOS/Linux CI on the preceding committed text-store checkpoint, and native import/live/recovery probes for all four agents across the recorded work. The snapshot checkpoint passes 267 tests in 35 files, package installation/rebuild verification, and a fresh native Claude import/resume probe. Test counts are checkpoint evidence, not milestone completion. The latest corpus run passed 2,564 of 2,599 examined files; 35 Claude files lacked native identity/timestamps. Passing conversions still contain explicit capture gaps and unavailable artifacts.
 
 ## 1. Scalable playback and complete viewers — M1/M4
 
@@ -14,7 +14,7 @@ The committed checkpoint has 252 passing local tests, successful package install
 - Verify desktop/mobile layout, keyboard/screen-reader behavior, actual browser storage, quota eviction, crashes, suspend/resume, and focus/scroll recovery. No browser is currently connected for these checks.
 - Measure the plan's long-session and memory targets, including an eight-hour/500,000-event seek workload.
 
-Content-store foundation: TextStore pages/manifests and bounded verified range reads now have restart, real-process-death, corruption, quota, cancellation, queue, and ownership-drain tests, plus reopened reads of real native-session text. Production paged-reducer/viewer integration, snapshots, safe content collection, and HTTP exposure remain incomplete. This is not an implemented paged viewer.
+Content-store foundation: TextStore pages/manifests and bounded verified range reads now have restart, real-process-death, corruption, quota, cancellation, queue, and ownership-drain tests, plus reopened reads of real native-session text. An initial paged snapshot codec/reader now preserves the reference state with version/revision/boundary validation and bounded metadata/text range reads. Reopened real Claude snapshot equivalence is verified. Production snapshot publication/selection, paged-reducer/viewer integration, safe content collection, and HTTP exposure remain incomplete. Snapshot creation still begins with full in-memory reference state; this is not an implemented paged viewer.
 
 ## 2. Complete native-agent integration and fidelity — M0/M3
 

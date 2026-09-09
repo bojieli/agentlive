@@ -2,6 +2,11 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import {
+  createSnapshot,
+  SnapshotReader,
+} from "../packages/playback/dist/index.js";
 import { TextStore } from "../packages/storage/dist/index.js";
 export async function verifyContentStore(state, signal) {
   const root = await mkdtemp(join(tmpdir(), "agentlive-content-probe-"));
@@ -15,9 +20,23 @@ export async function verifyContentStore(state, signal) {
       ...[...state.changes.values()].map((change) => change.patch),
     ];
     for (const text of fields) references.push(await store.put(text, signal));
+    const binding = {
+      streamId: "native-probe",
+      revision: "native-probe-revision",
+    };
+    const snapshotRef = await createSnapshot(state, binding, store, signal);
     const storedBytes = store.usage.storedBytes;
     await store.close();
     store = await TextStore.open(root);
+    const snapshot = await SnapshotReader.open(
+      snapshotRef,
+      binding,
+      store,
+      signal,
+    );
+    const restored = await snapshot.materialize(16 * 1024 * 1024, signal);
+    if (!isDeepStrictEqual(restored, state))
+      throw new Error("Native snapshot differs after reopening");
     let units = 0;
     for (const [index, ref] of references.entries()) {
       for (let offset = 0; offset < ref.units; offset += 30113) {
@@ -32,7 +51,13 @@ export async function verifyContentStore(state, signal) {
         throw new Error("Empty native content differs after reopening");
       units += ref.units;
     }
-    return { fields: fields.length, units, storedBytes, reopened: true };
+    return {
+      fields: fields.length,
+      units,
+      storedBytes,
+      reopened: true,
+      snapshotVerified: true,
+    };
   } finally {
     try {
       await store?.close();
