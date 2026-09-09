@@ -897,3 +897,9 @@ Earlier successful flat outcomes can migrate only after their attachment matches
 Connect presentation timing to recorded timeline positions through a monotonic, interruptible pacer. Preserve immediate transcript output for scripts; expose explicit speed and interactive pause/resume controls for history replay. Rebase rate changes at the current presentation position and exclude paused wall time. Cancellation must wake long or paused waits and restore terminal state.
 
 The terminal history command now supports these controls. This does not complete the viewer gate: seeking requires source repositioning plus reducer reconstruction/redraw, and live pause must leave subscriber receipt and durable caching independent from presentation. Complete those paths, browser/mobile viewers, paged state, and source-clock fidelity before claiming full physical-time playback.
+
+### Starting replay at a selected timeline position
+
+The CLI accepts an initial timeline position through `--from-ms`. Reconstruct the complete prefix through that timestamp, including equal-time events and incomplete replacement transactions, render its current visible state, and then continue with the later suffix. Rebase timed presentation to the selected boundary after rendering reconstruction; clamp positions beyond the fixed history to its final state.
+
+Current-state rendering covers the reducer's messages, tools, agents, file changes, artifact versions, tasks, goals, interactions, plans, explicit gaps, and unfinished work. Retain hidden objects and replacement buffers in reconstructed state without presenting hidden or uncommitted content. This initial-position path reads from the beginning; indexed snapshots, interactive reseeking/redraw, paged state, and independently advancing live receipt remain required.

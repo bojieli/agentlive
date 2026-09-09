@@ -119,6 +119,18 @@ it("runs local serve/import across processes with private credentials and restar
       },
     );
     expect(timed.stdout).toBe(replay.stdout);
+    const seek = await exec(
+      process.execPath,
+      [...replayArgs, "--from-ms", "1000000"],
+      { env, timeout: 10000 },
+    );
+    expect(seek.stdout).toContain("Playback state");
+    expect(seek.stdout).toContain("CLI test message");
+    expect(seek.stdout.match(/CLI test message/g)).toHaveLength(1);
+    expect(seek.stdout).toContain("Recording ended");
+    await expect(
+      exec(process.execPath, [...replayArgs, "--from-ms", "-1"], { env }),
+    ).rejects.toThrow();
     await expect(
       exec(process.execPath, [...replayArgs, "--speed", "0"], { env }),
     ).rejects.toThrow();

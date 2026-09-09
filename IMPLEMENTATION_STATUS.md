@@ -173,3 +173,11 @@ The installed OpenCode live publication probe also passed after this change: thr
 History replay now accepts `--speed <factor>` and `--interactive`. Interactive keys are space for pause/resume, +/- for speed, and q to quit. The reusable monotonic pacer handles speed rebasing, paused time, long timer intervals, cancellation, and explicit position reset. Immediate output remains the default. Seeking and independent live playback controls remain unfinished.
 
 Validation: 142 tests across 24 files pass, including clock-controlled timing tests and cross-process CLI output equivalence between immediate and accelerated replay. A real local PTY probe (`node scripts/probe-interactive-replay.mjs`) verifies raw input, pause/resume, speed changes, successful quit/completion, and exact terminal-setting restoration using an imported synthetic Claude-format recording. This is terminal/transport evidence, not a new live-agent run. The PTY harness drains output throughout child shutdown to avoid blocking synchronous terminal writes; Python is a probe-only dependency.
+
+## Timeline-position replay checkpoint — 2026-09-09
+
+`replay --from-ms <position>` now reconstructs the prefix through a selected timeline position, renders current state, and continues playback from that boundary. Equal-time events are included; beyond-end positions show final state. The snapshot renderer preserves incomplete work and attachment versions while excluding hidden objects and uncommitted replacement text. This is an initial seek, not interactive reseeking or indexed/paged reconstruction.
+
+Validation: 143 tests across 24 files pass. The local PTY probe starts halfway between two messages, verifies only the earlier message appears in reconstructed state, then exercises pause/resume, accelerated continuation, quit, completion, and terminal restoration. Full local-corpus validation now additionally hashes and checks terminal snapshots without persisting rendered transcript text.
+
+The updated corpus pass verified both event rendering and reconstructed-state rendering for 512 Codex files, 1,556 Claude files, 460 Kimi files, and 12 discovered OpenCode exports. The same 35 Claude files still fail standalone identity/timing preflight; explicit unsupported gaps and unavailable artifacts remain. Snapshot output was hashed and discarded.

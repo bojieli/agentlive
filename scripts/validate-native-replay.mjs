@@ -19,6 +19,7 @@ import {
   initialState,
   apply,
   renderTerminalEvent,
+  renderTerminalSnapshot,
 } from "../packages/playback/dist/index.js";
 import {
   canonicalJson,
@@ -97,6 +98,7 @@ for (const config of configurations.filter(
     failed: 0,
     events: 0,
     renderedBytes: 0,
+    snapshotBytes: 0,
     messages: 0,
     tools: 0,
     gaps: 0,
@@ -167,7 +169,25 @@ for (const config of configurations.filter(
         await config.capture(path, manifest, sink);
         if (state.replacements.size)
           throw new Error("incomplete_text_replacement");
+        let snapshotBytes = 0;
+        const snapshotHash = createHash("sha256");
+        for (const text of renderTerminalSnapshot(
+          state,
+          "http://localhost:7331",
+          "validation",
+        )) {
+          if (
+            /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(
+              text,
+            )
+          )
+            throw new Error("unsafe_terminal_control");
+          snapshotBytes += Buffer.byteLength(text);
+          snapshotHash.update(text);
+        }
         Object.assign(result, {
+          snapshotBytes,
+          snapshotHash: snapshotHash.digest("hex"),
           events: sink.capturedThrough,
           renderedBytes,
           renderingHash: rendering.digest("hex"),
@@ -181,6 +201,7 @@ for (const config of configurations.filter(
         for (const key of [
           "events",
           "renderedBytes",
+          "snapshotBytes",
           "messages",
           "tools",
           "gaps",

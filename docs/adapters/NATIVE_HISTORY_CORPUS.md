@@ -126,3 +126,16 @@ After adding reopened-object and presence transitions, the read-only conversion 
 | OpenCode exports from discovered workspaces | 12 | 12 | 0 | 129 | 0 | 1 |
 
 The 35 Claude failures still report missing standalone session identity or timestamp; parent-session association remains required. The validator correctly exits nonzero for those failures. Passing files may contain explicit unsupported gaps and unavailable attachments; this is not complete semantic coverage or attachment-download validation. OpenCode discovery is workspace scoped, not a claim of exhaustive discovery of every unknown workspace. Local reports are refreshed in ignored `probe-results/native-replay-validation`; transcript rendering is hashed and discarded.
+
+### Reconstructed-state renderer pass (2026-09-09)
+
+The corpus validator now also renders each final reconstructed state, checks terminal-control escaping, and retains only byte counts and hashes for that rendering. It covers the same reducer state used by initial timeline seeking. The refreshed results are:
+
+| Source | Passed / files | Snapshot bytes hashed |
+| --- | ---: | ---: |
+| Codex | 512 / 512 | 691,136,409 |
+| Claude | 1,556 / 1,591 | 326,816,302 |
+| Kimi | 460 / 460 | 81,212,536 |
+| Discovered OpenCode exports | 12 / 12 | 12,230 |
+
+The 35 Claude failures retain the missing identity/timing category. Unsupported source gaps and unavailable artifacts remain explicit; successful snapshot rendering does not establish complete native-object coverage. Byte counts are cumulative across files, not peak memory claims. No rendered corpus transcript is saved or uploaded.

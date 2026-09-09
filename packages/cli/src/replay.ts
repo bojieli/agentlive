@@ -5,6 +5,7 @@ import {
   apply,
   renderTerminalEvent,
   renderTerminalPending,
+  renderTerminalSnapshot,
 } from "@agentlive/playback";
 import { originOf } from "@agentlive/client/transport";
 export async function replayRecording(options: {
@@ -13,8 +14,22 @@ export async function replayRecording(options: {
   credential?: string;
   signal: AbortSignal;
   speed?: number;
+  fromMs?: number;
   interactive?: boolean;
 }) {
+  if (
+    options.fromMs !== undefined &&
+    (!Number.isFinite(options.fromMs) || options.fromMs < 0)
+  )
+    throw new RangeError(
+      "Replay start must be a nonnegative finite timeline position",
+    );
+  const write = (text: string) =>
+    new Promise<void>((resolve, reject) =>
+      process.stdout.write(text, (error) =>
+        error ? reject(error) : resolve(),
+      ),
+    );
   const pacer =
     options.speed !== undefined || options.interactive
       ? new PlaybackPacer(options.speed ?? 1)
@@ -52,6 +67,7 @@ export async function replayRecording(options: {
   }
   try {
     let started = false;
+    let snapshotShown = false;
     let state = initialState(),
       bytes = 0;
     for await (const event of history.events) {
@@ -61,6 +77,22 @@ export async function replayRecording(options: {
           "Terminal reference replay exceeds its 64 MiB event budget; paged state replay is not yet available",
         );
       signal.throwIfAborted();
+      if (options.fromMs !== undefined && event.timelineMs <= options.fromMs) {
+        state = apply(state, event);
+        continue;
+      }
+      if (options.fromMs !== undefined && !snapshotShown) {
+        for (const text of renderTerminalSnapshot(
+          state,
+          origin,
+          options.streamId,
+          options.fromMs,
+        ))
+          await write(text);
+        snapshotShown = true;
+        pacer?.reset(options.fromMs);
+        started = true;
+      }
       if (pacer) {
         if (!started) {
           pacer.reset(event.timelineMs);
@@ -84,12 +116,16 @@ export async function replayRecording(options: {
           ),
         );
     }
-    for (const text of renderTerminalPending(state))
-      await new Promise<void>((resolve, reject) =>
-        process.stdout.write(text, (error) =>
-          error ? reject(error) : resolve(),
-        ),
-      );
+    if (options.fromMs !== undefined && !snapshotShown) {
+      for (const text of renderTerminalSnapshot(
+        state,
+        origin,
+        options.streamId,
+      ))
+        await write(text);
+    } else {
+      for (const text of renderTerminalPending(state)) await write(text);
+    }
     return history.metadata;
   } catch (error) {
     if (

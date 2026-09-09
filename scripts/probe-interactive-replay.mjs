@@ -62,6 +62,8 @@ for quit_early in (True, False):
         assert marker in output, "Expected replay marker missing"
     try:
         read_until(b"FIRST_PTY_MESSAGE")
+        assert b"[30.000s] Playback state" in output, "Seek boundary missing"
+        assert b"SECOND_PTY_MESSAGE" not in output, "Future content leaked into seek state"
         assert not termios.tcgetattr(slave)[3] & termios.ICANON, "Raw mode not active"
         os.write(master, b" ")
         time.sleep(0.1)
@@ -85,7 +87,7 @@ for quit_early in (True, False):
             child.wait()
         os.close(master)
         os.close(slave)
-print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "quit": True, "terminalRestored": True}))
+print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "quit": True, "terminalRestored": True, "seekState": True}))
 `;
   const result = await promisify(execFile)(
     "python3",
@@ -100,6 +102,8 @@ print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "qu
       "--server",
       server.url,
       "--interactive",
+      "--from-ms",
+      "30000",
     ],
     {
       env: { ...process.env, AGENTLIVE_OWNER_SECRET: secret },

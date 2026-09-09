@@ -25,7 +25,7 @@ Commands:
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
   agentlive publish --agent opencode --native-server <origin> --native-session <id>
   agentlive watch --stream <recording-id> [--server <origin>] [--anonymous]
-  agentlive replay --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive]
+  agentlive replay --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive] [--from-ms <position>]
 
 Shared options:
   --state-dir <directory>  Persistent state (default: ~/.agentlive)
@@ -92,6 +92,7 @@ async function main() {
     options: {
       help: { type: "boolean" },
       speed: { type: "string" },
+      "from-ms": { type: "string" },
       interactive: { type: "boolean" },
       "resume-import": { type: "boolean" },
       "record-format": { type: "string" },
@@ -130,7 +131,9 @@ async function main() {
             "server",
             "stream",
             "anonymous",
-            ...(command === "replay" ? ["speed", "interactive"] : []),
+            ...(command === "replay"
+              ? ["speed", "interactive", "from-ms"]
+              : []),
           ]
         : [
             ...(command === "publish"
@@ -192,6 +195,10 @@ async function main() {
   if (command === "replay" || command === "watch") {
     if (!values.stream)
       throw new Error("Replay and watch require --stream <recording-id>");
+    const fromMs =
+      values["from-ms"] === undefined ? undefined : Number(values["from-ms"]);
+    if (fromMs !== undefined && (!Number.isFinite(fromMs) || fromMs < 0))
+      throw new Error("--from-ms must be a nonnegative finite number");
     const speed = values.speed === undefined ? undefined : Number(values.speed);
     if (
       speed !== undefined &&
@@ -207,6 +214,7 @@ async function main() {
     await (command === "watch" ? watchRecording : replayRecording)({
       cacheRoot: join(stateDir, "subscriber"),
       ...(speed === undefined ? {} : { speed }),
+      ...(fromMs === undefined ? {} : { fromMs }),
       ...(values.interactive ? { interactive: true } : {}),
       serverOrigin: values.server ?? "http://127.0.0.1:7331",
       streamId: values.stream,

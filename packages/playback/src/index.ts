@@ -494,5 +494,6 @@ export {
   terminalText,
   renderTerminalEvent,
   renderTerminalPending,
+  renderTerminalSnapshot,
 } from "./terminal.js";
 export { PlaybackPacer } from "./pacer.js";

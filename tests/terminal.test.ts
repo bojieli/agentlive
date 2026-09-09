@@ -5,7 +5,9 @@ import {
   renderTerminalEvent,
   terminalText,
   renderTerminalPending,
+  renderTerminalSnapshot,
 } from "../packages/playback/src/index.js";
+import { contentSchema } from "../packages/protocol/src/index.js";
 import type {
   EventContent,
   StoredEvent,
@@ -50,7 +52,10 @@ it("renders captured object types with inert source text and attachment links", 
       kind: "file.change.proposed",
       payload: { changeId: "f", path: "result.txt", patch: "+new line" },
     },
-    { kind: "file.change.applied", payload: { changeId: "f" } },
+    {
+      kind: "file.change.applied",
+      payload: { changeId: "f", path: "result.txt", patch: "+new line" },
+    },
     {
       kind: "attachment.available",
       payload: {
@@ -113,6 +118,7 @@ it("renders captured object types with inert source text and attachment links", 
   let state = initialState(),
     output = "";
   for (const [index, content] of contents.entries()) {
+    contentSchema.parse(content);
     const event: StoredEvent = {
       protocolVersion: 1,
       serverSeq: index + 1,
@@ -131,6 +137,23 @@ it("renders captured object types with inert source text and attachment links", 
       previous,
     );
   }
+  const snapshot = [
+    ...renderTerminalSnapshot(state, "http://localhost:7331", "stream"),
+  ].join("");
+  for (const expected of [
+    "corrected complete text",
+    "Shell: failed",
+    "+new line",
+    "historical-version",
+    "/api/v1/streams/stream/attachments/",
+    "approval: resolved",
+    "Plan: active",
+    "Task process: completed",
+    "Goal: paused",
+    "Capture gap",
+  ])
+    expect(snapshot).toContain(expected);
+  expect(snapshot).not.toContain("\u001b");
   expect(output).not.toContain("\u001b");
   expect(output).not.toContain("\r");
   expect(output).not.toContain("\u202e");
@@ -276,4 +299,64 @@ it("keeps hidden attachments hidden across pending updates and restores pending 
   });
   expect([...renderTerminalPending(state)].join("")).toContain("image-v2.png");
   expect(hidden.artifacts.get("a")?.visible).toBe(false);
+});
+
+it("renders a seek boundary with partial replacements and hidden objects without mutating state", () => {
+  let state = initialState();
+  const events: EventContent[] = [
+    { kind: "message.started", payload: { messageId: "m", role: "assistant" } },
+    {
+      kind: "message.reconciled",
+      payload: { messageId: "m", text: "retained partial" },
+    },
+    { kind: "message.started", payload: { messageId: "hidden", role: "user" } },
+    {
+      kind: "message.reconciled",
+      payload: { messageId: "hidden", text: "hidden content" },
+    },
+    { kind: "message.completed", payload: { messageId: "hidden" } },
+    {
+      kind: "object.visibility",
+      payload: { objectType: "message", objectId: "hidden", visible: false },
+    },
+    {
+      kind: "tool.started",
+      payload: { toolId: "t", name: "Shell", input: "input" },
+    },
+    {
+      kind: "tool.output.append",
+      payload: { toolId: "t", text: "partial output" },
+    },
+    {
+      kind: "attachment.pending",
+      payload: { artifactId: "a", filename: "image.png" },
+    },
+  ];
+  for (const [index, content] of events.entries())
+    state = apply(state, {
+      protocolVersion: 1,
+      serverSeq: index + 1,
+      receivedAt: "2026-09-09T00:00:00Z",
+      timelineMs: index,
+      content,
+      origin: { type: "server", operationId: "e" + index },
+    });
+  state.replacements.set("replacement", {
+    target: "message",
+    targetId: "m",
+    chunks: ["uncommitted"],
+    length: 11,
+  });
+  const before = structuredClone(state);
+  const output = [
+    ...renderTerminalSnapshot(state, "http://localhost", "stream", 100),
+  ].join("");
+  expect(output).toContain("[0.100s] Playback state");
+  expect(output).toContain("retained partial");
+  expect(output).toContain("partial output");
+  expect(output).toContain("image.png");
+  expect(output).toContain("Text replacement incomplete");
+  expect(output).not.toContain("hidden content");
+  expect(output).not.toContain("uncommitted");
+  expect(state).toEqual(before);
 });

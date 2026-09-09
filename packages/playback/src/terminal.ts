@@ -1,4 +1,4 @@
-import type { StoredEvent } from "@agentlive/protocol";
+import type { EventContent, StoredEvent } from "@agentlive/protocol";
 import type { RecordingState } from "./index.js";
 /** Keep source content inert: no ANSI/OSC, cursor movement, hidden bidi controls or carriage returns. */
 export function terminalText(text: string): string {
@@ -14,9 +14,25 @@ export function renderTerminalEvent(
   streamId: string,
   previous?: RecordingState,
 ): string {
-  const content = event.content;
+  return renderContent(
+    event.content,
+    state,
+    serverOrigin,
+    streamId,
+    event.timelineMs,
+    previous,
+  );
+}
+function renderContent(
+  content: EventContent,
+  state: RecordingState,
+  serverOrigin: string,
+  streamId: string,
+  timelineMs: number,
+  previous?: RecordingState,
+): string {
   const section = (label: string, body = "") =>
-    `[${(event.timelineMs / 1000).toFixed(3)}s] ${terminalText(label)}\n${
+    `[${(timelineMs / 1000).toFixed(3)}s] ${terminalText(label)}\n${
       body
         ? terminalText(body)
             .split("\n")
@@ -231,4 +247,70 @@ export function* renderTerminalPending(
       "Text replacement incomplete",
       "Previous complete text is retained until replacement chunks finish.",
     );
+}
+
+/** Current state at a seek boundary; does not invent or append stored events. */
+export function* renderTerminalSnapshot(
+  state: RecordingState,
+  serverOrigin: string,
+  streamId: string,
+  positionMs = state.timelineMs,
+): Generator<string> {
+  if (!Number.isFinite(positionMs) || positionMs < state.timelineMs)
+    throw new RangeError("Snapshot position precedes reconstructed state");
+  yield `[${(positionMs / 1000).toFixed(3)}s] Playback state
+
+`;
+  const render = (content: EventContent) =>
+    renderContent(content, state, serverOrigin, streamId, positionMs);
+  yield render({ kind: "recording.created", payload: { title: state.title } });
+  for (const payload of state.agents.values())
+    yield render({ kind: "agent.updated", payload });
+  for (const [messageId, message] of state.messages)
+    if (message.completed && message.visible !== false)
+      yield render({ kind: "message.completed", payload: { messageId } });
+  for (const [toolId, tool] of state.tools)
+    if (tool.status !== "running" && tool.visible !== false)
+      yield render({
+        kind: "tool.completed",
+        payload: { toolId, status: tool.status, output: tool.output },
+      });
+  for (const [changeId, change] of state.changes)
+    yield render(
+      change.applied
+        ? {
+            kind: "file.change.applied",
+            payload: { changeId, path: change.path, patch: change.patch },
+          }
+        : {
+            kind: "file.change.proposed",
+            payload: { changeId, path: change.path, patch: change.patch },
+          },
+    );
+  for (const [artifactId, artifact] of state.artifacts) {
+    if (artifact.visible === false) continue;
+    for (const attachment of artifact.versions.values())
+      yield render({ kind: "attachment.available", payload: { attachment } });
+    if (artifact.reason !== undefined)
+      yield render({
+        kind: "attachment.unavailable",
+        payload: { artifactId, reason: artifact.reason },
+      });
+  }
+  for (const payload of state.tasks.values())
+    yield render({ kind: "task.updated", payload });
+  for (const payload of state.goals.values())
+    yield render({ kind: "goal.updated", payload });
+  for (const payload of state.interactions.values())
+    yield render({ kind: "interaction.updated", payload });
+  for (const payload of state.plans.values())
+    yield render({ kind: "plan.updated", payload });
+  for (const gap of state.gaps)
+    yield render({
+      kind: "capture.gap",
+      payload: { reason: gap.reason, recoveredState: gap.recoveredState },
+    });
+  yield* renderTerminalPending(state);
+  if (state.lifecycle === "ended")
+    yield `[${(positionMs / 1000).toFixed(3)}s] Recording ended\n\n`;
 }
