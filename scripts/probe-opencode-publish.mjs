@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { listRecordings } from "../packages/client/dist/index.js";
 import { SubscriberCache } from "../packages/storage/dist/index.js";
 import { PublisherJournal } from "../packages/publisher/dist/index.js";
 /** Real native server restart and offline-history catch-up using supported OpenCode APIs. */
@@ -276,6 +277,13 @@ try {
     throw new Error("Live converter migration did not commit");
   if (final !== baseline)
     throw new Error("Publisher restart duplicated retained history");
+  const listing = await listRecordings({
+    serverOrigin: target.url,
+    credential: password,
+    signal,
+  });
+  if (!listing.recordings.some((recording) => recording.id === streamId))
+    throw new Error("Owner discovery omitted the native recording");
   const recording = await target.store.get(streamId);
   let replay = initialState();
   for await (const event of recording.history(0, recording.boundary.sequence))
@@ -425,6 +433,7 @@ try {
       success: true,
       restoredViewerPosition: true,
       indexedTimelineSeek: true,
+      ownerDiscovery: true,
       positionedLiveViewer: true,
       inSessionSeek: true,
       sessionCacheCapacity: 1,

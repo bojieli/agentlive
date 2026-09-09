@@ -228,6 +228,21 @@ export async function startServer(options: ServerOptions) {
   });
   app.get("/healthz", (c) => c.json({ ok: true }));
   app.get("/readyz", (c) => c.json({ ready: !closing }));
+  app.get("/api/v1/streams", async (c) => {
+    if (!isOwner(token(c.req.header("authorization"))))
+      throw new ProtocolError("unauthorized", "Owner authorization required");
+    const rawLimit = c.req.query("limit");
+    if (rawLimit !== undefined && !/^[1-9][0-9]{0,2}$/.test(rawLimit))
+      throw new ProtocolError("invalid_request", "Invalid listing limit");
+    const after = c.req.query("after");
+    return c.json(
+      await store.list({
+        ownerId: "local",
+        ...(after === undefined ? {} : { after }),
+        ...(rawLimit === undefined ? {} : { limit: Number(rawLimit) }),
+      }),
+    );
+  });
   app.post("/api/v1/streams", async (c) => {
     if (!isOwner(token(c.req.header("authorization"))))
       throw new ProtocolError("unauthorized", "Owner authorization required");

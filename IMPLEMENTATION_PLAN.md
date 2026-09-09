@@ -1021,3 +1021,12 @@ Each reconstruction retains the existing 64 MiB event budget; reset that counter
 Presentation checkpoint version 2 stores timelineMs alongside the sequence and checksummed prefix binding. Validate the selected time within the saved event’s interval: at or after that event, and no later than the next cached event; at the receipt boundary it cannot exceed the final event time. Keep version-1 reading support by deriving its event timestamp, and preserve the existing sequence-only load API while exposing loadPresentationPosition for timeline-aware callers.
 
 Watch reconstructs the saved event state, displays the selected timeline position, and anchors pacing there. Snapshot persistence and idle-loop checkpointing must retain this selected time instead of replacing it with the preceding event timestamp. New presented events advance the position normally. Validate a mid-gap seek through restart, malformed/out-of-interval metadata rejection, and legacy checkpoints. Clock-tick progress between events is not continuously persisted.
+
+
+### Owner recording discovery
+
+Expose owner-authorized GET /api/v1/streams with after-ID pagination and limits 1–100 (default 50), plus listRecordings client support and agentlive list. Return only ID, revision, title, visibility, and creation time. Exclude credentials, secret hashes, creation request digests, and producer/lease metadata. Filter by the server’s authenticated local owner; public visibility is not permission to enumerate recordings.
+
+Select at most limit+1 IDs from the existing creation-request index and read summaries without opening event logs or acquiring resident session slots. Keep page-selection memory bounded. Validate response ordering and cursor progression on the client. Pages reflect current metadata, not a frozen multi-page snapshot; refresh from the beginning to discover new IDs inserted before a cursor. The existing creation-request index and startup scan still need independent scalability work.
+
+Validate owner isolation, denied anonymous/publisher enumeration, pagination without overlap, input bounds, active publishing with a one-session cache, CLI output, server restart rebuilding, and discovery of a real installed-agent recording.

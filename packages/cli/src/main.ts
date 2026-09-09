@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { listRecordings } from "@agentlive/client";
 import { watchRecording } from "./watch.js";
 import { replayRecording } from "./replay.js";
 import { parseArgs } from "node:util";
@@ -20,6 +21,7 @@ import { ownerCredential, validateSecret } from "./credentials.js";
 const help = `AgentLive — record and share coding-agent sessions
 
 Commands:
+  agentlive list [--server <origin>] [--limit 50] [--after <recording-id>]
   agentlive serve [--host 127.0.0.1] [--port 7331] [--max-cached-sessions 128] [--shutdown-timeout-ms 30000]
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
@@ -80,6 +82,7 @@ async function main() {
     return;
   }
   if (
+    command !== "list" &&
     command !== "serve" &&
     command !== "import" &&
     command !== "replay" &&
@@ -91,6 +94,8 @@ async function main() {
     args,
     options: {
       help: { type: "boolean" },
+      limit: { type: "string" },
+      after: { type: "string" },
       speed: { type: "string" },
       "from-ms": { type: "string" },
       interactive: { type: "boolean" },
@@ -128,37 +133,39 @@ async function main() {
     "help",
     "state-dir",
     "owner-file",
-    ...(command === "serve"
-      ? ["host", "port", "max-cached-sessions", "shutdown-timeout-ms"]
-      : command === "replay" || command === "watch"
-        ? [
-            "server",
-            "stream",
-            "anonymous",
-            ...(command === "replay"
-              ? ["speed", "interactive", "from-ms"]
-              : [
-                  "speed",
-                  "interactive",
-                  "from-ms",
-                  "resume-view",
-                  "restart-view",
-                ]),
-          ]
-        : [
-            ...(command === "publish"
-              ? ["record-format", "resume-import", "native-server"]
-              : []),
-            "agent",
-            "source",
-            "server",
-            "visibility",
-            "title",
-            "artifact-root",
-            "artifact-base",
-            "native-session",
-            "native-agent",
-          ]),
+    ...(command === "list"
+      ? ["server", "limit", "after"]
+      : command === "serve"
+        ? ["host", "port", "max-cached-sessions", "shutdown-timeout-ms"]
+        : command === "replay" || command === "watch"
+          ? [
+              "server",
+              "stream",
+              "anonymous",
+              ...(command === "replay"
+                ? ["speed", "interactive", "from-ms"]
+                : [
+                    "speed",
+                    "interactive",
+                    "from-ms",
+                    "resume-view",
+                    "restart-view",
+                  ]),
+            ]
+          : [
+              ...(command === "publish"
+                ? ["record-format", "resume-import", "native-server"]
+                : []),
+              "agent",
+              "source",
+              "server",
+              "visibility",
+              "title",
+              "artifact-root",
+              "artifact-base",
+              "native-session",
+              "native-agent",
+            ]),
   ]);
   if (Object.keys(values).some((key) => !allowed.has(key)))
     throw new Error("Option does not apply to this command; use --help");
@@ -214,6 +221,21 @@ async function main() {
     } finally {
       await server.close();
     }
+    return;
+  }
+  if (command === "list") {
+    const credential = process.env.AGENTLIVE_OWNER_SECRET
+      ? validateSecret(process.env.AGENTLIVE_OWNER_SECRET)
+      : await ownerCredential(ownerFile, false);
+    secrets.push(credential);
+    const page = await listRecordings({
+      serverOrigin: values.server ?? "http://127.0.0.1:7331",
+      credential,
+      signal: controller.signal,
+      ...(values.after === undefined ? {} : { after: values.after }),
+      ...(values.limit === undefined ? {} : { limit: Number(values.limit) }),
+    });
+    process.stdout.write(JSON.stringify(page) + "\n");
     return;
   }
   if (command === "replay" || command === "watch") {

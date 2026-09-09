@@ -226,3 +226,6 @@ During interactive watch, `[` seeks back 30 seconds, `]` seeks forward 30 second
 
 
 Saved viewer positions retain an explicit seek time between events. For example, seeking to 30 seconds between events at 0 and 60 seconds and restarting with `--resume-view` restores the 30-second snapshot and timing anchor. Older sequence-only checkpoints still load at their event timestamp. This preserves selected seek positions; continuously elapsed playback time between events is not checkpointed on every clock tick.
+
+
+Discover recordings hosted by your server with `agentlive list --server http://127.0.0.1:7331`. The command uses your owner credential and returns a JSON page with recording summaries and `nextAfter`. Continue with `--after <nextAfter>`; `--limit` accepts 1–100 and defaults to 50. Publisher credentials and anonymous access cannot list the server’s recordings. Pages are ordered by recording ID, and refreshing from the first page discovers recordings added before your current cursor.

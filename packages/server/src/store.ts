@@ -109,6 +109,65 @@ export class RecordingStore {
     this.queue = result.catch(() => {});
     return result;
   }
+  list(options: { ownerId: string; after?: string; limit?: number }) {
+    const ownerId = idSchema.parse(options.ownerId);
+    const after =
+      options.after === undefined ? undefined : idSchema.parse(options.after);
+    const limit = options.limit ?? 50;
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+      throw new ProtocolError(
+        "invalid_request",
+        "Listing limit must be from 1 to 100",
+      );
+    return this.serial(async () => {
+      // Bound page selection memory even when the creation-request index is large.
+      const selected: string[] = [];
+      for (const [key, value] of this.requests) {
+        if (
+          JSON.parse(key)[0] !== ownerId ||
+          (after !== undefined && value.id <= after)
+        )
+          continue;
+        if (
+          selected.length === limit + 1 &&
+          value.id >= selected[selected.length - 1]!
+        )
+          continue;
+        selected.push(value.id);
+        selected.sort();
+        if (selected.length > limit + 1) selected.pop();
+      }
+      const more = selected.length > limit;
+      if (more) selected.pop();
+      const recordings = [];
+      for (const id of selected) {
+        const metadata = sessionMetadataSchema.parse(
+          JSON.parse(
+            await readFile(
+              join(this.directory, "sessions", id, "metadata.json"),
+              "utf8",
+            ),
+          ),
+        );
+        if (metadata.id !== id || metadata.ownerId !== ownerId)
+          throw new ProtocolError(
+            "corrupt_storage",
+            "Recording listing identity mismatch",
+          );
+        recordings.push({
+          id,
+          revision: metadata.revision,
+          title: metadata.title,
+          visibility: metadata.visibility,
+          createdAt: metadata.createdAt,
+        });
+      }
+      return {
+        recordings,
+        nextAfter: more ? selected[selected.length - 1]! : null,
+      };
+    });
+  }
   create(raw: CreateSession): Promise<RecordingSession> {
     let request: CreateSession;
     try {

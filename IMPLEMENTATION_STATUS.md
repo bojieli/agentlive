@@ -300,3 +300,10 @@ Validation: all 200 tests across 25 files pass, including paused backward/forwar
 Presentation checkpoints now retain both event sequence and selected timeline time. Watch restores the selected time in its snapshot and pacing anchor, including explicit seeks between events. Version-1 checkpoints remain readable at their event timestamp, and sequence-only callers retain the existing API. Invalid times outside the saved event interval are rejected independently of durable receipt.
 
 Validation: all 201 tests across 25 files pass. Tests cover mid-gap seek/restart, interval bounds, malformed timestamps, and legacy checkpoint loading. The PTY probe restored a 30-second seek without passing from-ms on restart. The installed OpenCode import-continuation probe passed viewer restoration, in-session seeking, native/publisher restarts, 26 events, and one verified attachment. This preserves selected positions; clock-tick playback progress and paged/browser/mobile viewer work remain outstanding.
+
+
+### Owner recording listing
+
+The server now offers owner-authorized paginated recording summaries through GET /api/v1/streams, listRecordings, and agentlive list. Listings exclude internal credentials and producer metadata and do not open session logs or occupy session-cache slots. Pages use ascending IDs with an after cursor and bounded selection memory. This is mutable discovery, not event synchronization or a frozen catalog snapshot.
+
+Validation: 202 tests across 25 files pass. Additional listing checks cover owner isolation, denied anonymous/publisher credentials, bounded pagination, invalid queries, continued publishing with a one-session cache, real CLI output, and listing after server restart with zero resident sessions. The installed OpenCode import/live probe discovered its recording through the API while passing native/publisher restart, viewer seeking/restoration, 26 events, and one verified attachment. Creation-index scalability, full account access control, production viewers, and packaging remain outstanding.

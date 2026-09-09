@@ -665,3 +665,102 @@ it.each([0, -1, 0.5, NaN, Infinity, 2147483648])(
     await store.close();
   },
 );
+
+it("lists owner recordings in bounded pages without evicting active sessions or exposing credentials", async () => {
+  const { listRecordings } = await import("../../packages/client/src/index.js");
+  const { server, input, streamId, revision } = await setup("private", 1);
+  const expected = [streamId];
+  for (let index = 0; index < 4; index++) {
+    const session = await server.store.create({
+      ...input,
+      ownerId: index === 3 ? "another-owner" : "local",
+      requestId: `listing-${index}`,
+    });
+    if (index !== 3) expected.push(session.info.id);
+    server.store.release(session);
+  }
+  const pub = await publisher(server, streamId, revision, 1);
+  const settings = {
+    serverOrigin: server.url,
+    credential: ownerSecret,
+    signal: AbortSignal.timeout(5000),
+    limit: 2,
+  };
+  const first = await listRecordings(settings);
+  expect(first.recordings).toHaveLength(2);
+  expect(first.nextAfter).not.toBeNull();
+  const second = await listRecordings({ ...settings, after: first.nextAfter! });
+  expect(second.nextAfter).toBeNull();
+  expect(
+    [...first.recordings, ...second.recordings].map(
+      (recording) => recording.id,
+    ),
+  ).toEqual(expected.sort());
+  for (const recording of first.recordings)
+    expect(Object.keys(recording).sort()).toEqual([
+      "createdAt",
+      "id",
+      "revision",
+      "title",
+      "visibility",
+    ]);
+  expect(server.store.cacheSize).toBe(1);
+  pub.send({
+    type: "batch",
+    protocolVersion: 1,
+    requestId: "after-list",
+    events: [event(streamId, 1)],
+  });
+  expect((await pub.next()).type).toBe("ack");
+  for (const credential of [undefined, writeSecret]) {
+    const response = await fetch(server.url + "/api/v1/streams", {
+      headers: credential ? { authorization: `Bearer ${credential}` } : {},
+    });
+    expect(response.ok).toBe(false);
+    expect(await response.text()).not.toContain(streamId);
+  }
+  for (const query of [
+    "limit=0",
+    "limit=101",
+    "limit=1.5",
+    "after=../secret",
+  ]) {
+    const response = await fetch(server.url + "/api/v1/streams?" + query, {
+      headers: { authorization: `Bearer ${ownerSecret}` },
+    });
+    expect(response.status).toBe(400);
+    await response.arrayBuffer();
+  }
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const { resolve } = await import("node:path");
+  const command = await promisify(execFile)(
+    process.execPath,
+    [
+      resolve("packages/cli/dist/main.js"),
+      "list",
+      "--server",
+      server.url,
+      "--limit",
+      "2",
+    ],
+    { env: { ...process.env, AGENTLIVE_OWNER_SECRET: ownerSecret } },
+  );
+  expect(JSON.parse(command.stdout)).toEqual(first);
+  await server.close();
+  const restarted = await startServer({
+    directory: server.store.directory,
+    ownerSecret,
+    port: 0,
+    maxCachedSessions: 1,
+  });
+  servers.push(restarted);
+  expect(
+    await listRecordings({
+      ...settings,
+      serverOrigin: restarted.url,
+      signal: AbortSignal.timeout(5000),
+    }),
+  ).toEqual(first);
+  expect(restarted.store.cacheSize).toBe(0);
+});
