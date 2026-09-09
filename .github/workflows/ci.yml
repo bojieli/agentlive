@@ -17,3 +17,4 @@ jobs:
           node-version-file: .node-version
       - run: npx --yes pnpm@12.3.4 install --frozen-lockfile
       - run: npx --yes pnpm@12.3.4 check
+      - run: npx --yes pnpm@12.3.4 package:verify

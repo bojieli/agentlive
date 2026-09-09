@@ -229,3 +229,14 @@ Saved viewer positions retain an explicit seek time between events. For example,
 
 
 Discover recordings hosted by your server with `agentlive list --server http://127.0.0.1:7331`. The command uses your owner credential and returns a JSON page with recording summaries and `nextAfter`. Continue with `--after <nextAfter>`; `--limit` accepts 1–100 and defaults to 50. Publisher credentials and anonymous access cannot list the server’s recordings. Pages are ordered by recording ID, and refreshing from the first page discovers recordings added before your current cursor.
+
+
+Build and verify a standalone installation with Node 26:
+
+```sh
+npx --yes pnpm@12.3.4 package:verify
+npm install --global ./dist/release/agentlive-cli-0.1.0.tgz
+agentlive --help
+```
+
+The build bundles AgentLive workspace code into one CLI and includes a shrinkwrap for its external runtime dependencies. Verification installs the tarball in a fresh temporary directory with install scripts disabled, starts its server, imports a recording, lists and replays it, retries the import, and checks shutdown. `node scripts/probe-claude-publish.mjs --package` additionally creates and resumes a real Claude session, then verifies its recording through the installed package. These are local private build artifacts; no npm release has been published. Browser assets and public-release packaging are still in development.

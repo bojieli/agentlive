@@ -1,0 +1,112 @@
+#!/usr/bin/env node
+/** Build one installable package from workspace code and pinned external dependencies. */
+import { build } from "esbuild";
+import {
+  mkdir,
+  readFile,
+  writeFile,
+  rm,
+  readdir,
+  chmod,
+  rename,
+  copyFile,
+} from "node:fs/promises";
+import { resolve, join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+const run = promisify(execFile);
+const root = resolve(import.meta.dirname, "..");
+const manifests = new Map();
+for (const directory of await readdir(join(root, "packages"))) {
+  const manifest = JSON.parse(
+    await readFile(join(root, "packages", directory, "package.json"), "utf8"),
+  );
+  manifests.set(manifest.name, manifest);
+}
+const dependencies = {};
+const visited = new Set();
+function collect(name) {
+  if (visited.has(name)) return;
+  visited.add(name);
+  const manifest = manifests.get(name);
+  if (!manifest) throw new Error(`Missing workspace package ${name}`);
+  for (const [dependency, version] of Object.entries(
+    manifest.dependencies ?? {},
+  )) {
+    if (version.startsWith("workspace:")) collect(dependency);
+    else {
+      if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version))
+        throw new Error(`Unpinned runtime dependency ${dependency}`);
+      if (dependencies[dependency] && dependencies[dependency] !== version)
+        throw new Error(`Conflicting dependency ${dependency}`);
+      dependencies[dependency] = version;
+    }
+  }
+}
+collect("@agentlive/cli");
+const staging = join(root, "dist", "package");
+const release = join(root, "dist", "release");
+await rm(staging, { recursive: true, force: true });
+await mkdir(staging, { recursive: true });
+await mkdir(release, { recursive: true });
+const cli = manifests.get("@agentlive/cli");
+await build({
+  absWorkingDir: root,
+  entryPoints: ["packages/cli/dist/main.js"],
+  outfile: join(staging, "cli.mjs"),
+  bundle: true,
+  platform: "node",
+  target: "node26",
+  format: "esm",
+  external: Object.keys(dependencies),
+  legalComments: "inline",
+});
+await chmod(join(staging, "cli.mjs"), 0o755);
+await writeFile(
+  join(staging, "package.json"),
+  JSON.stringify(
+    {
+      name: "@agentlive/cli",
+      version: cli.version,
+      private: true,
+      description: "Record, share, and replay coding-agent sessions",
+      type: "module",
+      license: "UNLICENSED",
+      engines: cli.engines,
+      bin: { agentlive: "cli.mjs" },
+      files: ["cli.mjs", "npm-shrinkwrap.json", "README.md"],
+      dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
+    },
+    null,
+    2,
+  ) + "\n",
+);
+await copyFile(join(root, "README.md"), join(staging, "README.md"));
+await run(
+  "npm",
+  [
+    "install",
+    "--package-lock-only",
+    "--ignore-scripts",
+    "--no-audit",
+    "--no-fund",
+  ],
+  { cwd: staging },
+);
+await rename(
+  join(staging, "package-lock.json"),
+  join(staging, "npm-shrinkwrap.json"),
+);
+const packed = await run(
+  "npm",
+  ["pack", "--json", "--pack-destination", release],
+  { cwd: staging },
+);
+const [result] = JSON.parse(packed.stdout);
+console.log(
+  JSON.stringify({
+    package: result.filename,
+    bytes: result.size,
+    integrity: result.integrity,
+  }),
+);

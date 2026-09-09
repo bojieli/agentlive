@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 /** Explicit live integration: two tool-free native Claude turns in a new synthetic workspace. */
-import { spawn } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+import { spawn, execFile } from "node:child_process";
 import { mkdtemp, readdir, stat } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
@@ -202,4 +204,17 @@ try {
   );
 } finally {
   await server.close();
+}
+
+if (process.argv.includes("--package")) {
+  const result = await promisify(execFile)(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./probe-package.mjs", import.meta.url)),
+      sourcePath,
+      "claude",
+    ],
+    { timeout: 180000, maxBuffer: 1024 * 1024 },
+  );
+  process.stdout.write(result.stdout);
 }
