@@ -35,6 +35,31 @@ export async function verifyBrowserSession(
     }
     if (viewer.received !== history.metadata.serverSeq)
       throw new Error("Probe history changed during browser verification");
+    const selected = viewer.duration / 2;
+    viewer.seek(selected);
+    viewer.setActive(false);
+    while (viewer.status !== "suspended") {
+      signal.throwIfAborted();
+      if (viewer.error)
+        throw new Error("Browser model failed during suspension");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    viewer.setActive(true);
+    viewer.reconnect();
+    while (viewer.status !== "live") {
+      signal.throwIfAborted();
+      if (viewer.error)
+        throw new Error("Browser model failed during foreground revalidation");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (
+      viewer.time !== selected ||
+      viewer.follow ||
+      viewer.received !== history.metadata.serverSeq
+    )
+      throw new Error(
+        "Foreground recovery changed paused presentation or duplicated receipt",
+      );
     for (const time of [
       viewer.duration,
       0,
@@ -54,6 +79,7 @@ export async function verifyBrowserSession(
       tools: viewer.state.tools.size,
       artifacts: viewer.state.artifacts.size,
       seekVerified: true,
+      foregroundRevalidated: true,
     };
   } finally {
     await viewer.close();

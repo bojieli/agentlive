@@ -10,6 +10,44 @@ export class BrowserSession {
     return this.objectOrder.get(key) ?? Number.MAX_SAFE_INTEGER;
   }
   private stop = new AbortController();
+  private active = true;
+  private connection: AbortController | undefined;
+  private wake: (() => void) | undefined;
+  /** Hidden pages retain their prefix and playback intent, without relying on a background socket. */
+  setActive(active: boolean) {
+    if (this.stop.signal.aborted || this.active === active) return;
+    this.active = active;
+    this.connection?.abort();
+    this.wake?.();
+  }
+  /** Revalidate authorization and history through a fresh subscription; never overlap receipt loops. */
+  reconnect() {
+    if (!this.stop.signal.aborted && this.active) this.connection?.abort();
+  }
+  private async receive(client: SubscriberClient, signal: AbortSignal) {
+    while (!signal.aborted) {
+      if (!this.active) {
+        await new Promise<void>((resolve) => {
+          const wake = () => {
+            signal.removeEventListener("abort", wake);
+            this.wake = undefined;
+            resolve();
+          };
+          this.wake = wake;
+          signal.addEventListener("abort", wake, { once: true });
+          if (signal.aborted || this.active) wake();
+        });
+        continue;
+      }
+      const connection = new AbortController();
+      this.connection = connection;
+      try {
+        await client.run(AbortSignal.any([signal, connection.signal]));
+      } finally {
+        this.connection = undefined;
+      }
+    }
+  }
   private task: Promise<void> = Promise.resolve();
   state = initialState();
   time = 0;
@@ -55,7 +93,14 @@ export class BrowserSession {
       cursor: { streamId, revision: metadata.revision, serverSeq: 0 },
       ...(credential ? { credential } : {}),
       onStatus: (status) => {
-        session.status = status;
+        session.status =
+          status === "stopped" &&
+          !session.stop.signal.aborted &&
+          !signal.aborted
+            ? session.active
+              ? "reconnecting"
+              : "suspended"
+            : status;
         changed();
       },
       commit: async (events) => {
@@ -107,14 +152,21 @@ export class BrowserSession {
         } else changed();
       },
     });
-    session.task = client
-      .run(AbortSignal.any([signal, session.stop.signal]))
+    session.task = session
+      .receive(client, AbortSignal.any([signal, session.stop.signal]))
       .catch((error: unknown) => {
+        session.status = "error";
         session.error =
           error instanceof Error
             ? error.message
             : "Unable to receive recording";
         changed();
+      })
+      .finally(() => {
+        if (!session.error) {
+          session.status = "stopped";
+          changed();
+        }
       });
     return session;
   }

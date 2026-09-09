@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { listRecordings } from "@agentlive/client";
+import { ForegroundClock, bindPageLifecycle } from "./lifecycle.js";
 import { BrowserSession } from "./session.js";
 import "./style.css";
 const seconds = (time: number) => `${(time / 1000).toFixed(1)}s`;
@@ -20,22 +21,26 @@ function App() {
   >([]);
   const [next, setNext] = useState<string | null>(null);
   const request = useRef<AbortController | undefined>(undefined);
+  const [clock] = useState(() => new ForegroundClock());
+  useEffect(() => {
+    if (session) return bindPageLifecycle(session, document, window, clock);
+  }, [session, clock]);
   useEffect(() => () => request.current?.abort(), []);
   useEffect(() => {
     if (!session || !playing) return;
-    let previous = performance.now();
+    clock.reset();
     const interval = setInterval(() => {
-      const now = performance.now();
       try {
-        session.seek(session.time + (now - previous) * speed);
+        const elapsed = clock.elapsed();
+        if (clock.interrupted) session.reconnect();
+        session.seek(session.time + elapsed * speed);
       } catch (error) {
         setError(error instanceof Error ? error.message : "Playback failed");
         setPlaying(false);
       }
-      previous = now;
     }, 50);
     return () => clearInterval(interval);
-  }, [session, playing, speed]);
+  }, [session, playing, speed, clock]);
   async function join(id = stream) {
     request.current?.abort();
     session?.close();

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 /** Opt-in synthetic real-Codex test of capture, publishing, live receipt, and replay. */
+import { verifyBrowserSession } from "./verify-browser-session.mjs";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -240,7 +241,14 @@ try {
     JSON.stringify([...state.tools]) !== JSON.stringify([...replay.tools])
   )
     throw new Error("Live state differs from replay state");
+  const browserModel = await verifyBrowserSession(
+    server.url,
+    journal.identity.streamId,
+    ownerSecret,
+    abort.signal,
+  );
   const summary = {
+    browserModel,
     success: true,
     agent: "codex",
     producerEvents: journal.capturedThrough,
