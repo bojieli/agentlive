@@ -63,3 +63,19 @@ OpenCode attachment extension (2026-09-09): the three-turn `probe-opencode-publi
 The shared native probe verifier now saves a paused midpoint and playback speed, closes the browser model, and reopens it against the same recording. It compares the exact reconstructed reducer state, timeline position, receipt count, speed, and pause/follow mode. It also checks seeking and foreground revalidation. IndexedDB is supplied by a test double; this does not validate real browser disk persistence or rendered UI behavior.
 
 On 2026-09-09, OpenCode `--resume-import` passed with three native turns, 26 stored events, six messages, and one verified attachment, including native-server restart, detached-history recovery, publisher deduplication, and paused playback restoration. Claude `--resume-import` passed with two native turns, 28 stored events, and four messages, including imported history, native resume, live suffix capture, publisher deduplication, and paused playback restoration. Raw native transcripts and credentials are excluded from repository evidence.
+
+
+## Windowed activity renderer validation
+
+On 2026-09-09, the native Codex app-server probe passed a fresh session with a read-only tool and native restart/resume: 134 server events, five messages, one tool, six activity cards, no reported capture gaps, matching replay, and no duplicate resumed history. The shared verifier now renders the exact production ActivityCard component for each visible final-state object and retains only its aggregate markup hash/count, alongside the existing browser-model seek, cache, and foreground checks.
+
+The read-only local corpus sweep exercised the new production activity cards, including messages, tools, edits, attachments, workflow objects, and capture notes:
+
+| Source | Files passed / examined | Canonical events | Activity cards rendered | Capture gaps | Unavailable artifacts |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Codex | 524 / 524 | 276,949 | 107,137 | 1,533 | 1,501 |
+| Claude | 1,563 / 1,598 | 414,656 | 215,258 | 71,398 | 1,746 |
+| Kimi Code | 461 / 461 | 98,151 | 44,020 | 9,697 | 7 |
+| OpenCode retained exports | 12 / 12 | 129 | 30 | 0 | 1 |
+
+All 35 failures were `Claude source lacks session identity or timestamp`, matching the previously observed category. Counts describe the examined corpus at the time of the run; live histories may subsequently grow. Capture gaps and unavailable artifacts remain explicit fidelity limitations. Aggregate results are local ignored probe artifacts; raw source content and generated markup are not committed. These checks validate data reduction and card markup, not actual browser layout, virtual scrolling, focus, accessibility, or mobile lifecycle behavior.

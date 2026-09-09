@@ -4,6 +4,10 @@ const require = createRequire(
   new URL("../apps/web/package.json", import.meta.url),
 );
 const { IDBFactory, IDBKeyRange } = require("fake-indexeddb");
+const { createElement } = require("react");
+const { renderToStaticMarkup } = require("react-dom/server");
+import { createHash } from "node:crypto";
+import { ActivityCard, activityRows } from "../apps/web/dist/activity.js";
 import { BrowserSession } from "../apps/web/dist/session.js";
 import { openRecordingHistory } from "../packages/client/dist/index.js";
 import { apply, initialState } from "../packages/playback/dist/index.js";
@@ -80,7 +84,21 @@ export async function verifyBrowserSession(
       if (serialize(expected) !== serialize(viewer.state))
         throw new Error("Browser native replay differs from retained history");
     }
+    const rows = activityRows(viewer.state, (key) => viewer.order(key));
+    const rendered = createHash("sha256");
+    for (const row of rows)
+      rendered.update(
+        renderToStaticMarkup(
+          createElement(ActivityCard, {
+            row,
+            state: viewer.state,
+            onAttachment: () => {},
+          }),
+        ),
+      );
     const counts = {
+      renderedActivityItems: rows.length,
+      activityMarkupHash: rendered.digest("hex"),
       messages: viewer.state.messages.size,
       tools: viewer.state.tools.size,
       artifacts: viewer.state.artifacts.size,

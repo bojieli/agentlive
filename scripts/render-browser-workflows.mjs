@@ -1,5 +1,6 @@
 /** Render production workflow components for tests; never write native markup to disk. */
 import { createRequire } from "node:module";
+import { ActivityCard, activityRows } from "../apps/web/dist/activity.js";
 import { workflowKinds, WorkflowCard } from "../apps/web/dist/workflow-card.js";
 const require = createRequire(
   new URL("../apps/web/package.json", import.meta.url),
@@ -17,4 +18,11 @@ export function* renderBrowserWorkflows(state) {
           onAttachment: () => {},
         }),
       );
+}
+
+export function* renderBrowserActivity(state) {
+  for (const row of activityRows(state, () => 0))
+    yield renderToStaticMarkup(
+      createElement(ActivityCard, { row, state, onAttachment: () => {} }),
+    );
 }

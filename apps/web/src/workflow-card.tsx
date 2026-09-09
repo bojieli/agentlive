@@ -1,3 +1,4 @@
+import { Disclosure } from "./disclosure.js";
 import type { ReactNode } from "react";
 import type { RecordingState } from "@agentlive/playback";
 import type { Attachment } from "./attachments.js";
@@ -280,10 +281,13 @@ export function WorkflowCard({
       </div>
       <AgentReference {...(owner ? { id: owner } : {})} state={state} />
       {body}
-      <details className="recorded-data">
+      <Disclosure
+        choice={`${kind}/${id}/recorded-data`}
+        className="recorded-data"
+      >
         <summary>Recorded data</summary>
         <pre>{JSON.stringify(value, null, 2)}</pre>
-      </details>
+      </Disclosure>
     </article>
   );
 }

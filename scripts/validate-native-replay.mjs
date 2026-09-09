@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /** Read-only full-corpus reducer/terminal validation. Persist aggregate counts and hashes only. */
-import { renderBrowserWorkflows } from "./render-browser-workflows.mjs";
+import {
+  renderBrowserActivity,
+  renderBrowserWorkflows,
+} from "./render-browser-workflows.mjs";
 import { readdir, mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -100,6 +103,8 @@ for (const config of configurations.filter(
     events: 0,
     renderedBytes: 0,
     snapshotBytes: 0,
+    activityCards: 0,
+    activityBytes: 0,
     workflowCards: 0,
     workflowBytes: 0,
     messages: 0,
@@ -197,7 +202,18 @@ for (const config of configurations.filter(
           workflowBytes += Buffer.byteLength(html);
           workflowHash.update(html);
         }
+        let activityCards = 0,
+          activityBytes = 0;
+        const activityHash = createHash("sha256");
+        for (const html of renderBrowserActivity(state)) {
+          activityCards++;
+          activityBytes += Buffer.byteLength(html);
+          activityHash.update(html);
+        }
         Object.assign(result, {
+          activityCards,
+          activityBytes,
+          activityHash: activityHash.digest("hex"),
           workflowCards,
           workflowBytes,
           workflowHash: workflowHash.digest("hex"),
@@ -218,6 +234,8 @@ for (const config of configurations.filter(
           "events",
           "renderedBytes",
           "snapshotBytes",
+          "activityCards",
+          "activityBytes",
           "workflowCards",
           "workflowBytes",
           "messages",

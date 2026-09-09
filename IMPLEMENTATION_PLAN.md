@@ -87,7 +87,7 @@ Sources: [inspected claude-replay watch implementation](https://github.com/es617
 | Server | Hono, `@hono/node-server`, `ws` | HTTP API and bundled web assets; WebSocket publishing/subscription. |
 | Schemas | Zod | Validate external input and generate a versioned protocol reference. |
 | Web | React, esbuild, CSS | DOM-based text, responsive layout, accessible controls. |
-| Large lists | Windowed rendering | Select and verify a virtualization library during the player phase; test dynamic-height diffs. |
+| Large lists | TanStack React Virtual 3.14.11 | Measured dynamic rows, stable object keys, focus retention, and offscreen reference navigation; real-browser dynamic-height validation remains required. |
 | Terminal | Ink and React | Share state reconstruction and controls, not browser layout components. |
 | Storage | Per-session JSONL log and JSON metadata | Serialized appends; in-memory live delivery; rebuildable seek indexes and snapshots. Kernel advisory locks through `fs-native-extensions` protect local writer ownership across process suspension/death. |
 | Tests | Vitest, Playwright | Deterministic reducers, transport failure tests, browser behavior. |
@@ -1112,3 +1112,16 @@ Receipt transactions preserve the latest saved view. Preference transactions pre
 Coalesce moving playback checkpoints at one-second intervals; user controls request immediate saves. Keep only one pending save plus a dirty flag, flush on hiding as best effort, and drain the final checkpoint before closing or rejoining. A browser process kill may lose recent unsaved view changes. Saving failure disables optional persistence while in-memory viewing remains available. Clear saved histories disables active saving before deleting receipt and preferences.
 
 Validate exact paused restoration with equal-time future receipt, selected time/speed/playing intent, suffix catch-up without moving a paused view, cross-tab receipt/preference preservation, and malformed/unbound checkpoints. Exercise the same model with actual native-session probes. Test-double IndexedDB validation does not establish real browser disk, mobile lifecycle, layout, or interaction behavior; these remain release gates. Expanded card state and selected attachment restoration are separate viewer work.
+
+
+### Windowed browser activity
+
+Use `@tanstack/react-virtual` 3.14.11 (latest npm release checked on 2026-09-09) for the activity viewport, with the lockfile retaining its exact core dependency. Follow the maintained [React adapter](https://tanstack.com/virtual/latest/docs/framework/react/react-virtual) and [virtualizer APIs](https://tanstack.com/virtual/latest/docs/api/virtualizer) for measured elements, stable keys, ranges, and end anchoring.
+
+Construct lightweight descriptors in first-event order and render full message/tool/edit/attachment/workflow cards only within the measured viewport plus four overscan rows on each side. Include capture notes in the same virtual list. Retain at most one additional focused offscreen row so scrolling does not remove the active control. Expansion choices live above virtual rows and survive unmount/remount for the lifetime of the joined viewer. They are separate from canonical playback state and are not yet persisted across viewer leave/reload.
+
+Use a scrollable activity region with visible focus, list positions and total count, first/latest controls, and arrow/Home/End item navigation. Resolve ordinary recording-local agent/tool link activation through the descriptor index, scroll to the destination, then focus its mounted wrapper. Keep native modified-link behavior. Preserve recording-local fragments when joining the same URL, reveal their target once it is present, and handle hash navigation without repeatedly overriding manual scrolling. Seek hides objects absent from the selected state; if the focused object disappears, return focus to the activity region.
+
+Measure row growth with the virtualizer's ResizeObserver integration. While following live, enable end anchoring and append following only within 48 pixels of the end; readers elsewhere retain their reading position. Historical playback does not enable automatic end following. Use immediate scrolling without animations. Verify dynamic-height diffs, expansion, keyboard focus, reading anchors, touch scrolling, and screen reader behavior in real desktop/mobile browsers before claiming the viewer gate.
+
+The range/measurement test exercises 100,000 descriptors with a small mounted selection and changing row heights. Native probes and corpus validation render the actual production activity cards and retain aggregate counts/hashes. This does not prove rendered browser behavior. Descriptor/index storage, full reducer state, large single-card text, attachment version lists, and browser find across unmounted content still require paging/search work; windowed DOM alone is not the complete memory solution.

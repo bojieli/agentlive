@@ -5,12 +5,7 @@ import { ForegroundClock, bindPageLifecycle } from "./lifecycle.js";
 import { BrowserSession } from "./session.js";
 import { AttachmentViewer } from "./attachment-viewer.js";
 import type { Attachment } from "./attachments.js";
-import {
-  WorkflowCard,
-  workflowKinds,
-  AgentReference,
-  objectAnchor,
-} from "./workflow-card.js";
+import { ActivityFeed } from "./activity-feed.js";
 import { browserCachePlatform, clearSavedHistories } from "./history-cache.js";
 import "./style.css";
 const seconds = (time: number) => `${(time / 1000).toFixed(1)}s`;
@@ -90,7 +85,15 @@ function App() {
       }
       setSession(joined);
       setStream(id);
-      history.replaceState(null, "", `/?stream=${encodeURIComponent(id)}`);
+      const fragment =
+        new URLSearchParams(location.search).get("stream") === id
+          ? location.hash
+          : "";
+      history.replaceState(
+        null,
+        "",
+        `/?stream=${encodeURIComponent(id)}${fragment}`,
+      );
     } catch (error) {
       if (!abort.signal.aborted)
         setError(error instanceof Error ? error.message : "Unable to join");
@@ -355,101 +358,13 @@ function App() {
                 onClose={() => setAttachment(undefined)}
               />
             )}
-            <section className="feed" aria-label="Session activity">
-              {[
-                [...state!.messages.values()]
-                  .filter((message) => message.visible !== false)
-                  .map((message) => (
-                    <article
-                      className={`message ${message.role}`}
-                      key={`messages/${message.id}`}
-                      id={objectAnchor("messages", message.id)}
-                    >
-                      <div className="item-label">
-                        {message.role}
-                        <span>{message.completed ? "" : "in progress"}</span>
-                      </div>
-                      <AgentReference
-                        {...(message.agentId ? { id: message.agentId } : {})}
-                        state={state!}
-                      />
-                      <pre>{message.text || "…"}</pre>
-                    </article>
-                  )),
-                [...state!.tools.values()]
-                  .filter((tool) => tool.visible !== false)
-                  .map((tool) => (
-                    <details
-                      className="card"
-                      key={`tools/${tool.id}`}
-                      id={objectAnchor("tools", tool.id)}
-                    >
-                      <summary>
-                        {tool.name} <span className="muted">{tool.status}</span>
-                      </summary>
-                      <AgentReference
-                        {...(tool.agentId ? { id: tool.agentId } : {})}
-                        state={state!}
-                      />
-                      <h4>Input</h4>
-                      <pre>{tool.input}</pre>
-                      <h4>Output</h4>
-                      <pre>{tool.output}</pre>
-                    </details>
-                  )),
-                [...state!.changes.entries()].map(([id, change]) => (
-                  <details className="card" key={`changes/${id}`}>
-                    <summary>{change.path}</summary>
-                    <pre>{change.patch}</pre>
-                  </details>
-                )),
-                [...state!.artifacts.entries()]
-                  .filter(([, artifact]) => artifact.visible !== false)
-                  .map(([id, artifact]) => (
-                    <section className="card" key={`artifacts/${id}`}>
-                      <strong>{artifact.filename}</strong>
-                      <p className="muted">
-                        {artifact.reason ??
-                          (artifact.pending
-                            ? "Preparing attachment…"
-                            : `${artifact.versions.size} saved version(s)`)}
-                      </p>
-                      {[...artifact.versions.values()].map((version) => (
-                        <button
-                          key={version.version}
-                          onClick={() => setAttachment(version)}
-                        >
-                          Open version {version.version}
-                        </button>
-                      ))}
-                    </section>
-                  )),
-                workflowKinds.map((kind) =>
-                  [...state![kind].keys()].map((id) => (
-                    <WorkflowCard
-                      key={`${kind}/${id}`}
-                      kind={kind}
-                      id={id}
-                      state={state!}
-                      onAttachment={setAttachment}
-                    />
-                  )),
-                ),
-              ]
-                .flat(2)
-                .sort(
-                  (a, b) =>
-                    session.order(String(a.key)) - session.order(String(b.key)),
-                )}
-              {state!.gaps.map((gap, index) => (
-                <div className="gap" key={index}>
-                  Capture note: {gap.reason}
-                </div>
-              ))}
-              {!session.received && (
-                <p className="muted">Receiving session history…</p>
-              )}
-            </section>
+            <ActivityFeed
+              key={session.streamId}
+              state={state!}
+              following={session.follow}
+              order={(key) => session.order(key)}
+              onAttachment={setAttachment}
+            />
           </>
         )}
       </main>
