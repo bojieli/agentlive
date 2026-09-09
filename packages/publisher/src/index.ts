@@ -2,6 +2,7 @@ export { StreamingRedactor } from "./filter.js";
 export {
   ArtifactSpool,
   type ArtifactCapture,
+  type InlineArtifactCapture,
   type CapturedAttachment,
 } from "./artifacts.js";
 export { PublisherJournal } from "./journal.js";

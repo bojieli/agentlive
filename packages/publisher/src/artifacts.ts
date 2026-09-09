@@ -29,6 +29,15 @@ export interface ArtifactCapture {
   historical: boolean;
   expectedSourceHash?: string;
 }
+export interface InlineArtifactCapture {
+  artifactId: string;
+  sourceKey: string;
+  bytes: Uint8Array;
+  filename: string;
+  mediaType: string;
+  text: boolean;
+  historical: boolean;
+}
 const bindingSchema = z.strictObject({
   requestHash: hashSchema,
   attachment: attachmentSchema,
@@ -89,6 +98,119 @@ export class ArtifactSpool {
     const operation = this.queue.then(() => this.captureLocked(copy, signal));
     this.queue = operation.catch(() => {});
     return operation;
+  }
+  private queuedInlineBytes = 0;
+  async captureInline(
+    input: InlineArtifactCapture,
+    signal?: AbortSignal,
+  ): Promise<CapturedAttachment> {
+    if (this.closed) throw new Error("Artifact spool is closed");
+    signal?.throwIfAborted();
+    if (
+      input.bytes.byteLength + this.queuedInlineBytes >
+      this.blobs.limits.maxBlobBytes
+    )
+      throw new ProtocolError(
+        "invalid_request",
+        "Inline attachment queue exceeds byte limit",
+      );
+    const copy = { ...input, bytes: Buffer.from(input.bytes) };
+    this.queuedInlineBytes += copy.bytes.byteLength;
+    const operation = this.queue.then(async () => {
+      signal?.throwIfAborted();
+      idSchema.parse(copy.artifactId);
+      z.string().min(1).max(1024).parse(copy.sourceKey);
+      z.string().min(1).max(255).parse(copy.filename);
+      z.string().min(1).max(128).parse(copy.mediaType);
+      const { bytes, ...metadata } = copy;
+      const sourceHash = hash(bytes);
+      const requestHash = hash(
+        canonicalJson({
+          ...metadata,
+          sourceHash,
+          filter: hash(canonicalJson(this.secrets)),
+          encoding: "inline-v1",
+        }),
+      );
+      const referenceDirectory = join(
+        this.directory,
+        "references",
+        copy.artifactId,
+      );
+      const bindingPath = join(
+        referenceDirectory,
+        `${hash(copy.sourceKey)}.json`,
+      );
+      let existing: z.infer<typeof bindingSchema> | undefined;
+      try {
+        existing = bindingSchema.parse(
+          JSON.parse(await readFile(bindingPath, "utf8")),
+        );
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (existing) {
+        if (existing.requestHash !== requestHash)
+          throw new ProtocolError(
+            "precondition_failed",
+            "Inline source identity or capture policy changed",
+          );
+        await this.blobs.verify(existing.attachment);
+        return existing.attachment;
+      }
+      const redactor = new StreamingRedactor(this.secrets);
+      const text = copy.text
+        ? new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+        : "";
+      const filtered = copy.text
+        ? Buffer.from(redactor.push(text) + redactor.finish())
+        : bytes;
+      const descriptor = {
+        hash: hash(filtered),
+        byteSize: filtered.byteLength,
+      };
+      async function* chunks() {
+        for (let offset = 0; offset < filtered.length; offset += 65536)
+          yield filtered.subarray(offset, offset + 65536);
+      }
+      const staged = await this.blobs.stage(descriptor, chunks(), signal);
+      try {
+        signal?.throwIfAborted();
+        await this.blobs.install(staged);
+      } catch (error) {
+        await this.blobs.discard(staged);
+        throw error;
+      }
+      await mkdir(referenceDirectory, { recursive: true, mode: 0o700 });
+      await syncDirectory(join(this.directory, "references"));
+      let version = 1;
+      for (const entry of await readdir(referenceDirectory)) {
+        if (!/^[a-f0-9]{64}\.json$/.test(entry)) continue;
+        const previous = bindingSchema.parse(
+          JSON.parse(await readFile(join(referenceDirectory, entry), "utf8")),
+        );
+        version = Math.max(version, previous.attachment.version + 1);
+      }
+      const nameFilter = new StreamingRedactor(this.secrets);
+      const attachment = attachmentSchema.parse({
+        ...descriptor,
+        artifactId: copy.artifactId,
+        version,
+        filename: nameFilter.push(copy.filename) + nameFilter.finish(),
+        mediaType: copy.mediaType,
+        sourceHash,
+        capturedAt: new Date().toISOString(),
+        provenance: copy.historical ? "historical-version" : "live-capture",
+      });
+      await atomicJson(bindingPath, { requestHash, attachment });
+      return attachment;
+    });
+    this.queue = operation.catch(() => {});
+    try {
+      return await operation;
+    } finally {
+      this.queuedInlineBytes -= copy.bytes.byteLength;
+    }
   }
   private async captureLocked(
     input: ArtifactCapture,

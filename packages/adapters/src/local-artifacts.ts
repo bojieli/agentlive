@@ -4,7 +4,11 @@ import { extname, join, resolve } from "node:path";
 import { z } from "zod";
 import { attachmentSchema, ProtocolError } from "@agentlive/protocol";
 import { atomicJson, syncDirectory } from "@agentlive/storage";
-import { ArtifactSpool, uploadArtifact } from "@agentlive/publisher";
+import {
+  ArtifactSpool,
+  uploadArtifact,
+  type InlineArtifactCapture,
+} from "@agentlive/publisher";
 import type { CodexArtifactResolver } from "./codex.js";
 const outcome = z.union([
   z.strictObject({ attachment: attachmentSchema }),
@@ -92,5 +96,10 @@ export async function localArtifactResolver(options: {
       await uploadArtifact(spool, result.attachment, options);
     return result;
   };
-  return { resolveArtifact, close: () => spool.close() };
+  const resolveInline = async (input: InlineArtifactCapture) => {
+    const attachment = await spool.captureInline(input, options.signal);
+    await uploadArtifact(spool, attachment, options);
+    return attachment;
+  };
+  return { resolveArtifact, resolveInline, close: () => spool.close() };
 }

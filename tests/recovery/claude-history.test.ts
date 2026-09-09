@@ -175,3 +175,83 @@ it("imports a Claude recording privately, ends before sharing, and retries witho
     await rm(root, { recursive: true, force: true });
   }
 });
+it("imports inline Claude images as downloadable historical attachments and rejects invalid base64", async () => {
+  const { importClaudeRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const { startServer } = await import("../../packages/server/src/http.js");
+  const { initialState, apply } =
+    await import("../../packages/playback/src/index.js");
+  const root = await mkdtemp(join(tmpdir(), "agentlive-claude-inline-"));
+  const ownerCredential = "b".repeat(64);
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: ownerCredential,
+    port: 0,
+  });
+  try {
+    const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+    const sourcePath = join(root, "session.jsonl");
+    await writeFile(
+      sourcePath,
+      JSON.stringify({
+        type: "user",
+        sessionId: "inline_claude",
+        uuid: "message1",
+        timestamp: "2026-09-01T00:00:00.000Z",
+        message: {
+          content: [
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: bytes.toString("base64"),
+              },
+            },
+            {
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/png",
+                data: "invalid%%%",
+              },
+            },
+          ],
+        },
+      }) + "\n",
+    );
+    const options = {
+      sourcePath,
+      publisherRoot: join(root, "publisher"),
+      serverOrigin: server.url,
+      ownerCredential,
+      title: "Inline images",
+      visibility: "private" as const,
+      signal: AbortSignal.timeout(5000),
+    };
+    const result = await importClaudeRecording(options);
+    expect(result.report.availableAttachments).toBe(1);
+    expect(result.report.unavailableAttachments).toBe(1);
+    const session = await server.store.get(result.streamId);
+    let state = initialState();
+    for await (const event of session.history(0, session.boundary.sequence))
+      state = apply(state, event);
+    expect(state.references.size).toBe(1);
+    const attachment = [...state.artifacts.values()].flatMap((artifact) => [
+      ...artifact.versions.values(),
+    ])[0]!;
+    expect(attachment.provenance).toBe("historical-version");
+    const response = await fetch(
+      `${server.url}/api/v1/streams/${result.streamId}/attachments/${attachment.hash}`,
+      { headers: { authorization: `Bearer ${ownerCredential}` } },
+    );
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+    const before = session.boundary.sequence;
+    await importClaudeRecording(options);
+    expect(session.boundary.sequence).toBe(before);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

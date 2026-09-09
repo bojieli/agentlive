@@ -188,3 +188,35 @@ it("uploads binary and empty attachments to the real HTTP server before publicat
     await server.close();
   }
 });
+it("captures immutable inline bytes and filters inline text without writing raw source bytes", async () => {
+  const { spool } = await setup(["private-inline-secret"]);
+  const bytes = Buffer.from("private-inline-secret retained text");
+  const input = {
+    artifactId: "inline",
+    sourceKey: "source",
+    bytes,
+    filename: "note.txt",
+    mediaType: "text/plain",
+    text: true,
+    historical: true,
+  };
+  const promise = spool.captureInline(input);
+  bytes.fill(0);
+  const attachment = await promise;
+  expect(attachment.provenance).toBe("historical-version");
+  const file = await spool.openFile(attachment);
+  try {
+    expect(await file.readFile("utf8")).toBe("[REDACTED] retained text");
+  } finally {
+    await file.close();
+  }
+  expect(
+    await spool.captureInline({
+      ...input,
+      bytes: Buffer.from("private-inline-secret retained text"),
+    }),
+  ).toEqual(attachment);
+  await expect(spool.captureInline(input)).rejects.toThrow(
+    /identity or capture policy changed/,
+  );
+});

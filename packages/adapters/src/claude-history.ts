@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { canonicalJson, type EventContent } from "@agentlive/protocol";
-import { PublisherJournal, StreamingRedactor } from "@agentlive/publisher";
+import {
+  PublisherJournal,
+  StreamingRedactor,
+  type InlineArtifactCapture,
+  type CapturedAttachment,
+} from "@agentlive/publisher";
 import { readJsonlSource, type SourceCursor } from "./jsonl.js";
 import { chunkContent } from "./chunks.js";
 const hash = (value: string) =>
@@ -59,6 +64,7 @@ export async function captureClaudeHistory(
   sink: ClaudeCaptureSink,
   secrets: readonly string[] = [],
   signal?: AbortSignal,
+  resolveInline?: (input: InlineArtifactCapture) => Promise<CapturedAttachment>,
 ) {
   if (
     sink.identity.nativeAgent !== "claude" ||
@@ -70,6 +76,7 @@ export async function captureClaudeHistory(
     messages: 0,
     tools: 0,
     unavailableAttachments: 0,
+    availableAttachments: 0,
     omittedReasoning: 0,
     unsupported: {} as Record<string, number>,
   };
@@ -282,27 +289,87 @@ export async function captureClaudeHistory(
         )
           report.omittedReasoning++;
         else if (block.type === "image" || block.type === "document") {
-          await emit(
-            blockKey,
-            [
-              {
-                kind: "attachment.pending",
-                payload: {
+          const nativeSource =
+            block.source && typeof block.source === "object"
+              ? object.parse(block.source)
+              : {};
+          let attachment: CapturedAttachment | undefined;
+          const mediaType =
+            typeof nativeSource.media_type === "string"
+              ? nativeSource.media_type
+              : "";
+          const extensions: Record<string, string> = {
+            "image/png": "png",
+            "image/jpeg": "jpg",
+            "image/gif": "gif",
+            "image/webp": "webp",
+            "application/pdf": "pdf",
+            "text/plain": "txt",
+            "image/svg+xml": "svg",
+          };
+          if (
+            resolveInline &&
+            nativeSource.type === "base64" &&
+            typeof nativeSource.data === "string" &&
+            extensions[mediaType]
+          ) {
+            const encoded = nativeSource.data;
+            if (
+              encoded.length <= 32 * 1024 * 1024 &&
+              encoded.length % 4 === 0 &&
+              /^[A-Za-z0-9+/]*={0,2}$/.test(encoded)
+            ) {
+              const bytes = Buffer.from(encoded, "base64");
+              if (bytes.toString("base64") === encoded)
+                attachment = await resolveInline({
                   artifactId: messageId,
-                  filename: String(block.type),
+                  sourceKey: `claude/${blockKey}`,
+                  bytes,
+                  filename: `${String(block.type)}.${extensions[mediaType]}`,
+                  mediaType,
+                  text:
+                    mediaType === "text/plain" || mediaType === "image/svg+xml",
+                  historical: true,
+                });
+            }
+          }
+          const content: EventContent[] = [
+            {
+              kind: "attachment.pending",
+              payload: { artifactId: messageId, filename: String(block.type) },
+            },
+          ];
+          if (attachment) {
+            content.push(
+              {
+                kind: "message.started",
+                payload: { messageId, role: row.type },
+              },
+              { kind: "attachment.available", payload: { attachment } },
+              {
+                kind: "reference.resolved",
+                payload: {
+                  messageId,
+                  sourceReference: `claude:attachment/${messageId}`,
+                  artifactId: messageId,
+                  version: attachment.version,
                 },
               },
-              {
-                kind: "attachment.unavailable",
-                payload: {
-                  artifactId: messageId,
-                  reason: "Claude native attachment requires source conversion",
-                },
+              { kind: "message.completed", payload: { messageId } },
+            );
+            report.availableAttachments++;
+          } else {
+            content.push({
+              kind: "attachment.unavailable",
+              payload: {
+                artifactId: messageId,
+                reason:
+                  "Claude native attachment encoding or media type requires source conversion",
               },
-            ],
-            timestamp,
-          );
-          report.unavailableAttachments++;
+            });
+            report.unavailableAttachments++;
+          }
+          await emit(blockKey, content, timestamp);
         } else
           await unsupported(
             blockKey,
