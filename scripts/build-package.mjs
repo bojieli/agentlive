@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /** Build one installable package from workspace code and pinned external dependencies. */
 import { build } from "esbuild";
+import { validateRuntimeLock } from "./runtime-lock.mjs";
 import {
   mkdir,
   readFile,
@@ -82,21 +83,35 @@ await writeFile(
   ) + "\n",
 );
 await copyFile(join(root, "README.md"), join(staging, "README.md"));
-await run(
-  "npm",
-  [
-    "install",
-    "--package-lock-only",
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-  ],
-  { cwd: staging },
+const lockPath = join(root, "packaging", "runtime-lock.json");
+const updateLock = process.argv.includes("--update-lock");
+if (updateLock) {
+  await run(
+    "npm",
+    [
+      "install",
+      "--package-lock-only",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+    ],
+    { cwd: staging },
+  );
+  await rename(
+    join(staging, "package-lock.json"),
+    join(staging, "npm-shrinkwrap.json"),
+  );
+}
+const lockBytes = await readFile(
+  updateLock ? join(staging, "npm-shrinkwrap.json") : lockPath,
 );
-await rename(
-  join(staging, "package-lock.json"),
-  join(staging, "npm-shrinkwrap.json"),
+const locked = JSON.parse(lockBytes.toString("utf8"));
+const manifest = JSON.parse(
+  await readFile(join(staging, "package.json"), "utf8"),
 );
+validateRuntimeLock(locked, manifest);
+if (updateLock) await writeFile(lockPath, lockBytes);
+else await writeFile(join(staging, "npm-shrinkwrap.json"), lockBytes);
 const packed = await run(
   "npm",
   ["pack", "--json", "--pack-destination", release],

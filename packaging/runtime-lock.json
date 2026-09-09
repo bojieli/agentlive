@@ -1,0 +1,146 @@
+{
+  "name": "@agentlive/cli",
+  "version": "0.1.0",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@agentlive/cli",
+      "version": "0.1.0",
+      "license": "UNLICENSED",
+      "dependencies": {
+        "@hono/node-server": "2.1.1",
+        "fs-native-extensions": "1.5.1",
+        "hono": "4.13.7",
+        "ws": "8.21.3",
+        "zod": "4.5.4"
+      },
+      "bin": {
+        "agentlive": "cli.mjs"
+      },
+      "engines": {
+        "node": ">=26.8.1 <27"
+      }
+    },
+    "node_modules/@hono/node-server": {
+      "version": "2.1.1",
+      "resolved": "https://registry.npmjs.org/@hono/node-server/-/node-server-2.1.1.tgz",
+      "integrity": "sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=20"
+      },
+      "peerDependencies": {
+        "hono": "^4"
+      }
+    },
+    "node_modules/bare-addon-resolve": {
+      "version": "1.10.1",
+      "resolved": "https://registry.npmjs.org/bare-addon-resolve/-/bare-addon-resolve-1.10.1.tgz",
+      "integrity": "sha512-F/SD2du8keuYSb4xipnGz5j2E6yhNdHA8ZVxtHae6h2uOrpBIjjbhXvjzKZbr5XUOzqBzh/i8GVFycj2DlFQIA==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "bare-module-resolve": "^1.10.0",
+        "bare-semver": "^1.0.0"
+      },
+      "peerDependencies": {
+        "bare-url": "*"
+      },
+      "peerDependenciesMeta": {
+        "bare-url": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/bare-module-resolve": {
+      "version": "1.12.5",
+      "resolved": "https://registry.npmjs.org/bare-module-resolve/-/bare-module-resolve-1.12.5.tgz",
+      "integrity": "sha512-VOncxVvVk8SQVw9vhcBnoTJD/74aR5DgdRPCm0gQ7uB5MsWpBJnoCeJrwEHKiz09O83ndf3NTjsz3LEuFxAq5A==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "bare-semver": "^1.0.0"
+      },
+      "peerDependencies": {
+        "bare-url": "*"
+      },
+      "peerDependenciesMeta": {
+        "bare-url": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/bare-semver": {
+      "version": "1.1.0",
+      "resolved": "https://registry.npmjs.org/bare-semver/-/bare-semver-1.1.0.tgz",
+      "integrity": "sha512-1Hw5qJ7hXdVt3uPUqjeFTuxyvBUJauvz5A1I2jk8gzjZMHp04n//6nV9MDbG9CMw78JHY2lGV0w6s//LrASm2w==",
+      "license": "Apache-2.0"
+    },
+    "node_modules/fs-native-extensions": {
+      "version": "1.5.1",
+      "resolved": "https://registry.npmjs.org/fs-native-extensions/-/fs-native-extensions-1.5.1.tgz",
+      "integrity": "sha512-abjiHKkYdcH5M9ikBEJb0MKb/fEpPtZx/yfLHzTptvUAoiFayX0tIe0BTLBU4SAoRyjZLzA0dP1Rn2p0+QRyVg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "require-addon": "^1.1.0",
+        "which-runtime": "^1.2.0"
+      }
+    },
+    "node_modules/hono": {
+      "version": "4.13.7",
+      "resolved": "https://registry.npmjs.org/hono/-/hono-4.13.7.tgz",
+      "integrity": "sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=16.9.0"
+      }
+    },
+    "node_modules/require-addon": {
+      "version": "1.2.0",
+      "resolved": "https://registry.npmjs.org/require-addon/-/require-addon-1.2.0.tgz",
+      "integrity": "sha512-VNPDZlYgIYQwWp9jMTzljx+k0ZtatKlcvOhktZ/anNPI3dQ9NXk7cq2U4iJ1wd9IrytRnYhyEocFWbkdPb+MYA==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "bare-addon-resolve": "^1.3.0"
+      },
+      "engines": {
+        "bare": ">=1.10.0"
+      }
+    },
+    "node_modules/which-runtime": {
+      "version": "1.4.0",
+      "resolved": "https://registry.npmjs.org/which-runtime/-/which-runtime-1.4.0.tgz",
+      "integrity": "sha512-0ugbP4CJW4e2D20jvEcC4973dCgIaHI4Rw1PT+26U9zEve7FyYdWAIwUnoeOYvoCfn+wXHoHTKb1KhkYlb60Pw==",
+      "license": "Apache-2.0"
+    },
+    "node_modules/ws": {
+      "version": "8.21.3",
+      "resolved": "https://registry.npmjs.org/ws/-/ws-8.21.3.tgz",
+      "integrity": "sha512-201TZ/kPWxoPr/OKWjquZR1SWKXcvxdH+e1xrx89b3YbmzLMFCLfnaG1HFIgWzJOEWZ7MvpK++odZufgYR50Rw==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=10.0.0"
+      },
+      "peerDependencies": {
+        "bufferutil": "^4.0.1",
+        "utf-8-validate": ">=5.0.2"
+      },
+      "peerDependenciesMeta": {
+        "bufferutil": {
+          "optional": true
+        },
+        "utf-8-validate": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/zod": {
+      "version": "4.5.4",
+      "resolved": "https://registry.npmjs.org/zod/-/zod-4.5.4.tgz",
+      "integrity": "sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/colinhacks"
+      }
+    }
+  }
+}

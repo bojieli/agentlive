@@ -240,3 +240,6 @@ agentlive --help
 ```
 
 The build bundles AgentLive workspace code into one CLI and includes a shrinkwrap for its external runtime dependencies. Verification installs the tarball in a fresh temporary directory with install scripts disabled, starts its server, imports a recording, lists and replays it, retries the import, and checks shutdown. `node scripts/probe-claude-publish.mjs --package` additionally creates and resumes a real Claude session, then verifies its recording through the installed package. These are local private build artifacts; no npm release has been published. Browser assets and public-release packaging are still in development.
+
+
+Package builds use the reviewed dependency tree in `packaging/runtime-lock.json` and do not resolve new runtime versions. After intentionally changing runtime dependencies, run `npx --yes pnpm@12.3.4 package:lock` and review the lock diff. `package:verify` rebuilds with an unreachable registry and requires byte-identical tarballs before testing installation. Installing external dependencies still requires registry access or an existing npm cache.

@@ -25,6 +25,14 @@ let server;
 let exited;
 let summary;
 try {
+  const originalPackage = await readFile(tarball);
+  await run(process.execPath, [join(workspace, "scripts/build-package.mjs")], {
+    cwd: workspace,
+    env: { ...env, npm_config_registry: "http://127.0.0.1:1" },
+    timeout: 30000,
+  });
+  if (!(await readFile(tarball)).equals(originalPackage))
+    throw new Error("Repeated package build changed artifact bytes");
   await writeFile(join(root, "package.json"), '{"private":true}\n');
   await run(
     "npm",
@@ -171,6 +179,7 @@ try {
   summary = {
     success: true,
     isolatedInstall: true,
+    reproducibleRebuild: true,
     installScriptsDisabled: true,
     server: true,
     imported: true,
