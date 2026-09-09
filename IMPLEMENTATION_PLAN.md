@@ -1298,3 +1298,11 @@ ActivityFeed accepts the paged view and mounts asynchronous cards with cancellat
 ActivityIndex now derives seen/visible row trees from canonical events and matching paged reducer state. Preserve first-mention ordering, kind ties, capture-note placement and original position after hide/show. Include attachment descriptors in the shared mention helper used by BrowserSession.
 
 Expose bounded row ranges and direct position lookup using ContentIndex subtree counts. Verify visited paired references, root sequence and binding; preserve old roots on cancellation. Checkpoint/reopen both trees together and compare native ordering and positions with reference activity. Production atomic pairing with browser reducer checkpoints, feed row/navigation queries, paged search and long-session acceptance remain required.
+
+### Paired browser state and activity publication
+
+BrowserPagedState publishes reducer and activity-index references together in one IndexedDB compare-and-set transaction. Both roots must match the stream/revision and applied sequence; gap counts must agree. Reopen discovers the pair, and frozen activity views provide bounded row ranges and direct positions from the saved index. Failed publication leaves the prior pair authoritative.
+
+Legacy state-only browser checkpoints remain readable. Continuing reduction or indexed row access requires rebuilding the index from the caller's authoritative contiguous history prefix. Rebuild verifies the final reducer content reference matches the saved checkpoint before a same-sequence atomic upgrade. This checks resulting state equivalence, not a historical event-chain hash. Incomplete or conflicting prefixes leave the saved head intact. Each iterator read has a ten-second deadline; cancellation observes late iterator failures without waiting for uncooperative cleanup. Content written before cancellation can remain unreferenced until future collection.
+
+Production BrowserSession adoption, snapshot-to-local-content bridging, viewport integration, and measured long-session bounds remain outstanding.

@@ -3,6 +3,8 @@ import { createRequire } from "node:module";
 import { BrowserPagedState } from "../../apps/web/src/paged-state.js";
 import { BrowserContentStore } from "../../apps/web/src/content-store.js";
 import {
+  ActivityIndex,
+  initialActivityIndex,
   PagedReducer,
   initialPagedState,
 } from "../../packages/playback/src/index.js";
@@ -227,5 +229,149 @@ it("rolls back checkpoint publication when cancelled during the root transaction
     expect((await session.get("messages", "m"))!.text.units).toBe(0);
   } finally {
     await session.close();
+  }
+});
+
+async function legacy(factory: IDBFactory) {
+  const store = await BrowserContentStore.open(factory, binding, signal());
+  try {
+    const reducer = new PagedReducer(store);
+    const root = await reducer.apply(initialPagedState(), started());
+    await store.publishCheckpoint(null, {
+      format: "agentlive.paged-state",
+      serverSeq: 1,
+      timelineMs: 1,
+      ref: await reducer.checkpoint(root, binding),
+    });
+  } finally {
+    await store.close();
+  }
+}
+async function* history(...events: StoredEvent[]) {
+  yield* events;
+}
+
+it("upgrades a legacy checkpoint only after a complete matching history and reopens paired rows", async () => {
+  const factory = new IDBFactory();
+  await legacy(factory);
+  let session = await BrowserPagedState.open(factory, binding, signal());
+  try {
+    const old = session.checkpoint;
+    expect(session.needsActivityRebuild).toBe(true);
+    expect((await session.get("messages", "m"))!.id).toBe("m");
+    await expect(
+      session.rebuildActivity(history(), signal()),
+    ).rejects.toMatchObject({ code: "sequence_gap" });
+    await expect(
+      session.rebuildActivity(history(started("other")), signal()),
+    ).rejects.toMatchObject({ code: "event_conflict" });
+    expect(session.checkpoint).toEqual(old);
+    await expect(
+      session.apply(
+        [event(2, { kind: "message.completed", payload: { messageId: "m" } })],
+        signal(),
+      ),
+    ).rejects.toMatchObject({ code: "precondition_failed" });
+    await session.rebuildActivity(history(started()), signal());
+    expect(session.checkpoint!.ref).toEqual(old!.ref);
+    expect(session.checkpoint!.activity).toBeDefined();
+    await session.close();
+    session = await BrowserPagedState.open(factory, binding, signal());
+    expect(session.needsActivityRebuild).toBe(false);
+    expect(session.view().rowCount).toBe(1);
+    expect(
+      (await session.view().rows(0, 32, signal())).map((row) => row.key),
+    ).toEqual(["messages/m"]);
+    expect(await session.view().position("messages/m", signal())).toBe(0);
+    await session.apply(
+      [event(2, { kind: "message.completed", payload: { messageId: "m" } })],
+      signal(),
+    );
+    expect(session.checkpoint!.serverSeq).toBe(2);
+  } finally {
+    await session.close();
+  }
+});
+
+it("cancels a stalled legacy history read without waiting for iterator cleanup", async () => {
+  const factory = new IDBFactory();
+  await legacy(factory);
+  const session = await BrowserPagedState.open(factory, binding, signal());
+  const stop = new AbortController();
+  let reading!: () => void;
+  const entered = new Promise<void>((resolve) => {
+    reading = resolve;
+  });
+  const returned = vi.fn(
+    () => new Promise<IteratorResult<StoredEvent>>(() => {}),
+  );
+  const source = {
+    [Symbol.asyncIterator]() {
+      return {
+        next() {
+          reading();
+          return new Promise<IteratorResult<StoredEvent>>(() => {});
+        },
+        return: returned,
+      };
+    },
+  };
+  try {
+    const task = session.rebuildActivity(source, stop.signal);
+    await entered;
+    stop.abort(new Error("stop rebuild"));
+    await expect(task).rejects.toThrow("stop rebuild");
+    expect(returned).toHaveBeenCalledOnce();
+    expect(session.needsActivityRebuild).toBe(true);
+    await session.rebuildActivity(history(started()), signal());
+    expect(session.needsActivityRebuild).toBe(false);
+  } finally {
+    await session.close();
+  }
+});
+
+it("rejects activity roots from another boundary or revision before atomic publication", async () => {
+  const factory = new IDBFactory();
+  const store = await BrowserContentStore.open(factory, binding, signal());
+  try {
+    const reducer = new PagedReducer(store),
+      index = new ActivityIndex(store);
+    const state = await reducer.apply(initialPagedState(), started());
+    const rows = await index.apply(
+      initialActivityIndex(),
+      started(),
+      state,
+      reducer,
+    );
+    const head = {
+      format: "agentlive.paged-state" as const,
+      serverSeq: 1,
+      timelineMs: 1,
+      ref: await reducer.checkpoint(state, binding),
+    };
+    const wrongBoundary = await index.checkpoint(
+      initialActivityIndex(),
+      binding,
+    );
+    await expect(
+      store.publishCheckpoint(null, { ...head, activity: wrongBoundary }),
+    ).rejects.toMatchObject({ code: "corrupt_storage" });
+    const wrongRevision = await index.checkpoint(rows, {
+      ...binding,
+      revision: "other",
+    });
+    await expect(
+      store.publishCheckpoint(null, { ...head, activity: wrongRevision }),
+    ).rejects.toMatchObject({ code: "revision_changed" });
+    expect(await store.loadCheckpoint()).toBeNull();
+    const paired = { ...head, activity: await index.checkpoint(rows, binding) };
+    await store.publishCheckpoint(null, paired);
+    expect(await store.publishCheckpoint(null, paired)).toEqual(paired);
+    await expect(store.publishCheckpoint(paired, head)).rejects.toMatchObject({
+      code: "event_conflict",
+    });
+    expect(await store.loadCheckpoint()).toEqual(paired);
+  } finally {
+    await store.close();
   }
 });

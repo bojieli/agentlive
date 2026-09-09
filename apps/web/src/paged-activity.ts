@@ -1,3 +1,5 @@
+import { ProtocolError } from "@agentlive/protocol";
+import { objectAnchor } from "./workflow-card.js";
 import {
   initialState,
   type RecordingState,
@@ -5,6 +7,8 @@ import {
   type PagedRecordingState,
   type ContentReference,
   type PagedItem,
+  type ActivityIndex,
+  type ActivityIndexRoot,
 } from "@agentlive/playback";
 import type { ActivityRow } from "./activity.js";
 import type { TextSource } from "./text-source.js";
@@ -21,11 +25,52 @@ export class PagedActivityView {
     private readonly reducer: PagedReducer,
     root: PagedRecordingState,
     private readonly source: (ref: ContentReference) => TextSource,
+    private readonly activity?: {
+      index: ActivityIndex;
+      root: ActivityIndexRoot;
+    },
   ) {
     this.root = structuredClone(root);
+    if (activity) {
+      this.activity = {
+        index: activity.index,
+        root: structuredClone(activity.root),
+      };
+      if (activity.root.appliedSeq !== root.appliedSeq)
+        throw new ProtocolError(
+          "corrupt_storage",
+          "Activity view boundaries differ",
+        );
+    }
   }
   get sequence() {
     return this.root.appliedSeq;
+  }
+  private indexed() {
+    if (!this.activity)
+      throw new ProtocolError(
+        "precondition_failed",
+        "Activity index requires history rebuild",
+      );
+    return this.activity;
+  }
+  get rowCount() {
+    return this.indexed().root.visible?.count ?? 0;
+  }
+  async rows(
+    offset: number,
+    limit: number,
+    signal: AbortSignal,
+  ): Promise<ActivityRow[]> {
+    const { index, root } = this.indexed();
+    return (await index.entries(root, offset, limit, signal)).map((row) => ({
+      ...row,
+      anchor: objectAnchor(row.kind, row.id),
+    }));
+  }
+  position(key: string, signal: AbortSignal) {
+    const { index, root } = this.indexed();
+    return index.position(root, key, signal);
   }
   async load(
     row: ActivityRow,

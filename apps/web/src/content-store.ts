@@ -1,4 +1,4 @@
-import { PagedReducer } from "@agentlive/playback";
+import { PagedReducer, ActivityIndex } from "@agentlive/playback";
 import {
   TextContent,
   canonicalJson,
@@ -7,9 +7,18 @@ import {
   ProtocolError,
   type TextReference,
   snapshotDescriptorSchema,
+  snapshotContentReferenceSchema,
   type SnapshotDescriptor,
 } from "@agentlive/protocol";
 import type { CacheBinding } from "./history-cache.js";
+export type BrowserCheckpoint = SnapshotDescriptor & {
+  activity?: TextReference;
+};
+const browserCheckpointSchema = snapshotDescriptorSchema.extend({
+  activity: snapshotContentReferenceSchema
+    .extend({ units: snapshotContentReferenceSchema.shape.units.max(32768) })
+    .optional(),
+});
 const DATABASE = "agentlive-content-v1",
   MAX_TOTAL = 512 * 1024 * 1024;
 const encoder = new TextEncoder();
@@ -271,13 +280,14 @@ export class BrowserContentStore {
       this.codec.read(ref, offset, length, active),
     );
   }
-  private checkpoint(value: unknown): SnapshotDescriptor {
-    const parsed = snapshotDescriptorSchema.safeParse(value);
+  private checkpoint(value: unknown): BrowserCheckpoint {
+    const parsed = browserCheckpointSchema.safeParse(value);
     if (!parsed.success || parsed.data.format !== "agentlive.paged-state")
       bad();
-    return parsed.data;
+    const { activity, ...state } = parsed.data;
+    return activity ? { ...state, activity } : state;
   }
-  loadCheckpoint(signal?: AbortSignal): Promise<SnapshotDescriptor | null> {
+  loadCheckpoint(signal?: AbortSignal): Promise<BrowserCheckpoint | null> {
     return this.run(signal, (active) =>
       this.transaction("readonly", active, (tx, read, result) => {
         read(tx.objectStore("meta").get(`root:${this.scope}`), (value) =>
@@ -288,10 +298,10 @@ export class BrowserContentStore {
   }
   /** Atomically choose a completed reducer root. A stale writer must reopen before retrying. */
   publishCheckpoint(
-    expected: SnapshotDescriptor | null,
-    next: SnapshotDescriptor,
+    expected: BrowserCheckpoint | null,
+    next: BrowserCheckpoint,
     signal?: AbortSignal,
-  ): Promise<SnapshotDescriptor> {
+  ): Promise<BrowserCheckpoint> {
     expected = expected === null ? null : this.checkpoint(expected);
     next = this.checkpoint(next);
     return this.run(signal, async (active) => {
@@ -312,6 +322,21 @@ export class BrowserContentStore {
         state.timelineMs !== next.timelineMs
       )
         bad();
+      if (next.activity) {
+        const index = new ActivityIndex({
+          read: (ref, offset, length, signal) =>
+            this.codec.read(ref, offset, length, signal),
+          put: async () => {
+            throw new Error("Checkpoint validation is read-only");
+          },
+        });
+        const root = await index.open(next.activity, this.binding, active);
+        if (
+          root.appliedSeq !== next.serverSeq ||
+          root.gaps !== (state.maps.gaps?.size ?? 0)
+        )
+          bad();
+      }
       return this.transaction("readwrite", active, (tx, read, result) => {
         const meta = tx.objectStore("meta"),
           key = `root:${this.scope}`;
@@ -326,8 +351,15 @@ export class BrowserContentStore {
               "event_conflict",
               "Browser checkpoint changed in another writer",
             );
+          const { activity: nextActivity, ...nextState } = next;
+          const upgrade =
+            current &&
+            !current.activity &&
+            nextActivity &&
+            canonicalJson(current) === canonicalJson(nextState);
           if (
             current &&
+            !upgrade &&
             (next.serverSeq <= current.serverSeq ||
               next.timelineMs < current.timelineMs)
           )

@@ -193,6 +193,16 @@ export async function verifyPagedReducer(events, expected, signal) {
       throw new Error(
         "Persistent activity order differs from reference viewer",
       );
+    const browserKeys = [];
+    for (let offset = 0; offset < view.rowCount; offset += 32)
+      browserKeys.push(
+        ...(await view.rows(offset, 32, signal)).map((row) => row.key),
+      );
+    if (!isDeepStrictEqual(browserKeys, orderedKeys))
+      throw new Error("Paired browser activity order differs from disk index");
+    for (const [position, key] of browserKeys.entries())
+      if ((await view.position(key, signal)) !== position)
+        throw new Error("Paired browser activity position differs");
     for (const [position, key] of orderedKeys.entries())
       if (
         (await activityIndex.position(activityRoot, key, signal)) !== position
