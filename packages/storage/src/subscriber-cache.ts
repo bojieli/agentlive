@@ -4,6 +4,8 @@ import { join } from "node:path";
 import {
   canonicalJson,
   idSchema,
+  hashSchema,
+  cursorSchema,
   storedEventSchema,
   type StoredEvent,
 } from "@agentlive/protocol";
@@ -14,6 +16,7 @@ import { JsonlLog } from "./log.js";
 export class SubscriberCache {
   private tail: Promise<unknown> = Promise.resolve();
   private closed = false;
+  private presentationTail: Promise<unknown> = Promise.resolve();
   private readonly readers = new Set<() => void>();
   private constructor(
     private readonly log: JsonlLog<StoredEvent>,
@@ -24,6 +27,7 @@ export class SubscriberCache {
       revision: string;
     }>,
     private readonly maxBytes: number,
+    private readonly directory: string,
   ) {}
   static async open(
     root: string,
@@ -93,6 +97,7 @@ export class SubscriberCache {
         lock,
         Object.freeze({ serverOrigin, streamId, revision }),
         maxBytes,
+        directory,
       );
     } catch (error) {
       await log?.close();
@@ -105,6 +110,62 @@ export class SubscriberCache {
   }
   async *events(after = 0, through = this.cursor.serverSeq) {
     for await (const entry of this.log.read(after, through)) yield entry.value;
+  }
+  private async presentationHash(serverSeq: number): Promise<string> {
+    cursorSchema.parse(serverSeq);
+    if (serverSeq > this.cursor.serverSeq)
+      throw new Error("Presentation checkpoint exceeds durable receipt");
+    if (!serverSeq) return "0".repeat(64);
+    for await (const entry of this.log.read(serverSeq - 1, serverSeq))
+      return entry.hash;
+    throw new Error("Presentation checkpoint prefix is missing");
+  }
+  /** Presentation is optional metadata; receipt recovery never depends on it. */
+  async loadPresentation(): Promise<number> {
+    if (this.closed) throw new Error("Subscriber cache is closed");
+    await this.presentationTail;
+    const path = join(this.directory, "presentation.json");
+    let saved;
+    try {
+      if ((await stat(path)).size > 4096)
+        throw new Error("Presentation checkpoint is oversized");
+      saved = JSON.parse(await readFile(path, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+      throw error;
+    }
+    if (
+      !saved ||
+      saved.version !== 1 ||
+      saved.serverOrigin !== this.binding.serverOrigin ||
+      saved.streamId !== this.binding.streamId ||
+      saved.revision !== this.binding.revision ||
+      Object.keys(saved).sort().join(",") !==
+        "hash,revision,serverOrigin,serverSeq,streamId,version"
+    )
+      throw new Error("Presentation checkpoint identity is invalid");
+    const serverSeq = cursorSchema.parse(saved.serverSeq);
+    if (
+      hashSchema.parse(saved.hash) !== (await this.presentationHash(serverSeq))
+    )
+      throw new Error("Presentation checkpoint prefix hash changed");
+    return serverSeq;
+  }
+  savePresentation(serverSeq: number): Promise<void> {
+    if (this.closed)
+      return Promise.reject(new Error("Subscriber cache is closed"));
+    cursorSchema.parse(serverSeq);
+    const work = this.presentationTail.then(async () => {
+      const hash = await this.presentationHash(serverSeq);
+      await atomicJson(join(this.directory, "presentation.json"), {
+        version: 1,
+        ...this.binding,
+        serverSeq,
+        hash,
+      });
+    });
+    this.presentationTail = work.catch(() => {});
+    return work;
   }
   /** Wait for a durable prefix beyond the presentation cursor, without polling. */
   async waitForEvents(after: number, signal: AbortSignal): Promise<void> {
@@ -173,7 +234,7 @@ export class SubscriberCache {
   async close() {
     this.closed = true;
     for (const wake of [...this.readers]) wake();
-    await this.tail;
+    await Promise.all([this.tail, this.presentationTail]);
     try {
       await this.log.close();
     } finally {

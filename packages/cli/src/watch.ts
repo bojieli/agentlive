@@ -8,6 +8,7 @@ import {
   initialState,
   apply,
   renderTerminalEvent,
+  renderTerminalSnapshot,
   PlaybackPacer,
 } from "@agentlive/playback";
 import { originOf } from "@agentlive/client/transport";
@@ -34,9 +35,14 @@ export async function watchRecording(options: {
   onReceipt?: (serverSeq: number) => void;
   onPresented?: (serverSeq: number) => void;
   interactive?: boolean;
+  resumeView?: boolean;
+  restartView?: boolean;
   /** Optional presentation gate; its pause state never controls network receipt. */
   presentation?: PlaybackPacer;
 }) {
+  if (options.resumeView && options.restartView)
+    throw new Error("Choose resume-view or restart-view, not both");
+  const rememberPosition = options.resumeView || options.restartView;
   if (options.interactive && !process.stdin.isTTY)
     throw new Error("Interactive watch requires a terminal");
   const presentation =
@@ -64,18 +70,39 @@ export async function watchRecording(options: {
   let bytes = 0;
   let failure: unknown;
   let failed = false;
+  const count = (event: unknown) => {
+    bytes += Buffer.byteLength(JSON.stringify(event));
+    if (bytes > 64 * 1024 * 1024)
+      throw new Error(
+        "Terminal reference watch exceeds its 64 MiB event budget; paged state is not yet available",
+      );
+  };
   const present = async () => {
+    if (options.restartView) await cache.savePresentation(0);
+    const saved = rememberPosition ? await cache.loadPresentation() : 0;
+    if (saved) {
+      for await (const event of cache.events(0, saved)) {
+        signal.throwIfAborted();
+        count(event);
+        state = apply(state, event);
+      }
+      for (const text of renderTerminalSnapshot(
+        state,
+        origin,
+        options.streamId,
+      )) {
+        await presentation?.waitUntil(0, signal);
+        signal.throwIfAborted();
+        await interruptible(write(text, signal), signal);
+      }
+    }
     for (;;) {
       signal.throwIfAborted();
       const through = cache.cursor.serverSeq;
       for await (const event of cache.events(state.appliedSeq, through)) {
         signal.throwIfAborted();
         await presentation?.waitUntil(0, signal);
-        bytes += Buffer.byteLength(JSON.stringify(event));
-        if (bytes > 64 * 1024 * 1024)
-          throw new Error(
-            "Terminal reference watch exceeds its 64 MiB event budget; paged state is not yet available",
-          );
+        count(event);
         const previous = state;
         state = apply(state, event);
         const text = renderTerminalEvent(
@@ -85,9 +112,13 @@ export async function watchRecording(options: {
           options.streamId,
           previous,
         );
-        if (text) await interruptible(write(text, signal), signal);
+        if (text) {
+          await interruptible(write(text, signal), signal);
+          if (rememberPosition) await cache.savePresentation(state.appliedSeq);
+        }
         options.onPresented?.(state.appliedSeq);
       }
+      if (rememberPosition) await cache.savePresentation(state.appliedSeq);
       await cache.waitForEvents(state.appliedSeq, signal);
     }
   };

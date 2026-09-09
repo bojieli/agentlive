@@ -539,3 +539,160 @@ it("keeps receiving behind a stalled output sink and cancels without waiting for
     await cache.close();
   }
 });
+
+it("persists presentation separately from receipt and rejects a changed prefix binding", async () => {
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { readdir, readFile, writeFile } = await import("node:fs/promises");
+  const { root, server, session, publish } = await setup();
+  await publish(4);
+  const cacheRoot = join(root, "presentation-checkpoint");
+  const settings = {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    initialize: async () => ({ revision: session.info.revision }),
+  };
+  let cache = await SubscriberCache.open(cacheRoot, settings);
+  const events = [];
+  for await (const event of session.history(0, session.boundary.sequence))
+    events.push(event);
+  await cache.commit(events, { ...cache.cursor, serverSeq: events.length });
+  expect(await cache.loadPresentation()).toBe(0);
+  await cache.savePresentation(2);
+  expect(cache.cursor.serverSeq).toBe(events.length);
+  await expect(cache.savePresentation(events.length + 1)).rejects.toThrow(
+    "exceeds durable receipt",
+  );
+  await cache.close();
+  cache = await SubscriberCache.open(cacheRoot, {
+    ...settings,
+    initialize: async () => {
+      throw new Error("Must reopen offline");
+    },
+  });
+  try {
+    expect(await cache.loadPresentation()).toBe(2);
+    const directory = (await readdir(cacheRoot))[0]!;
+    const path = join(cacheRoot, directory, "presentation.json");
+    const checkpoint = JSON.parse(await readFile(path, "utf8"));
+    checkpoint.hash = "a".repeat(64);
+    await writeFile(path, JSON.stringify(checkpoint));
+    await expect(cache.loadPresentation()).rejects.toThrow(
+      "prefix hash changed",
+    );
+    expect(cache.cursor.serverSeq).toBe(events.length);
+    await cache.savePresentation(0);
+    expect(await cache.loadPresentation()).toBe(0);
+  } finally {
+    await cache.close();
+  }
+});
+it("reconstructs a saved presentation prefix and presents only the later suffix as new events", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { readdir, readFile } = await import("node:fs/promises");
+  const { root, server, session, publish } = await setup();
+  await publish(3);
+  const cacheRoot = join(root, "resumed-view");
+  const base = {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    cacheRoot,
+    resumeView: true,
+  };
+  const abort = new AbortController();
+  const done = watchRecording({
+    ...base,
+    signal: abort.signal,
+    write: async () => {},
+  });
+  runs.push({ abort, done });
+  const baseline = session.boundary.sequence;
+  await expect
+    .poll(async () => {
+      try {
+        const directory = (await readdir(cacheRoot))[0]!;
+        return JSON.parse(
+          await readFile(
+            join(cacheRoot, directory, "presentation.json"),
+            "utf8",
+          ),
+        ).serverSeq;
+      } catch {
+        return 0;
+      }
+    })
+    .toBe(baseline);
+  abort.abort();
+  await done;
+  await publish(2);
+  const resumedAbort = new AbortController();
+  const presented: number[] = [];
+  let output = "";
+  const resumed = watchRecording({
+    ...base,
+    signal: resumedAbort.signal,
+    write: async (text) => {
+      output += text;
+    },
+    onPresented: (sequence) => {
+      presented.push(sequence);
+      if (sequence === session.boundary.sequence) resumedAbort.abort();
+    },
+  });
+  runs.push({ abort: resumedAbort, done: resumed });
+  await resumed;
+  expect(output).toContain("Playback state");
+  expect(output.match(/assistant: incomplete/g)).toHaveLength(3);
+  expect(presented).toEqual([baseline + 1, baseline + 2]);
+  const { writeFile } = await import("node:fs/promises");
+  const directory = (await readdir(cacheRoot))[0]!;
+  await writeFile(join(cacheRoot, directory, "presentation.json"), "{broken");
+  const restartAbort = new AbortController();
+  let firstPresented = 0;
+  const restarted = watchRecording({
+    ...base,
+    resumeView: false,
+    restartView: true,
+    signal: restartAbort.signal,
+    write: async () => {},
+    onPresented: (sequence) => {
+      firstPresented = sequence;
+      restartAbort.abort();
+    },
+  });
+  runs.push({ abort: restartAbort, done: restarted });
+  await restarted;
+  expect(firstPresented).toBe(1);
+});
+it("does not checkpoint a failed output even after receipt is durable", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { root, server, session } = await setup();
+  const cacheRoot = join(root, "failed-presentation");
+  await expect(
+    watchRecording({
+      serverOrigin: server.url,
+      streamId: session.info.id,
+      cacheRoot,
+      signal: AbortSignal.timeout(5000),
+      resumeView: true,
+      write: async () => {
+        throw new Error("Sink failed");
+      },
+    }),
+  ).rejects.toThrow("Sink failed");
+  const cache = await SubscriberCache.open(cacheRoot, {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    initialize: async () => {
+      throw new Error("Must exist");
+    },
+  });
+  try {
+    expect(cache.cursor.serverSeq).toBe(session.boundary.sequence);
+    expect(await cache.loadPresentation()).toBe(0);
+  } finally {
+    await cache.close();
+  }
+});

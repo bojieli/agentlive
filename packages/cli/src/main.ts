@@ -24,7 +24,7 @@ Commands:
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
   agentlive publish --agent opencode --native-server <origin> --native-session <id>
-  agentlive watch --stream <recording-id> [--server <origin>] [--anonymous] [--interactive]
+  agentlive watch --stream <recording-id> [--server <origin>] [--anonymous] [--interactive] [--resume-view | --restart-view]
   agentlive replay --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive] [--from-ms <position>]
 
 Shared options:
@@ -94,6 +94,8 @@ async function main() {
       speed: { type: "string" },
       "from-ms": { type: "string" },
       interactive: { type: "boolean" },
+      "resume-view": { type: "boolean" },
+      "restart-view": { type: "boolean" },
       "resume-import": { type: "boolean" },
       "record-format": { type: "string" },
       stream: { type: "string" },
@@ -133,7 +135,7 @@ async function main() {
             "anonymous",
             ...(command === "replay"
               ? ["speed", "interactive", "from-ms"]
-              : ["interactive"]),
+              : ["interactive", "resume-view", "restart-view"]),
           ]
         : [
             ...(command === "publish"
@@ -216,6 +218,8 @@ async function main() {
       ...(speed === undefined ? {} : { speed }),
       ...(fromMs === undefined ? {} : { fromMs }),
       ...(values.interactive ? { interactive: true } : {}),
+      ...(values["resume-view"] ? { resumeView: true } : {}),
+      ...(values["restart-view"] ? { restartView: true } : {}),
       serverOrigin: values.server ?? "http://127.0.0.1:7331",
       streamId: values.stream,
       ...(credential ? { credential } : {}),

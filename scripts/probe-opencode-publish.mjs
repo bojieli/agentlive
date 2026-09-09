@@ -12,6 +12,7 @@ import {
   initialState,
   apply,
   PlaybackPacer,
+  renderTerminalSnapshot,
 } from "../packages/playback/dist/index.js";
 import { watchRecording } from "../packages/cli/dist/watch.js";
 const root = await realpath(
@@ -262,6 +263,7 @@ try {
     cacheRoot: join(root, "subscriber"),
     signal: AbortSignal.any([signal, watched.signal]),
     presentation: gate,
+    resumeView: true,
     write: async () => {},
     onReceipt: (sequence) => {
       received = sequence;
@@ -282,9 +284,36 @@ try {
     throw new Error(
       "Native viewer did not receive and present the complete recording",
     );
+  const expectedSnapshot = [
+    ...renderTerminalSnapshot(replay, target.url, streamId),
+  ].join("");
+  const resumedViewer = new AbortController();
+  let restoredOutput = "";
+  let repeatedEvents = 0;
+  await watchRecording({
+    serverOrigin: target.url,
+    streamId,
+    credential: password,
+    cacheRoot: join(root, "subscriber"),
+    resumeView: true,
+    signal: AbortSignal.any([signal, resumedViewer.signal]),
+    write: async (text) => {
+      restoredOutput += text;
+      if (restoredOutput.length >= expectedSnapshot.length)
+        resumedViewer.abort();
+    },
+    onPresented: () => {
+      repeatedEvents++;
+    },
+  });
+  if (restoredOutput !== expectedSnapshot || repeatedEvents)
+    throw new Error(
+      "Native viewer restart did not reconstruct exactly its saved presentation state",
+    );
   console.log(
     JSON.stringify({
       success: true,
+      restoredViewerPosition: true,
       pausedViewerReceipt: true,
       orderedViewerCatchup: true,
       nativeTurns: 3,
