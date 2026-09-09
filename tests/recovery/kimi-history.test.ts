@@ -75,6 +75,48 @@ it("imports Kimi wire text and failed tools with agent identity, filtering and s
           },
         },
       },
+      {
+        type: "goal.create",
+        time: time + 5,
+        goalId: "goal1",
+        objective: "Complete private-key workload",
+      },
+      {
+        type: "goal.update",
+        time: time + 6,
+        status: "paused",
+        turnsUsed: 2,
+        tokensUsed: 100,
+        reason: "Wait for capacity",
+      },
+      { type: "goal.update", time: time + 7, status: "complete", turnsUsed: 3 },
+      { type: "goal.clear", time: time + 8 },
+      {
+        type: "task.started",
+        agentId: "worker",
+        time: time + 9,
+        info: {
+          taskId: "task1",
+          kind: "process",
+          status: "running",
+          description: "Background monitor",
+          command: "echo private-key",
+          detached: true,
+        },
+      },
+      {
+        type: "task.terminated",
+        agentId: "worker",
+        time: time + 10,
+        info: {
+          taskId: "task1",
+          kind: "process",
+          status: "killed",
+          description: "Background monitor",
+          detached: true,
+        },
+        outputTail: "partial monitor output",
+      },
     ];
     await writeFile(
       sourcePath,
@@ -102,10 +144,33 @@ it("imports Kimi wire text and failed tools with agent identity, filtering and s
     expect([...state.messages.values()].map((message) => message.text)).toEqual(
       ["Question", "Reply [REDACTED]"],
     );
-    expect(state.agents.size).toBe(1);
+    expect(state.agents.size).toBe(2);
+    expect([...state.tasks.values()][0]!.agentId).toBe(
+      [...state.agents.values()].find((agent) => agent.name === "worker")!
+        .agentId,
+    );
     expect([...state.tools.values()][0]!.status).toBe("failed");
     expect(JSON.stringify(events)).not.toContain("private-key");
     expect(JSON.stringify(events)).not.toContain("unpublished reasoning");
+    expect([...state.goals.values()][0]).toMatchObject({
+      objective: "Complete [REDACTED] workload",
+      status: "cleared",
+      turnsUsed: 3,
+      tokensUsed: 100,
+    });
+    expect([...state.tasks.values()][0]).toMatchObject({
+      taskType: "process",
+      status: "interrupted",
+      description: "Background monitor",
+      detached: true,
+    });
+    expect(
+      [...state.tools.values()].some(
+        (tool) =>
+          tool.output.endsWith("partial monitor output") &&
+          tool.status === "interrupted",
+      ),
+    ).toBe(true);
     expect(result.report.unsupported).toEqual({
       "tool_result/source_truncated": 1,
       "tool_result/image_url": 1,

@@ -265,6 +265,11 @@ export async function createCodexHistoryConsumer(
             turn: { id: p.turn_id, status: "inProgress" },
           },
         };
+      else if (p.type === "thread_goal_updated")
+        notification = {
+          method: "goal/updated",
+          params: { threadId: manifest.nativeSessionId, goal: p.goal },
+        };
       else if (p.type === "task_complete" || p.type === "turn_aborted")
         notification = {
           method: "turn/completed",

@@ -75,6 +75,10 @@ export async function captureKimiHistory(
   };
   const agentId = hash(`${manifest.nativeSessionId}/${manifest.agentId}`),
     tools = new Set<string>();
+  const goals = new Map<
+    string,
+    Extract<EventContent, { kind: "goal.updated" }>["payload"]
+  >();
   let elapsedMs = 0;
   const filter = (text: string) => {
     const redactor = new StreamingRedactor(secrets);
@@ -100,6 +104,29 @@ export async function captureKimiHistory(
         fidelity: "reconstructed",
         adapterState: { version: 1, agent: "kimi" },
       });
+  };
+  const knownAgents = new Set([manifest.agentId]);
+  const ensureAgent = async (nativeId: string, timestamp: string) => {
+    const nodeId = hash(`${manifest.nativeSessionId}/${nativeId}`);
+    if (!knownAgents.has(nativeId)) {
+      await emit(
+        `agent/${nodeId}`,
+        [
+          {
+            kind: "agent.updated",
+            payload: {
+              agentId: nodeId,
+              nativeSessionId: manifest.nativeSessionId,
+              name: filter(nativeId),
+              status: "unknown",
+            },
+          },
+        ],
+        timestamp,
+      );
+      knownAgents.add(nativeId);
+    }
+    return nodeId;
   };
   const gap = async (key: string, type: string, timestamp: string) => {
     report.unsupported[type] = (report.unsupported[type] ?? 0) + 1;
@@ -320,6 +347,143 @@ export async function captureKimiHistory(
           );
       } else if (!["step.begin", "step.end"].includes(String(event.type)))
         await gap(eventKey, String(event.type), timestamp);
+    } else if (row.type === "task.started" || row.type === "task.terminated") {
+      const agentId = await ensureAgent(
+        typeof row.agentId === "string" ? row.agentId : manifest.agentId,
+        timestamp,
+      );
+      const info = object.parse(row.info);
+      const taskId = hash(`${agentId}/task/${z.string().parse(info.taskId)}`);
+      const taskType = ["process", "agent", "question"].includes(
+        String(info.kind),
+      )
+        ? (info.kind as "process" | "agent" | "question")
+        : "unknown";
+      const taskStatus =
+        info.status === "killed"
+          ? "interrupted"
+          : ["running", "completed", "failed", "timed_out"].includes(
+                String(info.status),
+              )
+            ? (info.status as "running" | "completed" | "failed" | "timed_out")
+            : "unknown";
+      const description = filter(z.string().parse(info.description));
+      if (!tools.has(taskId)) {
+        await emit(
+          `task/${taskId}/start`,
+          [
+            {
+              kind: "tool.started",
+              payload: {
+                toolId: taskId,
+                agentId,
+                name: `background/${taskType}`,
+                input: filter(
+                  typeof info.command === "string" ? info.command : description,
+                ),
+              },
+            },
+          ],
+          timestamp,
+        );
+        tools.add(taskId);
+        report.tools++;
+      }
+      await emit(
+        key + "/task",
+        [
+          {
+            kind: "task.updated",
+            payload: {
+              taskId,
+              agentId,
+              toolId: taskId,
+              taskType,
+              status: taskStatus,
+              description,
+              ...(typeof info.detached === "boolean"
+                ? { detached: info.detached }
+                : {}),
+            },
+          },
+        ],
+        timestamp,
+      );
+      if (row.type === "task.terminated")
+        await emit(
+          key + "/output",
+          [
+            {
+              kind: "tool.completed",
+              payload: {
+                toolId: taskId,
+                status:
+                  taskStatus === "completed"
+                    ? "completed"
+                    : taskStatus === "interrupted"
+                      ? "interrupted"
+                      : "failed",
+                output: filter(
+                  typeof row.outputTail === "string"
+                    ? `[Retained background-task output tail]\n${row.outputTail}`
+                    : "",
+                ),
+              },
+            },
+          ],
+          timestamp,
+        );
+    } else if (
+      row.type === "goal.create" ||
+      row.type === "goal.update" ||
+      row.type === "goal.clear"
+    ) {
+      const owner =
+        typeof row.agentId === "string" ? row.agentId : manifest.agentId;
+      const agentId = await ensureAgent(owner, timestamp);
+      if (row.type === "goal.create")
+        goals.set(owner, {
+          goalId: hash(`${agentId}/goal/${z.string().parse(row.goalId)}`),
+          agentId,
+          objective: filter(z.string().parse(row.objective)),
+          status: "active",
+          ...(typeof row.completionCriterion === "string"
+            ? { completionCriterion: filter(row.completionCriterion) }
+            : {}),
+        });
+      const goal = goals.get(owner);
+      if (!goal) await gap(key, "goal/missing_create", timestamp);
+      else {
+        const next = { ...goal };
+        if (row.type === "goal.clear") next.status = "cleared";
+        else if (row.type === "goal.update") {
+          if (row.status !== undefined)
+            next.status = ["active", "paused", "complete"].includes(
+              String(row.status),
+            )
+              ? (row.status as "active" | "paused" | "complete")
+              : "unknown";
+          if (typeof row.reason === "string") next.reason = filter(row.reason);
+          for (const metric of [
+            "tokensUsed",
+            "turnsUsed",
+            "wallClockMs",
+          ] as const)
+            if (row[metric] !== undefined)
+              next[metric] = z
+                .number()
+                .finite()
+                .nonnegative()
+                .parse(row[metric]);
+        }
+        await emit(
+          key + "/goal",
+          [{ kind: "goal.updated", payload: next }],
+          timestamp,
+        );
+        if (next.status === "cleared") goals.delete(owner);
+        else goals.set(owner, next);
+      }
     } else if (
       ![
         "metadata",

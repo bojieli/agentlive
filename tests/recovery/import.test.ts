@@ -446,3 +446,38 @@ it("attaches from the first retained message and follows native appends across p
     await journal.close();
   }
 });
+it("imports Codex source goal updates as replayable progress instead of gaps", async () => {
+  const { server, options } = await setup();
+  await appendFile(
+    options.sourcePath,
+    JSON.stringify({
+      type: "event_msg",
+      timestamp: "2026-09-01T00:00:04.000Z",
+      payload: {
+        type: "thread_goal_updated",
+        threadId: "native1",
+        goal: {
+          threadId: "native1",
+          objective: "Complete secret123 objective",
+          status: "paused",
+          tokensUsed: 100,
+          timeUsedSeconds: 12,
+          createdAt: 1788220800,
+          updatedAt: 1788220812,
+        },
+      },
+    }) + "\n",
+  );
+  const result = await importCodexRecording(options),
+    session = await server.store.get(result.streamId);
+  let state = initialState();
+  for await (const event of session.history(0, session.boundary.sequence))
+    state = apply(state, event);
+  expect([...state.goals.values()][0]).toMatchObject({
+    objective: "Complete [REDACTED] objective",
+    status: "paused",
+    tokensUsed: 100,
+    wallClockMs: 12000,
+  });
+  expect(result.report.unsupportedRecordTypes).toEqual({});
+});

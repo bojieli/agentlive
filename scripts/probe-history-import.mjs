@@ -134,6 +134,8 @@ try {
     serverEvents: state.appliedSeq,
     messages: state.messages.size,
     tools: state.tools.size,
+    tasks: state.tasks.size,
+    goals: state.goals.size,
     fileChanges: state.changes.size,
     gaps: state.gaps.length,
     unsupportedItemTypes:

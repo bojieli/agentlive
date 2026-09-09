@@ -29,6 +29,14 @@ export interface RecordingState {
     string,
     Extract<EventContent, { kind: "agent.updated" }>["payload"]
   >;
+  tasks: Map<
+    string,
+    Extract<EventContent, { kind: "task.updated" }>["payload"]
+  >;
+  goals: Map<
+    string,
+    Extract<EventContent, { kind: "goal.updated" }>["payload"]
+  >;
   messages: Map<string, Message>;
   tools: Map<string, Tool>;
   changes: Map<string, { path: string; patch: string; applied: boolean }>;
@@ -66,6 +74,8 @@ export function initialState(): RecordingState {
     title: "",
     lifecycle: "open",
     agents: new Map(),
+    tasks: new Map(),
+    goals: new Map(),
     messages: new Map(),
     tools: new Map(),
     changes: new Map(),
@@ -324,6 +334,16 @@ export function apply(
       );
       break;
     }
+    case "task.updated":
+      next.tasks = new Map(state.tasks).set(content.payload.taskId, {
+        ...content.payload,
+      });
+      break;
+    case "goal.updated":
+      next.goals = new Map(state.goals).set(content.payload.goalId, {
+        ...content.payload,
+      });
+      break;
     case "capture.gap":
       next.gaps = [...state.gaps, { at: event.serverSeq, ...content.payload }];
       break;

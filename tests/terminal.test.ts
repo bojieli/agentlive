@@ -66,6 +66,25 @@ it("renders captured object types with inert source text and attachment links", 
       },
     },
     {
+      kind: "task.updated",
+      payload: {
+        taskId: "task",
+        taskType: "process",
+        status: "completed",
+        description: "Monitor finished",
+      },
+    },
+    {
+      kind: "goal.updated",
+      payload: {
+        goalId: "goal",
+        objective: "Finish work",
+        status: "paused",
+        turnsUsed: 2,
+        tokensUsed: 100,
+      },
+    },
+    {
       kind: "capture.gap",
       payload: { reason: "missing source", recoveredState: false },
     },
@@ -102,6 +121,9 @@ it("renders captured object types with inert source text and attachment links", 
   expect(output).toContain("historical-version");
   expect(output).toContain("/api/v1/streams/stream/attachments/");
   expect(output).toContain("Capture gap");
+  expect(output).toContain("Task process: completed");
+  expect(output).toContain("Goal: paused");
+  expect(output).toContain("Tokens used: 100");
   expect(terminalText("normal\ntext\tcolumn")).toBe("normal\ntext\tcolumn");
 });
 

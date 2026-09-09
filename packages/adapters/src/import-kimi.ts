@@ -14,7 +14,7 @@ export async function importKimiRecording(options: KimiImportOptions) {
   );
   return importNativeRecording(options, {
     agent: "kimi",
-    converterVersion: `kimi-history-1-${source.agentId}`,
+    converterVersion: `kimi-history-2-${source.agentId}`,
     source,
     capture: (journal, secrets) =>
       captureKimiHistory(

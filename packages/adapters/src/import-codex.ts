@@ -9,7 +9,7 @@ export async function importCodexRecording(options: CodexImportOptions) {
   const source = await inspectCodexHistory(options.sourcePath, options.signal);
   return importNativeRecording(options, {
     agent: "codex",
-    converterVersion: "codex-history-2",
+    converterVersion: "codex-history-3",
     source,
     capture: (journal, secrets, artifacts) =>
       captureCodexHistory(

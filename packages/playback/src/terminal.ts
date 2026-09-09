@@ -112,6 +112,33 @@ export function renderTerminalEvent(
     }
     case "attachment.unavailable":
       return section("Attachment unavailable", content.payload.reason);
+    case "task.updated":
+      return section(
+        `Task ${content.payload.taskType}: ${content.payload.status}`,
+        content.payload.description,
+      );
+    case "goal.updated": {
+      const goal = content.payload;
+      return section(
+        `Goal: ${goal.status}`,
+        [
+          goal.objective,
+          goal.completionCriterion,
+          goal.reason,
+          goal.tokensUsed === undefined
+            ? undefined
+            : `Tokens used: ${goal.tokensUsed}`,
+          goal.turnsUsed === undefined
+            ? undefined
+            : `Turns used: ${goal.turnsUsed}`,
+          goal.wallClockMs === undefined
+            ? undefined
+            : `Elapsed: ${goal.wallClockMs} ms`,
+        ]
+          .filter((value) => value !== undefined)
+          .join("\n"),
+      );
+    }
     case "capture.gap":
       return section(
         content.payload.recoveredState ? "Capture recovered" : "Capture gap",

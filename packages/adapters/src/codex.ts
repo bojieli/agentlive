@@ -134,6 +134,39 @@ export class CodexCapture {
       p.agentThreadId !== this.journal.identity.nativeSessionId
         ? id(p.agentThreadId)
         : undefined;
+    if (method === "goal/updated") {
+      const goal = z
+        .object({
+          threadId: z.string(),
+          objective: z.string(),
+          status: z.string(),
+          tokensUsed: z.number().int().nonnegative(),
+          timeUsedSeconds: z.number().finite().nonnegative(),
+          createdAt: z.number().int().nonnegative(),
+          updatedAt: z.number().int().nonnegative(),
+        })
+        .parse(p.goal);
+      await this.emit(
+        `goal/${id(canonicalJson(goal))}`,
+        [
+          {
+            kind: "goal.updated",
+            payload: {
+              goalId: id(`${goal.threadId}/${goal.createdAt}`),
+              agentId: id(goal.threadId),
+              objective: this.filter(goal.objective),
+              status: ["active", "paused", "complete"].includes(goal.status)
+                ? (goal.status as "active" | "paused" | "complete")
+                : "unknown",
+              tokensUsed: goal.tokensUsed,
+              wallClockMs: goal.timeUsedSeconds * 1000,
+            },
+          },
+        ],
+        "reconstructed",
+      );
+      return;
+    }
     if (method === "source/unsupported") {
       await this.emit(
         `unsupported/${id(string(p.sourceKey))}`,
