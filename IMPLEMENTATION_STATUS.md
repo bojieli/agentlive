@@ -2,7 +2,11 @@
 
 Last updated: 2026-09-09. This document records evidence and unfinished work; it does not replace or reduce the scope of the implementation plan.
 
-## Current verified work
+## Current status entry point
+
+See [remaining work toward the full goal](REMAINING_WORK.md) for the current prioritized inventory audited against code and the plan at commit `2aee5ad`. The entries below were accumulated chronologically; older descriptions of missing viewers, packaging, caches, controls, and adapters have been superseded by later implementations. They must not be used alone as a current milestone checklist.
+
+## Earlier foundation checkpoint
 
 - Node 26.8.1 baseline; exact dependency versions and pnpm lockfile. No Node 24 support target.
 - Strict TypeScript workspace with protocol, storage, publisher, playback, client, server, and adapters packages.
@@ -27,7 +31,7 @@ Last updated: 2026-09-09. This document records evidence and unfinished work; it
 - 102 offline tests pass locally, including actual child-process SIGKILL and SIGSTOP scenarios. Command: `npx --yes pnpm@12.3.4 check`.
 - Four real local agent transports exercised against synthetic prompts. Details and corrected failed attempts are in [live probe evidence](docs/adapters/LIVE_PROBES.md).
 
-## Milestone gates
+## Earlier milestone snapshot (historical)
 
 | Gate | Status | Remaining evidence/work |
 | --- | --- | --- |
@@ -40,14 +44,14 @@ Last updated: 2026-09-09. This document records evidence and unfinished work; it
 | M6 centralized pilot | Not implemented | Hosted identity/device flow, account isolation/quotas, monitoring/removal workflows, same-server multi-session pilot deployment and restoration test. |
 | M7 public release | Not implemented | Full compatibility/limits evidence, contribution/license/release materials, external install/publish/watch/replay validation, publication. Repository remains private. |
 
-## Immediate implementation sequence
+## Earlier implementation sequence (historical)
 
 1. Finish recorder storage contracts: safe segmented pruning, attachment bytes, stable clock segments, crash-safe lifecycle checkpoints.
 2. Extend the implemented server and network surfaces with bounded session eviction, complete credential lifecycle, and publisher epoch handoff.
 3. Extend the verified real Codex text/tool pipeline to active-turn recovery, complete operator controls, artifact handling, and viewers; complete the other native adapters using verified live interfaces.
 4. Continue all remaining viewer, packaging, hosted-service, deployment, and release gates; do not claim completion from the foundation tests alone.
 
-## Known limits of current code
+## Earlier foundation limits (historical)
 
 The publisher journal retains its captured history up to a configured byte limit; it does not prune acknowledged segments yet. Capturing before the first remote binding is established is not implemented. Server attachment upload/download and a programmatic HTTP/WebSocket listener are implemented and integration-tested; publisher local-file artifact capture and Codex import integration are implemented; remote artifact rewriting, browser/terminal viewers, and a packaged CLI remain unfinished. Private access currently uses owner/publisher credentials or scoped short-lived viewing tickets; revocation, read-only credential management, and hosted authentication remain. Its session cache is not yet bounded, publisher epoch handoff is not implemented, and readiness does not yet test storage writability. File-lock prebuild installation and all 31 tests, including the server core, passed GitHub CI on both macOS and Linux with Node 26 at code commit a7ffe90 (run 34314717999). The attachment/HTTP checkpoint also passed all 45 tests on both CI platforms at b9a2948 (run 34315873255). Source/session recovery behavior of each actual agent is not yet established by the short streaming probes.
 
