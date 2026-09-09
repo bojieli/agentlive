@@ -94,6 +94,28 @@ it("runs local serve/import across processes with private credentials and restar
     expect(
       (await fetch(`${server.url}/api/v1/streams/${first.streamId}`)).status,
     ).toBe(403);
+    const replayArgs = [
+      cli,
+      "replay",
+      "--stream",
+      first.streamId,
+      "--server",
+      server.url,
+      "--state-dir",
+      root,
+    ];
+    const replay = await exec(process.execPath, replayArgs, {
+      env,
+      timeout: 10000,
+    });
+    expect(replay.stdout).toContain("CLI test message");
+    expect(replay.stdout).toContain("Recording ended");
+    await expect(
+      exec(process.execPath, [...replayArgs, "--anonymous"], {
+        env,
+        timeout: 10000,
+      }),
+    ).rejects.toMatchObject({ code: 1 });
     const timestamp = "2026-09-01T00:00:00.000Z";
     const additional = [
       {

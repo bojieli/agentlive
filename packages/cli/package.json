@@ -13,6 +13,8 @@
     "@agentlive/adapters": "workspace:*",
     "@agentlive/server": "workspace:*",
     "@agentlive/publisher": "workspace:*",
-    "@agentlive/storage": "workspace:*"
+    "@agentlive/storage": "workspace:*",
+    "@agentlive/client": "workspace:*",
+    "@agentlive/playback": "workspace:*"
   }
 }

@@ -1,11 +1,29 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": { "rootDir": "src", "outDir": "dist", "types": ["node"] },
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    "types": ["node"]
+  },
   "include": ["src/**/*.ts"],
   "references": [
-    { "path": "../adapters" },
-    { "path": "../server" },
-    { "path": "../publisher" },
-    { "path": "../storage" }
+    {
+      "path": "../adapters"
+    },
+    {
+      "path": "../server"
+    },
+    {
+      "path": "../publisher"
+    },
+    {
+      "path": "../storage"
+    },
+    {
+      "path": "../client"
+    },
+    {
+      "path": "../playback"
+    }
   ]
 }

@@ -349,3 +349,32 @@ it("resumes the same recording after a server restart with a fresh connection le
   expect(metadata.revision).toBe(revision);
   expect(metadata.serverSeq).toBe(3);
 });
+it("downloads a fixed recording boundary while the publisher continues appending", async () => {
+  const { openRecordingHistory } =
+    await import("../../packages/client/src/index.js");
+  const { server, streamId, revision } = await setup();
+  const pub = await publisher(server, streamId, revision, 1);
+  pub.send({
+    type: "batch",
+    protocolVersion: 1,
+    requestId: "before_replay",
+    events: [event(streamId, 1)],
+  });
+  await pub.next();
+  const history = await openRecordingHistory({
+    serverOrigin: server.url,
+    streamId,
+    signal: AbortSignal.timeout(5000),
+  });
+  pub.send({
+    type: "batch",
+    protocolVersion: 1,
+    requestId: "during_replay",
+    events: [event(streamId, 2)],
+  });
+  await pub.next();
+  const events = [];
+  for await (const event of history.events) events.push(event);
+  expect(history.metadata.serverSeq).toBe(2);
+  expect(events.map((event) => event.serverSeq)).toEqual([1, 2]);
+});

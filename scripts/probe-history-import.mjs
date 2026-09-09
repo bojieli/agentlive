@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Explicit read-only native-history import into an isolated local private test server. */
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, open } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomBytes, createHash } from "node:crypto";
@@ -11,7 +11,11 @@ import {
   importOpenCodeRecording,
 } from "../packages/adapters/dist/index.js";
 import { startServer } from "../packages/server/dist/index.js";
-import { initialState, apply } from "../packages/playback/dist/index.js";
+import {
+  initialState,
+  apply,
+  renderTerminalEvent,
+} from "../packages/playback/dist/index.js";
 const args = process.argv.slice(2);
 const agent =
   args[0] === "--claude"
@@ -45,6 +49,11 @@ const signal = AbortSignal.timeout(120_000);
 const output = resolve("probe-results", "native-imports");
 await mkdir(output, { recursive: true, mode: 0o700 });
 const sourceId = createHash("sha256").update(resolve(sourcePath)).digest("hex");
+const rendered = await open(
+  join(output, sourceId + ".terminal.txt"),
+  "w",
+  0o600,
+);
 let summary;
 try {
   const secrets = Object.entries(process.env)
@@ -72,8 +81,20 @@ try {
   const result = await importRecording(options);
   const session = await server.store.get(result.streamId);
   let state = initialState();
-  for await (const event of session.history(0, session.boundary.sequence))
+  let renderedBytes = 0;
+  for await (const event of session.history(0, session.boundary.sequence)) {
+    const previous = state;
     state = apply(state, event);
+    const text = renderTerminalEvent(
+      event,
+      state,
+      server.url,
+      result.streamId,
+      previous,
+    );
+    renderedBytes += Buffer.byteLength(text);
+    await rendered.writeFile(text);
+  }
   let verifiedAttachments = 0;
   for (const artifact of state.artifacts.values()) {
     for (const attachment of artifact.versions.values()) {
@@ -121,6 +142,7 @@ try {
       unavailable: result.report.unavailableAttachments,
     },
     verifiedAttachments,
+    renderedBytes,
     retryStable: true,
     privateAccessEnforced: true,
   };
@@ -128,7 +150,11 @@ try {
   summary = { success: false, sourceId, errorType: error?.name ?? "Error" };
   process.exitCode = 1;
 } finally {
-  await server.close();
+  try {
+    await server.close();
+  } finally {
+    await rendered.close();
+  }
 }
 await writeFile(
   join(output, sourceId + ".json"),

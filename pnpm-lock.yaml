@@ -168,6 +168,12 @@ importers:
       "@agentlive/adapters":
         specifier: workspace:*
         version: link:../adapters
+      "@agentlive/client":
+        specifier: workspace:*
+        version: link:../client
+      "@agentlive/playback":
+        specifier: workspace:*
+        version: link:../playback
       "@agentlive/publisher":
         specifier: workspace:*
         version: link:../publisher

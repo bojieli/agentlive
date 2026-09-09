@@ -4,3 +4,4 @@ export {
   type SubscriberCursor,
   type SubscriberStatus,
 } from "./subscriber.js";
+export { openRecordingHistory } from "./history.js";

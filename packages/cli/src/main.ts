@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { replayRecording } from "./replay.js";
 import { parseArgs } from "node:util";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -16,6 +17,7 @@ const help = `AgentLive — record and share coding-agent sessions
 Commands:
   agentlive serve [--host 127.0.0.1] [--port 7331]
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
+  agentlive replay --stream <recording-id> [--server <origin>] [--anonymous]
 
 Shared options:
   --state-dir <directory>  Persistent state (default: ~/.agentlive)
@@ -68,12 +70,14 @@ async function main() {
     process.stdout.write(help);
     return;
   }
-  if (command !== "serve" && command !== "import")
+  if (command !== "serve" && command !== "import" && command !== "replay")
     throw new Error("Unknown command; use agentlive --help");
   const { values } = parseArgs({
     args,
     options: {
       help: { type: "boolean" },
+      stream: { type: "string" },
+      anonymous: { type: "boolean" },
       "state-dir": { type: "string" },
       "owner-file": { type: "string" },
       host: { type: "string" },
@@ -101,17 +105,19 @@ async function main() {
     "owner-file",
     ...(command === "serve"
       ? ["host", "port"]
-      : [
-          "agent",
-          "source",
-          "server",
-          "visibility",
-          "title",
-          "artifact-root",
-          "artifact-base",
-          "native-session",
-          "native-agent",
-        ]),
+      : command === "replay"
+        ? ["server", "stream", "anonymous"]
+        : [
+            "agent",
+            "source",
+            "server",
+            "visibility",
+            "title",
+            "artifact-root",
+            "artifact-base",
+            "native-session",
+            "native-agent",
+          ]),
   ]);
   if (Object.keys(values).some((key) => !allowed.has(key)))
     throw new Error("Option does not apply to this command; use --help");
@@ -153,6 +159,23 @@ async function main() {
     } finally {
       await server.close();
     }
+    return;
+  }
+  if (command === "replay") {
+    if (!values.stream)
+      throw new Error("Replay requires --stream <recording-id>");
+    const credential = values.anonymous
+      ? undefined
+      : process.env.AGENTLIVE_OWNER_SECRET
+        ? validateSecret(process.env.AGENTLIVE_OWNER_SECRET)
+        : await ownerCredential(ownerFile, false);
+    if (credential) secrets.push(credential);
+    await replayRecording({
+      serverOrigin: values.server ?? "http://127.0.0.1:7331",
+      streamId: values.stream,
+      ...(credential ? { credential } : {}),
+      signal: controller.signal,
+    });
     return;
   }
   const agent = values.agent,
