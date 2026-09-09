@@ -31,3 +31,8 @@ export {
   type ClaudeHistoryManifest,
   type ClaudeCaptureSink,
 } from "./claude-history.js";
+
+export {
+  importClaudeRecording,
+  type ClaudeImportOptions,
+} from "./import-claude.js";

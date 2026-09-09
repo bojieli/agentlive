@@ -117,3 +117,61 @@ it("converts Claude text, tool failures and explicit gaps with durable retry ide
     await rm(root, { recursive: true, force: true });
   }
 });
+it("imports a Claude recording privately, ends before sharing, and retries without duplicates", async () => {
+  const { importClaudeRecording } =
+    await import("../../packages/adapters/src/index.js");
+  const { startServer } = await import("../../packages/server/src/http.js");
+  const { initialState, apply } =
+    await import("../../packages/playback/src/index.js");
+  const root = await mkdtemp(join(tmpdir(), "agentlive-claude-import-"));
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: "b".repeat(64),
+    port: 0,
+  });
+  try {
+    const sourcePath = join(root, "session.jsonl");
+    await writeFile(
+      sourcePath,
+      JSON.stringify({
+        type: "assistant",
+        sessionId: "native_claude",
+        uuid: "message1",
+        timestamp: "2026-09-01T00:00:00.000Z",
+        message: {
+          content: [{ type: "text", text: "Historical private-key reply" }],
+        },
+      }) + "\n",
+    );
+    const options = {
+      sourcePath,
+      publisherRoot: join(root, "publisher"),
+      serverOrigin: server.url,
+      ownerCredential: "b".repeat(64),
+      title: "Imported Claude",
+      visibility: "private" as const,
+      secrets: ["private-key"],
+      signal: AbortSignal.timeout(5000),
+    };
+    const result = await importClaudeRecording(options);
+    const session = await server.store.get(result.streamId);
+    expect(session.info.lifecycle).toBe("ended");
+    expect(
+      (await fetch(`${server.url}/api/v1/streams/${result.streamId}`)).status,
+    ).toBe(403);
+    let state = initialState();
+    for await (const event of session.history(0, session.boundary.sequence))
+      state = apply(state, event);
+    expect([...state.messages.values()].map((message) => message.text)).toEqual(
+      ["Historical [REDACTED] reply"],
+    );
+    const before = session.boundary.sequence;
+    expect((await importClaudeRecording(options)).streamId).toBe(
+      result.streamId,
+    );
+    expect(session.boundary.sequence).toBe(before);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

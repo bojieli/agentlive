@@ -4,10 +4,17 @@ import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomBytes, createHash } from "node:crypto";
-import { importCodexRecording } from "../packages/adapters/dist/index.js";
+import {
+  importCodexRecording,
+  importClaudeRecording,
+} from "../packages/adapters/dist/index.js";
 import { startServer } from "../packages/server/dist/index.js";
 import { initialState, apply } from "../packages/playback/dist/index.js";
-const sourcePath = process.argv[2];
+const args = process.argv.slice(2);
+const agent = args[0] === "--claude" ? (args.shift(), "claude") : "codex";
+const sourcePath = args[0];
+const importRecording =
+  agent === "claude" ? importClaudeRecording : importCodexRecording;
 if (!sourcePath)
   throw new Error(
     "Usage: node scripts/probe-history-import.mjs <codex-session.jsonl>",
@@ -36,8 +43,8 @@ try {
     .map(([, value]) => value);
   const options = {
     sourcePath,
-    ...(process.argv.length > 3
-      ? { artifactRoots: process.argv.slice(3).map((value) => resolve(value)) }
+    ...(args.length > 1
+      ? { artifactRoots: args.slice(1).map((value) => resolve(value)) }
       : {}),
     publisherRoot: join(root, "publisher"),
     serverOrigin: server.url,
@@ -47,7 +54,7 @@ try {
     secrets,
     signal,
   };
-  const result = await importCodexRecording(options);
+  const result = await importRecording(options);
   const session = await server.store.get(result.streamId);
   let state = initialState();
   for await (const event of session.history(0, session.boundary.sequence))
@@ -70,7 +77,7 @@ try {
     }
   }
   const before = session.boundary.sequence;
-  const retried = await importCodexRecording(options);
+  const retried = await importRecording(options);
   if (
     retried.streamId !== result.streamId ||
     session.boundary.sequence !== before
@@ -84,6 +91,7 @@ try {
   summary = {
     success: true,
     sourceId,
+    agent,
     records: result.report.records,
     items: result.report.items,
     producerEvents: result.producerEvents,
@@ -92,8 +100,11 @@ try {
     tools: state.tools.size,
     fileChanges: state.changes.size,
     gaps: state.gaps.length,
-    unsupportedItemTypes: result.report.unsupportedItemTypes,
-    artifacts: result.report.artifacts,
+    unsupportedItemTypes:
+      result.report.unsupportedItemTypes ?? result.report.unsupported,
+    artifacts: result.report.artifacts ?? {
+      unavailable: result.report.unavailableAttachments,
+    },
     verifiedAttachments,
     retryStable: true,
     privateAccessEnforced: true,
