@@ -45,3 +45,10 @@ No upstream binaries are patched. The probes start only their own local servers 
 Recordings use JSONL and immutable attachment files. Live delivery will use in-memory buffers with durable history fallback. A database is not required for the initial multi-session deployment.
 
 The complete product contract and milestones are in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+
+The real Codex capture-to-replay test also exercises a read-only tool and native app-server restart/resume:
+
+```sh
+npx --yes pnpm@12.3.4 build
+node scripts/probe-codex-pipeline.mjs
+```

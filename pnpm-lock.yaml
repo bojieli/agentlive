@@ -145,6 +145,18 @@ importers:
         specifier: 5.0.0
         version: 5.0.0(@types/node@26.5.0)(vite@8.2.2(@types/node@26.5.0))
 
+  packages/adapters:
+    dependencies:
+      "@agentlive/protocol":
+        specifier: workspace:*
+        version: link:../protocol
+      "@agentlive/publisher":
+        specifier: workspace:*
+        version: link:../publisher
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4
+
   packages/client:
     dependencies:
       "@agentlive/protocol":

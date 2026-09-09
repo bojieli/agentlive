@@ -1,6 +1,6 @@
 # Live-agent transport evidence
 
-Date: 2026-09-09. Runtime: Node 26.8.1 on macOS arm64. Every prompt ran in a new synthetic temporary directory and requested a short explanatory response without tools. These checks establish live transport feasibility, not the complete adapter compatibility matrix.
+Date: 2026-09-09. Runtime: Node 26.8.1 on macOS arm64. The initial transport prompts ran in new synthetic temporary directories and requested short explanatory responses without tools. A later Codex pipeline test exercised a read-only tool and native-session resume, as recorded below. These checks establish live transport feasibility, not the complete adapter compatibility matrix.
 
 | Agent | Version tested | Successful transport | Observed evidence |
 | --- | --- | --- | --- |
@@ -31,3 +31,14 @@ OpenCode's successful probe used `anthropic/claude-sonnet-5` with an already ava
 Raw traces are ignored under `probe-results/`. Do not check in startup logs, which may contain local-server access tokens. Production adapters must select and filter broadcast fields rather than forwarding raw vendor envelopes.
 
 Next tests: native-session resume in a new process, subscriber reattachment during an active turn, long command output, file edits/failure/approval/cancellation, upload/generated-image capture, multi-file artifact resolution, and source-history reconciliation after missed deltas.
+
+
+## Codex capture/publish/replay and native resume
+
+Command: `npx --yes pnpm@12.3.4 build && node scripts/probe-codex-pipeline.mjs`.
+
+The latest successful run used a synthetic README, the installed Codex app-server, `CodexCapture`, the durable publisher journal/network pump, the HTTP/WebSocket server, `SubscriberClient`, and the reference reducer. It observed 100 assistant text deltas, three assistant messages, one completed read-only shell tool, 122 producer events, and 123 stored server events. The tool output contained the expected fixture text. Both requested markers were checked in completed assistant output. No command-output delta notifications occurred in this run, so it proves final tool-output capture, not incremental shell-output fidelity.
+
+After the first turn, the probe closed the owned app-server, started a new process, resumed the same native thread, and paged completed turns using `thread/turns/list` with full item detail. Recovering those snapshots did not advance the producer sequence or duplicate captured history. A second turn published into the same recording. Live messages/tools matched a fresh replay from the committed JSONL, and the tested run contained no capture gaps.
+
+This is a bounded two-turn test. It does not prove active-turn crash recovery, full source-history pagination for very large turns, native-TUI attachment, file modification/approval/cancellation, subagent capture, or artifact rewriting. Those remain acceptance requirements. The probe owns and closes its own processes and writes only synthetic temporary workspaces; it does not operate on the user's existing coding sessions.
