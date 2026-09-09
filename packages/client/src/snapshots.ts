@@ -1,0 +1,229 @@
+import { z } from "zod";
+import {
+  ProtocolError,
+  idSchema,
+  cursorSchema,
+  snapshotSelectionSchema,
+  snapshotContentReferenceSchema,
+  type SnapshotDescriptor,
+} from "@agentlive/protocol";
+import { SnapshotReader, type ContentReference } from "@agentlive/playback";
+import { originOf, request } from "./http.js";
+export interface OpenedSnapshot {
+  descriptor: SnapshotDescriptor;
+  reader: SnapshotReader;
+}
+/** Session-scoped, bounded HTTP transport. Readers share their opening operation's lifetime signal. */
+export class RecordingSnapshotClient {
+  private readonly base: string;
+  private readonly streamId: string;
+  private readonly revision: string;
+  private readonly headers: Record<string, string>;
+  private readonly fetcher: typeof fetch;
+  private readonly stop = new AbortController();
+  private pending = 0;
+  constructor(options: {
+    serverOrigin: string;
+    streamId: string;
+    revision: string;
+    credential?: string;
+    fetch?: typeof fetch;
+  }) {
+    this.streamId = idSchema.parse(options.streamId);
+    this.revision = idSchema.parse(options.revision);
+    this.base = `${originOf(options.serverOrigin)}/api/v1/streams/${this.streamId}`;
+    this.headers = options.credential
+      ? { authorization: `Bearer ${options.credential}` }
+      : {};
+    this.fetcher = options.fetch ?? fetch;
+  }
+  private signal(signal: AbortSignal) {
+    return AbortSignal.any([this.stop.signal, signal]);
+  }
+  private async json(
+    path: string,
+    signal: AbortSignal,
+    maximum: number,
+    body?: unknown,
+  ): Promise<unknown> {
+    signal.throwIfAborted();
+    if (this.pending >= 16)
+      throw new ProtocolError(
+        "retry_later",
+        "Snapshot requests are at capacity",
+      );
+    this.pending++;
+    try {
+      const response = await request(
+        this.fetcher,
+        this.base + path,
+        {
+          headers: {
+            ...this.headers,
+            ...(body === undefined
+              ? {}
+              : { "content-type": "application/json" }),
+          },
+          ...(body === undefined
+            ? {}
+            : { method: "POST", body: JSON.stringify(body) }),
+        },
+        signal,
+        maximum,
+      );
+      signal.throwIfAborted();
+      try {
+        return JSON.parse(response.text);
+      } catch {
+        throw new ProtocolError(
+          "invalid_request",
+          "Invalid snapshot response JSON",
+        );
+      }
+    } finally {
+      this.pending--;
+    }
+  }
+  private async open(
+    raw: unknown,
+    through: number,
+    exact: boolean,
+    signal: AbortSignal,
+  ): Promise<OpenedSnapshot | null> {
+    const result = snapshotSelectionSchema.safeParse(raw);
+    if (!result.success)
+      throw new ProtocolError(
+        "invalid_request",
+        "Invalid snapshot selection response",
+      );
+    const envelope = result.data;
+    if (
+      envelope.streamId !== this.streamId ||
+      envelope.revision !== this.revision
+    )
+      throw new ProtocolError(
+        "revision_changed",
+        "Snapshot response binding changed",
+      );
+    const descriptor = envelope.snapshot;
+    if (!descriptor) {
+      if (exact)
+        throw new ProtocolError(
+          "invalid_request",
+          "Snapshot publication returned no descriptor",
+        );
+      return null;
+    }
+    if (
+      descriptor.serverSeq > through ||
+      (exact && descriptor.serverSeq !== through)
+    )
+      throw new ProtocolError(
+        "sequence_gap",
+        "Snapshot response is outside the requested boundary",
+      );
+    const reader = await SnapshotReader.open(
+      descriptor.ref,
+      { streamId: this.streamId, revision: this.revision },
+      {
+        put: async () => {
+          throw new Error("Snapshot HTTP reader is read-only");
+        },
+        read: (ref, offset, length, readSignal) =>
+          this.read(
+            ref,
+            offset,
+            length,
+            readSignal ? AbortSignal.any([signal, readSignal]) : signal,
+          ),
+      },
+      signal,
+    );
+    if (
+      reader.manifest.serverSeq !== descriptor.serverSeq ||
+      reader.manifest.timelineMs !== descriptor.timelineMs
+    )
+      throw new ProtocolError(
+        "corrupt_storage",
+        "Snapshot descriptor boundary differs from manifest",
+      );
+    Object.freeze(descriptor.ref);
+    Object.freeze(descriptor);
+    return { descriptor, reader };
+  }
+  private async read(
+    ref: ContentReference,
+    offset: number,
+    length: number,
+    signal: AbortSignal,
+  ): Promise<string> {
+    ref = snapshotContentReferenceSchema.parse(ref);
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isSafeInteger(length) ||
+      length < 0 ||
+      length > 65536 ||
+      offset > ref.units ||
+      length > ref.units - offset
+    )
+      throw new RangeError("Invalid snapshot content range");
+    const query = new URLSearchParams({
+      revision: this.revision,
+      byteSize: String(ref.byteSize),
+      units: String(ref.units),
+      offset: String(offset),
+      length: String(length),
+    });
+    const raw = await this.json(
+      `/snapshot-content/${ref.hash}?${query}`,
+      signal,
+      length * 6 + 4096,
+    );
+    const result = z.strictObject({ text: z.string() }).safeParse(raw);
+    // Protocol ranges count UTF-16 units; schema string lengths count code points.
+    if (!result.success || result.data.text.length !== length)
+      throw new ProtocolError(
+        "corrupt_storage",
+        "Snapshot content response has invalid shape or length",
+      );
+    return result.data.text;
+  }
+  async select(
+    throughServerSeq: number,
+    signal: AbortSignal,
+  ): Promise<OpenedSnapshot | null> {
+    const through = cursorSchema.parse(throughServerSeq),
+      combined = this.signal(signal);
+    const query = new URLSearchParams({
+      revision: this.revision,
+      throughServerSeq: String(through),
+    });
+    return this.open(
+      await this.json(`/snapshots?${query}`, combined, 4096),
+      through,
+      false,
+      combined,
+    );
+  }
+  async publish(
+    throughServerSeq: number,
+    signal: AbortSignal,
+  ): Promise<OpenedSnapshot> {
+    const through = cursorSchema.parse(throughServerSeq),
+      combined = this.signal(signal);
+    return (await this.open(
+      await this.json("/snapshots", combined, 4096, {
+        revision: this.revision,
+        throughServerSeq: through,
+      }),
+      through,
+      true,
+      combined,
+    ))!;
+  }
+  /** Stops outstanding and future transport requests, including requests from existing readers. */
+  close(): void {
+    this.stop.abort(new Error("Snapshot client is closed"));
+  }
+}

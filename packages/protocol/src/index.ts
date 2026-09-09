@@ -18,6 +18,24 @@ export const idSchema = z
   .max(160)
   .regex(/^[a-zA-Z0-9_-]+$/);
 export const hashSchema = z.string().regex(/^[a-f0-9]{64}$/);
+export const snapshotContentReferenceSchema = z.strictObject({
+  hash: hashSchema,
+  byteSize: z.number().int().min(1).max(1048576),
+  units: z.number().int().min(0).max(67108864),
+});
+export const snapshotDescriptorSchema = z.strictObject({
+  serverSeq: cursorSchema,
+  timelineMs: z.number().finite().nonnegative(),
+  ref: snapshotContentReferenceSchema.extend({
+    units: z.number().int().min(0).max(32768),
+  }),
+});
+export const snapshotSelectionSchema = z.strictObject({
+  streamId: idSchema,
+  revision: idSchema,
+  snapshot: snapshotDescriptorSchema.nullable(),
+});
+export type SnapshotDescriptor = z.infer<typeof snapshotDescriptorSchema>;
 const text = z.string().max(32 * 1024 * 1024);
 const clock = z.number().finite().nonnegative();
 const agentSchema = z.enum([

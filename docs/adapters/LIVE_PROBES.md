@@ -112,3 +112,11 @@ On 2026-09-09, a fresh Claude `--resume-import` probe passed two native turns, 2
 This exercises the server endpoints with the native recording's credential, not an in-process snapshot shortcut. The verifier reports only the selected sequence, read count and success flag. The production browser still follows its existing event-based reducer; paged viewer loading, real browser behavior, and long-session performance remain unverified.
 
 The standalone package verifier additionally installs the actual tarball outside the workspace, imports a synthetic recording, publishes/selects its snapshot, and reads the root manifest through the installed server. The successful run also verifies reproducible rebuilding, disabled install scripts, CLI replay, import retry identity, browser assets, and clean shutdown.
+
+
+## Shared snapshot client on a native recording
+
+On 2026-09-09, Claude `--resume-import` passed again with two native turns, 28 stored events, four messages and 16 rendered activity items. The server-snapshot verifier now uses `RecordingSnapshotClient` for publication, selection and lazy content reads. It made 34 bounded content requests (including root validation for both publication and selection) and reconstructed state with strict equality to reference replay. History backfill, native resume, live suffix capture, publisher deduplication and browser-model restoration passed. Only aggregate results are reported. The probe exercises the shared production transport, not automatic snapshot use by the browser UI.
+
+
+After the UTF-16 range validation fix, a fresh Kimi Code probe passed two native turns with 35 stored events, seven messages and 19 rendered activity items. The shared snapshot client reconstructed the server snapshot through 39 bounded content requests and matched the native reference state strictly. Native resume, history backfill, live suffix capture, publisher deduplication, activity search and browser-model restoration passed. This adds a second native-agent integration to the shared-client evidence without retaining its text.

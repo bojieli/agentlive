@@ -50,3 +50,30 @@ Uses the recording's read-access policy and its isolated TextStore. Supply the c
 - Snapshot catalog/content operations are serialized per recording. Event publishing uses its separate existing queue.
 - Shutdown drains accepted snapshot writes before releasing ownership. A caller deadline never permits a second uncertain writer.
 - Read-only credentials, rotation/revocation, automatic snapshot scheduling, and production viewer loading remain separate work.
+
+
+## Shared client API
+
+`RecordingSnapshotClient` is exported by `@agentlive/client`. Construct it with `serverOrigin`, `streamId`, `revision`, and an optional `credential`. An optional fetch implementation supports embedding and verification.
+
+```ts
+const snapshots = new RecordingSnapshotClient({
+  serverOrigin, streamId, revision, credential,
+});
+try {
+  const selected = await snapshots.select(targetSequence, sessionSignal);
+  if (selected) {
+    const { descriptor, reader } = selected;
+    const fields = await reader.entries(reader.manifest.state, 0, 32, sessionSignal);
+    // Resolve selected containers/text lazily; continue events after descriptor.serverSeq.
+  }
+} finally {
+  snapshots.close();
+}
+```
+
+`publish(sequence, signal)` requires owner/publisher credentials and returns the same `{ descriptor, reader }` shape. `select` can return null. The client validates the server envelope and opens the bound root before returning a reader. The descriptor is frozen. An opening signal governs that reader's subsequent network access, so use a session-lifetime signal when retaining a reader. `close()` aborts outstanding and future transport requests; already decoded local values remain ordinary data.
+
+Each operation makes one attempt, with a 30-second deadline per HTTP request and at most 16 concurrent requests per client. Retain the revision/target when retrying a network failure. Binding changes and corruption require explicit recovery, not silent fallback to another recording. Responses are bounded before parsing: 4 KiB for selections/publications, and six bytes per requested UTF-16 unit plus 4 KiB for content. Aborting or rejecting an oversized response does not wait indefinitely for the underlying stream's cancellation callback.
+
+This client does not yet replace browser or terminal replay reconstruction with paged state, and its materialization helper remains for bounded verification.

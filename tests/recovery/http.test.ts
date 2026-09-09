@@ -850,10 +850,103 @@ it("publishes revision-bound snapshots and serves verified content only to autho
     title: "HTTP test",
     appliedSeq: 1,
   });
+  const { RecordingSnapshotClient } =
+    await import("../../packages/client/src/index.js");
+  const client = new RecordingSnapshotClient({
+    serverOrigin: server.url,
+    streamId,
+    revision,
+    credential: writeSecret,
+  });
+  try {
+    const opened = await client.publish(1, AbortSignal.timeout(5000));
+    expect(opened.descriptor).toEqual(descriptor);
+    const selected = await client.select(1, AbortSignal.timeout(5000));
+    expect(await selected!.reader.materialize()).toStrictEqual(
+      await snapshot.materialize(),
+    );
+    expect(await client.select(0, AbortSignal.timeout(5000))).toBeNull();
+  } finally {
+    client.close();
+  }
   const invalid = await fetch(base + "/snapshots", {
     method: "POST",
     headers,
     body: JSON.stringify({ revision, throughServerSeq: 2 }),
   });
   expect(invalid.status).toBe(400);
+});
+
+it("loads exact Unicode text ranges through the shared snapshot client", async () => {
+  const { server, streamId, revision } = await setup("private");
+  const { RecordingSnapshotClient } =
+    await import("../../packages/client/src/index.js");
+  const session = await server.store.get(streamId);
+  try {
+    const { lease } = await session.resume(writeSecret, {
+      publisherId: "publisher_1",
+      producerEpoch: "epoch_1",
+      attempt: 1,
+      revision,
+    });
+    const text = "x".repeat(16383) + "🦊\ud800" + "tail";
+    const base = {
+      protocolVersion: 1 as const,
+      streamId,
+      producerEpoch: "epoch_1",
+      observedAt: "2026-09-09T00:00:00Z",
+      clockSegmentId: "clock",
+      fidelity: "delta" as const,
+      source: { agent: "synthetic" as const, sessionId: "native" },
+    };
+    await session.append(lease, [
+      {
+        ...base,
+        producerSeq: 1,
+        elapsedMs: 0,
+        content: {
+          kind: "message.started",
+          payload: { messageId: "message", role: "assistant" },
+        },
+      },
+      {
+        ...base,
+        producerSeq: 2,
+        elapsedMs: 1,
+        content: {
+          kind: "message.text.append",
+          payload: { messageId: "message", text },
+        },
+      },
+    ]);
+    const client = new RecordingSnapshotClient({
+      serverOrigin: server.url,
+      streamId,
+      revision,
+      credential: writeSecret,
+    });
+    try {
+      const { reader } = await client.publish(
+        session.info.serverSeq,
+        AbortSignal.timeout(5000),
+      );
+      const fields = await reader.entries(reader.manifest.state, 0, 32);
+      const messages = fields.find(([key]) => key === "messages")![1];
+      const message = (await reader.entries(messages, 0, 1))[0]![1];
+      const contents = (await reader.entries(message, 0, 32)).find(
+        ([key]) => key === "text",
+      )![1];
+      expect(await reader.text(contents, 16383, 1)).toBe("\ud83e");
+      expect(await reader.text(contents, 16384, 3)).toBe("\udd8a\ud800t");
+      expect(await reader.text(contents, 16380, 9)).toBe(
+        text.slice(16380, 16389),
+      );
+      client.close();
+      await expect(reader.text(contents, 0, 1)).rejects.toThrow("closed");
+    } finally {
+      client.close();
+    }
+  } finally {
+    server.store.release(session);
+  }
 });

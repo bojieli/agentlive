@@ -9,6 +9,8 @@ import {
   idSchema,
   cursorSchema,
   type StoredEvent,
+  snapshotDescriptorSchema,
+  type SnapshotDescriptor,
 } from "@agentlive/protocol";
 import {
   apply,
@@ -19,23 +21,12 @@ import {
   type SnapshotBinding,
 } from "@agentlive/playback";
 
-const referenceSchema = z.strictObject({
-  hash: z.string().regex(/^[a-f0-9]{64}$/),
-  byteSize: z.number().int().min(1).max(1048576),
-  units: z.number().int().min(0).max(32768),
-});
-const entrySchema = z.strictObject({
-  serverSeq: cursorSchema,
-  timelineMs: z.number().finite().nonnegative(),
-  ref: referenceSchema,
-});
 const catalogSchema = z.strictObject({
   version: z.literal(1),
   streamId: idSchema,
   revision: idSchema,
-  entries: z.array(entrySchema).max(128),
+  entries: z.array(snapshotDescriptorSchema).max(128),
 });
-export type SnapshotDescriptor = z.infer<typeof entrySchema>;
 /** Derived recording data. The caller must retain recording ownership through close. */
 export class RecordingSnapshots {
   private tail: Promise<void> = Promise.resolve();

@@ -220,6 +220,9 @@ importers:
 
   packages/client:
     dependencies:
+      "@agentlive/playback":
+        specifier: workspace:*
+        version: link:../playback
       "@agentlive/protocol":
         specifier: workspace:*
         version: link:../protocol

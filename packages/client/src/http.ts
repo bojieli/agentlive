@@ -44,7 +44,8 @@ export async function readText(
     return text + decoder.decode();
   } finally {
     signal.removeEventListener("abort", abort);
-    await reader.cancel().catch(() => {});
+    // A transport cancellation callback may never settle; observe it without blocking cleanup.
+    void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
