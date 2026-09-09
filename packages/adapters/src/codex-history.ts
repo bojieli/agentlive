@@ -122,6 +122,8 @@ export function codexHistoryItem(raw: unknown): Record<string, unknown> {
         status: item.status,
         result: item.result ?? null,
       };
+    case "ImageView":
+      return { id: item.id, type: "imageView", path: item.path };
     case "FileChange":
       return {
         id: item.id,
@@ -173,6 +175,7 @@ export interface CodexHistoryReport {
   records: number;
   items: number;
   omittedInternalRecords: number;
+  artifacts: { available: number; unavailable: number; currentFile: number };
   unsupportedItemTypes: Record<string, number>;
   unsupportedRecordTypes: Record<string, number>;
   boundary: SourceCursor;
@@ -195,6 +198,7 @@ export async function captureCodexHistory(
     records: 0,
     items: 0,
     omittedInternalRecords: 0,
+    artifacts: { available: 0, unavailable: 0, currentFile: 0 },
     unsupportedItemTypes: {},
     unsupportedRecordTypes: {},
     boundary: manifest.boundary,
@@ -252,7 +256,7 @@ export async function captureCodexHistory(
           for (const part of z
             .array(z.object({ type: z.string() }))
             .parse(item.content))
-            if (part.type !== "text") {
+            if (!["text", "local_image", "localImage"].includes(part.type)) {
               const type = `userMessage/content/${part.type}`;
               report.unsupportedItemTypes[type] =
                 (report.unsupportedItemTypes[type] ?? 0) + 1;
@@ -268,6 +272,7 @@ export async function captureCodexHistory(
             "contextCompaction",
             "subAgentActivity",
             "collabAgentToolCall",
+            "imageView",
           ].includes(String(item.type))
         )
           report.unsupportedItemTypes[String(item.type)] =
@@ -388,5 +393,6 @@ export async function captureCodexHistory(
     ...(signal ? { signal } : {}),
   }))
     void _;
+  report.artifacts = { ...capture.artifactReport };
   return report;
 }

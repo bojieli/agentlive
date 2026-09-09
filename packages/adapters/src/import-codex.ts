@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, resolve, join } from "node:path";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { PublisherJournal, PublisherNetwork } from "@agentlive/publisher";
@@ -8,7 +8,10 @@ import { request, delay } from "@agentlive/client/transport";
 import { canonicalJson, cursorSchema } from "@agentlive/protocol";
 import { CodexCapture } from "./codex.js";
 import { inspectCodexHistory, captureCodexHistory } from "./codex-history.js";
+import { localArtifactResolver } from "./local-artifacts.js";
 export interface CodexImportOptions {
+  artifactRoots?: readonly string[];
+  artifactBaseDirectory?: string;
   sourcePath: string;
   publisherRoot: string;
   serverOrigin: string;
@@ -26,10 +29,22 @@ export async function importCodexRecording(options: CodexImportOptions) {
     agent: "codex",
     nativeSessionId: source.nativeSessionId,
   });
+  let artifacts: Awaited<ReturnType<typeof localArtifactResolver>> | undefined;
   try {
+    const artifactBaseDirectory = resolve(
+      options.artifactBaseDirectory ?? dirname(options.sourcePath),
+    );
+    const artifactRoots = (options.artifactRoots ?? [artifactBaseDirectory])
+      .map((root) => resolve(root))
+      .sort();
     const identity = {
       version: 1,
-      converterVersion: "codex-history-1",
+      converterVersion: "codex-history-2",
+      artifactBaseDirectory,
+      artifactRoots,
+      filterFingerprint: createHash("sha256")
+        .update(canonicalJson([...new Set(options.secrets ?? [])].sort()))
+        .digest("hex"),
       sourcePrefix: source.boundary.prefixHash,
       sourceBytes: source.boundary.offset,
       nativeSessionId: source.nativeSessionId,
@@ -58,6 +73,20 @@ export async function importCodexRecording(options: CodexImportOptions) {
       },
     });
     await network.ensureRemote(options.signal);
+    artifacts = await localArtifactResolver({
+      directory: join(journal.directory, "artifacts"),
+      roots: artifactRoots,
+      baseDirectory: artifactBaseDirectory,
+      secrets: [
+        ...(options.secrets ?? []),
+        options.ownerCredential,
+        journal.identity.writeSecret,
+      ],
+      serverOrigin: journal.identity.serverOrigin,
+      streamId: journal.identity.streamId!,
+      writeSecret: journal.identity.writeSecret,
+      signal: options.signal,
+    });
     const capture = new CodexCapture(
       journal,
       [
@@ -66,6 +95,7 @@ export async function importCodexRecording(options: CodexImportOptions) {
         journal.identity.writeSecret,
       ],
       source.createdAt,
+      artifacts.resolveArtifact,
     );
     const report = await captureCodexHistory(
       options.sourcePath,
@@ -199,6 +229,10 @@ export async function importCodexRecording(options: CodexImportOptions) {
       report,
     };
   } finally {
-    await journal.close();
+    try {
+      await artifacts?.close();
+    } finally {
+      await journal.close();
+    }
   }
 }

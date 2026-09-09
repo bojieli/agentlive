@@ -1,5 +1,9 @@
 export { StdioRpc, type StdioOptions, type RpcNotification } from "./stdio.js";
-export { CodexCapture, type CodexCaptureSink } from "./codex.js";
+export {
+  CodexCapture,
+  type CodexCaptureSink,
+  type CodexArtifactResolver,
+} from "./codex.js";
 export {
   readJsonlSource,
   type SourceCursor,
@@ -17,3 +21,5 @@ export {
   importCodexRecording,
   type CodexImportOptions,
 } from "./import-codex.js";
+
+export { localArtifactResolver } from "./local-artifacts.js";

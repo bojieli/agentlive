@@ -307,3 +307,63 @@ it("imports retained legacy user messages from aborted turns without completed-i
     "Retained interrupted request",
   );
 });
+it("imports local images, resolves message references, and preserves bytes and missing outcomes on retry", async () => {
+  const { root, server, options } = await setup();
+  const image = join(root, "image.png"),
+    missing = join(root, "missing.png");
+  const bytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  await writeFile(image, bytes);
+  const items = [
+    { type: "ImageView", id: "view_image", path: image },
+    { type: "ImageView", id: "view_missing", path: missing },
+    {
+      type: "UserMessage",
+      id: "user_image",
+      content: [{ type: "local_image", path: image }],
+    },
+  ];
+  await writeFile(
+    options.sourcePath,
+    [
+      ...rows,
+      ...items.map((item) => ({
+        type: "event_msg",
+        timestamp: "2026-09-01T00:00:04.000Z",
+        payload: { type: "item_completed", item },
+      })),
+    ]
+      .map((row) => JSON.stringify(row))
+      .join("\n") + "\n",
+  );
+  const result = await importCodexRecording(options);
+  const session = await server.store.get(result.streamId);
+  let state = initialState();
+  const available = [],
+    unavailable = [],
+    references = [];
+  for await (const event of session.history(0, session.boundary.sequence)) {
+    state = apply(state, event);
+    if (event.content.kind === "attachment.available")
+      available.push(event.content.payload.attachment);
+    if (event.content.kind === "attachment.unavailable")
+      unavailable.push(event.content);
+    if (event.content.kind === "reference.resolved")
+      references.push(event.content);
+  }
+  expect(available).toHaveLength(2);
+  expect(unavailable).toHaveLength(1);
+  expect(references).toHaveLength(1);
+  expect(available.every((item) => item.provenance === "current-file")).toBe(
+    true,
+  );
+  const response = await fetch(
+    `${server.url}/api/v1/streams/${result.streamId}/attachments/${available[0]!.hash}`,
+  );
+  expect(response.status).toBe(200);
+  expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+  const before = session.boundary.sequence;
+  await rm(image);
+  await writeFile(missing, bytes);
+  await importCodexRecording(options);
+  expect(session.boundary.sequence).toBe(before);
+});

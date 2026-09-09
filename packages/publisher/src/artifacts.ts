@@ -272,11 +272,14 @@ export class ArtifactSpool {
         );
         version = Math.max(version, previous.attachment.version + 1);
       }
+      const filenameFilter = new StreamingRedactor(this.secrets);
+      const filename =
+        filenameFilter.push(basename(path)) + filenameFilter.finish();
       const attachment = attachmentSchema.parse({
         artifactId: input.artifactId,
         version,
         ...descriptor,
-        filename: basename(path),
+        filename,
         mediaType: input.mediaType,
         capturedAt: new Date().toISOString(),
         sourceHash,

@@ -2,7 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { z } from "zod";
 import { canonicalJson, type EventContent } from "@agentlive/protocol";
-import { PublisherJournal, StreamingRedactor } from "@agentlive/publisher";
+import {
+  PublisherJournal,
+  StreamingRedactor,
+  type CapturedAttachment,
+} from "@agentlive/publisher";
 import { chunkContent } from "./chunks.js";
 import type { RpcNotification } from "./stdio.js";
 const id = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -19,7 +23,14 @@ export type CodexCaptureSink = Pick<
   PublisherJournal,
   "identity" | "capture" | "capturedThrough"
 >;
+export type CodexArtifactResolver = (request: {
+  artifactId: string;
+  sourceKey: string;
+  path: string;
+  historical: boolean;
+}) => Promise<{ attachment: CapturedAttachment } | { reason: string }>;
 export class CodexCapture {
+  readonly artifactReport = { available: 0, unavailable: 0, currentFile: 0 };
   private readonly segment = randomUUID();
   private readonly started = performance.now();
   private sequence = 0;
@@ -32,6 +43,7 @@ export class CodexCapture {
     private readonly journal: CodexCaptureSink,
     secrets: readonly string[] = [],
     private readonly historyAnchor?: string,
+    private readonly resolveArtifact?: CodexArtifactResolver,
   ) {
     if (journal.identity.nativeAgent !== "codex")
       throw new Error("Codex capture requires a Codex journal");
@@ -249,6 +261,63 @@ export class CodexCapture {
         "reconstructed",
       );
   }
+  private async artifact(
+    key: string,
+    artifactId: string,
+    path: string | undefined,
+    messageId: string | undefined,
+    fidelity: "block" | "reconstructed",
+  ) {
+    await this.emit(
+      key + "/pending",
+      [
+        {
+          kind: "attachment.pending",
+          payload: { artifactId, filename: "image" },
+        },
+      ],
+      fidelity,
+    );
+    const result =
+      path && this.resolveArtifact
+        ? await this.resolveArtifact({
+            artifactId,
+            sourceKey: key,
+            path,
+            historical: this.historicalTime !== undefined,
+          })
+        : { reason: "Native content requires a supported artifact resolver" };
+    if ("attachment" in result) {
+      this.artifactReport.available++;
+      if (result.attachment.provenance === "current-file")
+        this.artifactReport.currentFile++;
+    } else this.artifactReport.unavailable++;
+    const content: EventContent[] =
+      "attachment" in result
+        ? [
+            {
+              kind: "attachment.available",
+              payload: { attachment: result.attachment },
+            },
+          ]
+        : [
+            {
+              kind: "attachment.unavailable",
+              payload: { artifactId, reason: this.filter(result.reason) },
+            },
+          ];
+    if ("attachment" in result && messageId && path)
+      content.push({
+        kind: "reference.resolved",
+        payload: {
+          messageId,
+          sourceReference: this.filter(path),
+          artifactId,
+          version: result.attachment.version,
+        },
+      });
+    await this.emit(key + "/resolved", content, fidelity);
+  }
   private async item(
     raw: unknown,
     completed: boolean,
@@ -291,36 +360,22 @@ export class CodexCapture {
                 .join("\n");
         if (item.type === "userMessage") {
           const parts = z
-            .array(z.object({ type: z.string() }))
+            .array(z.object({ type: z.string() }).passthrough())
             .parse(item.content);
-          for (let index = 0; index < parts.length; index++)
-            if (parts[index]!.type !== "text") {
-              const artifactId = id(`${item.id}/content/${index}`);
-              await this.emit(
-                `${key}/content/${index}/unavailable`,
-                [
-                  {
-                    kind: "attachment.pending",
-                    payload: {
-                      artifactId,
-                      filename: parts[index]!.type.includes("image")
-                        ? "image"
-                        : "attachment",
-                    },
-                  },
-                  {
-                    kind: "attachment.unavailable",
-                    payload: {
-                      artifactId,
-                      reason: this.filter(
-                        `Native ${parts[index]!.type} content requires artifact resolution`,
-                      ),
-                    },
-                  },
-                ],
-                fidelity,
-              );
-            }
+          for (let index = 0; index < parts.length; index++) {
+            const part = parts[index]!;
+            if (part.type === "text") continue;
+            await this.artifact(
+              `${key}/content/${index}`,
+              id(`${item.id}/content/${index}`),
+              (part.type === "local_image" || part.type === "localImage") &&
+                typeof part.path === "string"
+                ? part.path
+                : undefined,
+              itemId,
+              fidelity,
+            );
+          }
         }
         this.filters.delete(item.id);
         await this.emit(
@@ -335,6 +390,15 @@ export class CodexCapture {
           fidelity,
         );
       }
+    } else if (item.type === "imageView") {
+      if (completed)
+        await this.artifact(
+          key + "/image",
+          itemId,
+          typeof item.path === "string" ? item.path : undefined,
+          undefined,
+          fidelity,
+        );
     } else if (
       item.type === "commandExecution" ||
       item.type === "mcpToolCall"

@@ -36,6 +36,9 @@ try {
     .map(([, value]) => value);
   const options = {
     sourcePath,
+    ...(process.argv.length > 3
+      ? { artifactRoots: process.argv.slice(3).map((value) => resolve(value)) }
+      : {}),
     publisherRoot: join(root, "publisher"),
     serverOrigin: server.url,
     ownerCredential,
@@ -49,6 +52,23 @@ try {
   let state = initialState();
   for await (const event of session.history(0, session.boundary.sequence))
     state = apply(state, event);
+  let verifiedAttachments = 0;
+  for (const artifact of state.artifacts.values()) {
+    for (const attachment of artifact.versions.values()) {
+      const response = await fetch(
+        `${server.url}/api/v1/streams/${result.streamId}/attachments/${attachment.hash}`,
+        { headers: { authorization: `Bearer ${ownerCredential}` } },
+      );
+      if (!response.ok) throw new Error("attachment_download_failed");
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (
+        bytes.length !== attachment.byteSize ||
+        createHash("sha256").update(bytes).digest("hex") !== attachment.hash
+      )
+        throw new Error("attachment_download_mismatch");
+      verifiedAttachments++;
+    }
+  }
   const before = session.boundary.sequence;
   const retried = await importCodexRecording(options);
   if (
@@ -73,6 +93,8 @@ try {
     fileChanges: state.changes.size,
     gaps: state.gaps.length,
     unsupportedItemTypes: result.report.unsupportedItemTypes,
+    artifacts: result.report.artifacts,
+    verifiedAttachments,
     retryStable: true,
     privateAccessEnforced: true,
   };
