@@ -1,0 +1,275 @@
+import { afterEach, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { startServer } from "../../packages/server/src/http.js";
+import {
+  SubscriberClient,
+  type SubscriberOptions,
+} from "../../packages/client/src/index.js";
+import type {
+  PublishedEvent,
+  StoredEvent,
+} from "../../packages/protocol/src/index.js";
+const roots: string[] = [];
+const servers: Awaited<ReturnType<typeof startServer>>[] = [];
+const runs: { abort: AbortController; done: Promise<void> }[] = [];
+afterEach(async () => {
+  for (const run of runs) run.abort.abort();
+  await Promise.all(runs.splice(0).map((x) => x.done.catch(() => {})));
+  for (const server of servers.splice(0)) await server.close();
+  for (const root of roots.splice(0))
+    await rm(root, { recursive: true, force: true });
+});
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+async function setup(visibility: "public" | "private" = "public") {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-subscriber-test-"));
+  roots.push(root);
+  const server = await startServer({
+    directory: root,
+    ownerSecret: "b".repeat(64),
+    port: 0,
+  });
+  servers.push(server);
+  const session = await server.store.create({
+    ownerId: "local",
+    requestId: "req1",
+    requestedAt: new Date().toISOString(),
+    publisherId: "pub1",
+    producerEpoch: "epoch1",
+    writeSecret: "a".repeat(64),
+    title: "Subscriber integration",
+    visibility,
+  });
+  const { lease } = await session.resume("a".repeat(64), {
+    publisherId: "pub1",
+    producerEpoch: "epoch1",
+    attempt: 1,
+    revision: session.info.revision,
+  });
+  let producerSeq = 0;
+  const publish = async (count: number) => {
+    const events: PublishedEvent[] = Array.from({ length: count }, () => ({
+      protocolVersion: 1,
+      streamId: session.info.id,
+      producerEpoch: "epoch1",
+      producerSeq: ++producerSeq,
+      observedAt: new Date().toISOString(),
+      clockSegmentId: "clock1",
+      elapsedMs: producerSeq,
+      fidelity: "delta",
+      source: { agent: "synthetic", sessionId: "native1" },
+      content: {
+        kind: "message.started",
+        payload: { messageId: `m${producerSeq}`, role: "assistant" },
+      },
+    }));
+    await session.append(lease, events);
+  };
+  const options = {
+    serverOrigin: server.url,
+    cursor: {
+      streamId: session.info.id,
+      revision: session.info.revision,
+      serverSeq: 0,
+    },
+    retryMinMs: 5,
+    retryMaxMs: 10,
+  };
+  return { root, server, session, publish, options };
+}
+function run(options: SubscriberOptions) {
+  const client = new SubscriberClient(options);
+  const abort = new AbortController();
+  const done = client.run(abort.signal);
+  void done.catch(() => {});
+  runs.push({ abort, done });
+  return { client, abort, done };
+}
+it("catches up paged history and continues live without duplicating committed events", async () => {
+  const { publish, options } = await setup();
+  await publish(7);
+  const seen: number[] = [];
+  const first = deferred(),
+    finished = deferred();
+  const { client, abort, done } = run({
+    ...options,
+    pageSize: 2,
+    commit: async (events, cursor) => {
+      seen.push(...events.map((x) => x.serverSeq));
+      if (cursor.serverSeq === 8) first.resolve();
+      if (cursor.serverSeq === 11) finished.resolve();
+    },
+  });
+  await first.promise;
+  await publish(3);
+  await finished.promise;
+  abort.abort();
+  await done;
+  expect(seen).toEqual(Array.from({ length: 11 }, (_, i) => i + 1));
+  expect(client.cursor.serverSeq).toBe(11);
+});
+it("bounds live memory while a consumer is slow and recovers evicted events from history", async () => {
+  const { publish, options } = await setup();
+  const entered = deferred(),
+    release = deferred(),
+    finished = deferred();
+  const seen: number[] = [];
+  let reads = 0;
+  const fetcher: typeof fetch = async (input, init) => {
+    if (String(input).includes("/events?")) reads++;
+    return fetch(input, init);
+  };
+  const { abort, done } = run({
+    ...options,
+    maxLiveBytes: 1,
+    pageSize: 3,
+    fetch: fetcher,
+    commit: async (events, cursor) => {
+      if (cursor.serverSeq === 1) {
+        entered.resolve();
+        await release.promise;
+      }
+      seen.push(...events.map((x) => x.serverSeq));
+      if (cursor.serverSeq === 21) finished.resolve();
+    },
+  });
+  await entered.promise;
+  await publish(20);
+  release.resolve();
+  await finished.promise;
+  abort.abort();
+  await done;
+  expect(seen).toEqual(Array.from({ length: 21 }, (_, i) => i + 1));
+  expect(reads).toBeGreaterThan(2);
+});
+it("reconnects after a dropped socket and resumes from the committed cursor", async () => {
+  const { publish, options } = await setup();
+  const sockets: WebSocket[] = [];
+  const caught = deferred(),
+    finished = deferred();
+  const seen: number[] = [];
+  const { abort, done } = run({
+    ...options,
+    webSocket: (url) => {
+      const ws = new WebSocket(url);
+      sockets.push(ws);
+      return ws;
+    },
+    commit: async (events, cursor) => {
+      seen.push(...events.map((x) => x.serverSeq));
+      if (cursor.serverSeq === 1) caught.resolve();
+      if (cursor.serverSeq === 6) finished.resolve();
+    },
+  });
+  await caught.promise;
+  sockets[0]!.close();
+  await publish(5);
+  await finished.promise;
+  abort.abort();
+  await done;
+  expect(sockets.length).toBeGreaterThan(1);
+  expect(seen).toEqual([1, 2, 3, 4, 5, 6]);
+});
+it("does not advance or automatically retry a failed state transaction", async () => {
+  const { options } = await setup();
+  const { client, done } = run({
+    ...options,
+    commit: async () => {
+      throw new Error("disk full");
+    },
+  });
+  await expect(done).rejects.toThrow("Subscriber state commit failed");
+  expect(client.cursor.serverSeq).toBe(0);
+});
+it("fails explicitly when cached state has the wrong revision or exceeds retained history", async () => {
+  const { options } = await setup();
+  const wrong = run({
+    ...options,
+    cursor: { ...options.cursor, revision: "different" },
+    commit: async () => {
+      throw new Error("must not commit");
+    },
+  });
+  await expect(wrong.done).rejects.toMatchObject({ code: "revision_changed" });
+  const ahead = run({
+    ...options,
+    cursor: { ...options.cursor, serverSeq: 999 },
+    commit: async () => {
+      throw new Error("must not commit");
+    },
+  });
+  await expect(ahead.done).rejects.toMatchObject({ code: "cursor_invalid" });
+});
+it("joins private recordings with a viewing ticket and leaves credentials out of socket URLs", async () => {
+  const { options } = await setup("private");
+  const finished = deferred();
+  let socketUrl = "";
+  const { abort, done } = run({
+    ...options,
+    credential: "b".repeat(64),
+    webSocket: (url) => {
+      socketUrl = url;
+      return new WebSocket(url);
+    },
+    commit: async () => {
+      finished.resolve();
+    },
+  });
+  await finished.promise;
+  abort.abort();
+  await done;
+  expect(socketUrl).toContain("?ticket=");
+  expect(socketUrl).not.toContain("b".repeat(64));
+  const denied = run({
+    ...options,
+    commit: async () => {
+      throw new Error("must not commit");
+    },
+  });
+  await expect(denied.done).rejects.toMatchObject({ code: "forbidden" });
+});
+it("restores an existing receipt cursor without replaying already committed state", async () => {
+  const { options, publish } = await setup();
+  await publish(4);
+  const finished = deferred();
+  const seen: number[] = [];
+  const { abort, done } = run({
+    ...options,
+    cursor: { ...options.cursor, serverSeq: 3 },
+    commit: async (events, cursor) => {
+      seen.push(...events.map((x) => x.serverSeq));
+      if (cursor.serverSeq === 5) finished.resolve();
+    },
+  });
+  await finished.promise;
+  abort.abort();
+  await done;
+  expect(seen).toEqual([4, 5]);
+});
+it("rejects a truncated history page without advancing the cursor", async () => {
+  const { options } = await setup();
+  const fetcher: typeof fetch = async (input, init) => {
+    const response = await fetch(input, init);
+    if (String(input).includes("/events?"))
+      return new Response((await response.text()).trimEnd(), {
+        headers: response.headers,
+      });
+    return response;
+  };
+  const { client, done } = run({
+    ...options,
+    fetch: fetcher,
+    commit: async () => {
+      throw new Error("must not commit");
+    },
+  });
+  await expect(done).rejects.toMatchObject({ code: "invalid_request" });
+  expect(client.cursor.serverSeq).toBe(0);
+});

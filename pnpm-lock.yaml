@@ -145,6 +145,15 @@ importers:
         specifier: 5.0.0
         version: 5.0.0(@types/node@26.5.0)(vite@8.2.2(@types/node@26.5.0))
 
+  packages/client:
+    dependencies:
+      "@agentlive/protocol":
+        specifier: workspace:*
+        version: link:../protocol
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4
+
   packages/playback:
     dependencies:
       "@agentlive/protocol":
@@ -159,12 +168,25 @@ importers:
 
   packages/publisher:
     dependencies:
+      "@agentlive/client":
+        specifier: workspace:*
+        version: link:../client
       "@agentlive/protocol":
         specifier: workspace:*
         version: link:../protocol
       "@agentlive/storage":
         specifier: workspace:*
         version: link:../storage
+      ws:
+        specifier: 8.21.3
+        version: 8.21.3
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4
+    devDependencies:
+      "@types/ws":
+        specifier: 8.18.1
+        version: 8.18.1
 
   packages/server:
     dependencies:
