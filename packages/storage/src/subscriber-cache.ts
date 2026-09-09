@@ -13,6 +13,8 @@ import { JsonlLog } from "./log.js";
 /** The durable event prefix is the receipt cursor; no separately updated cursor file. */
 export class SubscriberCache {
   private tail: Promise<unknown> = Promise.resolve();
+  private closed = false;
+  private readonly readers = new Set<() => void>();
   private constructor(
     private readonly log: JsonlLog<StoredEvent>,
     private readonly lock: FileLock,
@@ -101,13 +103,46 @@ export class SubscriberCache {
   get cursor() {
     return { ...this.binding, serverSeq: this.log.boundary.sequence };
   }
-  async *events() {
-    for await (const entry of this.log.read()) yield entry.value;
+  async *events(after = 0, through = this.cursor.serverSeq) {
+    for await (const entry of this.log.read(after, through)) yield entry.value;
+  }
+  /** Wait for a durable prefix beyond the presentation cursor, without polling. */
+  async waitForEvents(after: number, signal: AbortSignal): Promise<void> {
+    if (
+      !Number.isSafeInteger(after) ||
+      after < 0 ||
+      after > this.cursor.serverSeq
+    )
+      throw new RangeError("Invalid subscriber presentation cursor");
+    while (true) {
+      signal.throwIfAborted();
+      if (this.closed) throw new Error("Subscriber cache is closed");
+      if (this.cursor.serverSeq > after) return;
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          this.readers.delete(wake);
+          signal.removeEventListener("abort", abort);
+        };
+        const wake = () => {
+          cleanup();
+          resolve();
+        };
+        const abort = () => {
+          cleanup();
+          reject(signal.reason);
+        };
+        this.readers.add(wake);
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+      });
+    }
   }
   commit(
     events: readonly StoredEvent[],
     cursor: { streamId: string; revision: string; serverSeq: number },
   ): Promise<void> {
+    if (this.closed)
+      return Promise.reject(new Error("Subscriber cache is closed"));
     const copied = events.map((event) => storedEventSchema.parse(event));
     const receipt = { ...cursor };
     const work = this.tail.then(async () => {
@@ -130,11 +165,14 @@ export class SubscriberCache {
       if (this.log.boundary.byteOffset + added > this.maxBytes)
         throw new Error("Subscriber cache storage limit reached");
       await this.log.append(copied);
+      for (const wake of [...this.readers]) wake();
     });
     this.tail = work.catch(() => {});
     return work;
   }
   async close() {
+    this.closed = true;
+    for (const wake of [...this.readers]) wake();
     await this.tail;
     try {
       await this.log.close();

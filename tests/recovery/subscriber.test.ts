@@ -365,7 +365,7 @@ it("recovers only complete cache records and refuses rebinding orphaned cached h
   );
 });
 
-it("watch renders cached history before attempting an offline reconnect", async () => {
+it("watch renders cached history independently during an offline reconnect", async () => {
   const { watchRecording } = await import("../../packages/cli/src/watch.js");
   const { root, server, session, options } = await setup("private");
   let output = "";
@@ -378,9 +378,7 @@ it("watch renders cached history before attempting an offline reconnect", async 
     signal: controller.signal,
     write: async (text) => {
       output += text;
-    },
-    onStatus: (status) => {
-      if (status === "live") controller.abort();
+      controller.abort();
     },
   });
   expect(output).toContain("Subscriber integration");
@@ -395,9 +393,7 @@ it("watch renders cached history before attempting an offline reconnect", async 
     signal: offline.signal,
     write: async (text) => {
       output += text;
-    },
-    onStatus: (status) => {
-      if (status === "connecting") offline.abort();
+      offline.abort();
     },
   });
   expect(output).toBe(baseline);
@@ -419,7 +415,7 @@ it("retains committed events if terminal output fails and releases the cache for
         throw new Error("Output disconnected");
       },
     }),
-  ).rejects.toThrow("commit failed");
+  ).rejects.toThrow("Output disconnected");
   const cache = await SubscriberCache.open(cacheRoot, {
     serverOrigin: server.url,
     streamId: session.info.id,
@@ -453,6 +449,93 @@ it("enforces cache storage limits without advancing receipt", async () => {
     ).rejects.toThrow("storage limit");
     expect(cache.cursor.serverSeq).toBe(0);
   } finally {
+    await cache.close();
+  }
+});
+
+it("continues durable receipt while presentation is paused and replays its backlog in order", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { PlaybackPacer } =
+    await import("../../packages/playback/src/index.js");
+  const { root, server, session, publish } = await setup();
+  const gate = new PlaybackPacer();
+  gate.setPaused(true);
+  const abort = new AbortController();
+  let receipt = 0;
+  const presented: number[] = [];
+  const done = watchRecording({
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    cacheRoot: join(root, "paused"),
+    signal: abort.signal,
+    presentation: gate,
+    write: async () => {},
+    onReceipt: (seq) => {
+      receipt = seq;
+    },
+    onPresented: (seq) => {
+      presented.push(seq);
+    },
+  });
+  runs.push({ abort, done });
+  await expect.poll(() => receipt).toBe(session.boundary.sequence);
+  await publish(20);
+  await expect.poll(() => receipt).toBe(session.boundary.sequence);
+  expect(presented).toEqual([]);
+  gate.setPaused(false);
+  await expect.poll(() => presented.length).toBe(receipt);
+  expect(presented).toEqual(
+    Array.from({ length: receipt }, (_, index) => index + 1),
+  );
+  abort.abort();
+  await done;
+});
+it("keeps receiving behind a stalled output sink and cancels without waiting for that sink", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { root, server, session, publish } = await setup();
+  const abort = new AbortController();
+  const blocked = deferred();
+  const entered = deferred();
+  let receipt = 0;
+  const cacheRoot = join(root, "stalled");
+  const done = watchRecording({
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    cacheRoot,
+    signal: abort.signal,
+    write: async () => {
+      entered.resolve();
+      await blocked.promise;
+    },
+    onReceipt: (seq) => {
+      receipt = seq;
+    },
+  });
+  runs.push({ abort, done });
+  await entered.promise;
+  await publish(20);
+  await expect.poll(() => receipt).toBe(session.boundary.sequence);
+  abort.abort();
+  await done;
+  const cache = await SubscriberCache.open(cacheRoot, {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    initialize: async () => {
+      throw new Error("Cache should exist");
+    },
+  });
+  try {
+    expect(cache.cursor.serverSeq).toBe(receipt);
+    const suffix: number[] = [];
+    for await (const event of cache.events(5, receipt))
+      suffix.push(event.serverSeq);
+    expect(suffix).toEqual(
+      Array.from({ length: receipt - 5 }, (_, index) => index + 6),
+    );
+  } finally {
+    blocked.resolve();
     await cache.close();
   }
 });

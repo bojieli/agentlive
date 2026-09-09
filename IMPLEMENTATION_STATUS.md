@@ -181,3 +181,11 @@ Validation: 142 tests across 24 files pass, including clock-controlled timing te
 Validation: 143 tests across 24 files pass. The local PTY probe starts halfway between two messages, verifies only the earlier message appears in reconstructed state, then exercises pause/resume, accelerated continuation, quit, completion, and terminal restoration. Full local-corpus validation now additionally hashes and checks terminal snapshots without persisting rendered transcript text.
 
 The updated corpus pass verified both event rendering and reconstructed-state rendering for 512 Codex files, 1,556 Claude files, 460 Kimi files, and 12 discovered OpenCode exports. The same 35 Claude files still fail standalone identity/timing preflight; explicit unsupported gaps and unavailable artifacts remain. Snapshot output was hashed and discarded.
+
+## Independent watch receipt checkpoint — 2026-09-09
+
+The terminal watcher now runs receipt and presentation independently against the durable subscriber cache. Cached range reads and append notifications avoid an in-memory backlog and polling. Interactive watch accepts space to pause/resume presentation and q to quit; receipt continues while paused. Programmatic receipt/presentation callbacks expose separate progress. Cancellation releases the cache even if an asynchronous output sink remains stalled.
+
+Validation: 145 tests pass, including durable receipt while paused, ordered presentation catch-up, receipt behind a stalled sink, cancellation with that sink unresolved, retained events after output failure, and offline cached rendering. This separates asynchronous work; blocking synchronous work still shares Node's event loop. Paged state and richer live playback modes remain unfinished.
+
+The installed OpenCode probe passed three native turns with native-server restart, same-session continuation, detached-history recovery, and duplicate-free publisher restart. Its paused viewer durably received all 24 stored events before ordered presentation caught up; one downloaded attachment was verified. The PTY watch probe (`node scripts/probe-interactive-replay.mjs --watch`) passed space/q input and terminal restoration. It reports live speed/seek controls as absent.

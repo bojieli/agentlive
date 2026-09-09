@@ -8,7 +8,12 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { publishOpenCodeRecording } from "../packages/adapters/dist/index.js";
 import { startServer } from "../packages/server/dist/index.js";
-import { initialState, apply } from "../packages/playback/dist/index.js";
+import {
+  initialState,
+  apply,
+  PlaybackPacer,
+} from "../packages/playback/dist/index.js";
+import { watchRecording } from "../packages/cli/dist/watch.js";
 const root = await realpath(
   await mkdtemp(join(tmpdir(), "agentlive-opencode-live-")),
 );
@@ -245,9 +250,43 @@ try {
     }
   if (!verifiedAttachments)
     throw new Error("Native file input was not captured as an attachment");
+  const gate = new PlaybackPacer();
+  gate.setPaused(true);
+  const watched = new AbortController();
+  let received = 0;
+  let presented = 0;
+  await watchRecording({
+    serverOrigin: target.url,
+    streamId,
+    credential: password,
+    cacheRoot: join(root, "subscriber"),
+    signal: AbortSignal.any([signal, watched.signal]),
+    presentation: gate,
+    write: async () => {},
+    onReceipt: (sequence) => {
+      received = sequence;
+      if (presented !== 0)
+        throw new Error(
+          "Paused native viewer advanced before receipt finished",
+        );
+      if (sequence === final) gate.setPaused(false);
+    },
+    onPresented: (sequence) => {
+      if (sequence !== presented + 1)
+        throw new Error("Native viewer presentation sequence changed");
+      presented = sequence;
+      if (sequence === final) watched.abort();
+    },
+  });
+  if (received !== final || presented !== final)
+    throw new Error(
+      "Native viewer did not receive and present the complete recording",
+    );
   console.log(
     JSON.stringify({
       success: true,
+      pausedViewerReceipt: true,
+      orderedViewerCatchup: true,
       nativeTurns: 3,
       nativeServerRestart: true,
       sameNativeSession: true,

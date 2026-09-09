@@ -47,6 +47,7 @@ try {
   const python = String.raw`
 import os, pty, termios, subprocess, sys, select, time, json
 command = sys.argv[1:]
+watching = "watch" in command
 for quit_early in (True, False):
     master, slave = pty.openpty()
     original = termios.tcgetattr(slave)
@@ -62,8 +63,9 @@ for quit_early in (True, False):
         assert marker in output, "Expected replay marker missing"
     try:
         read_until(b"FIRST_PTY_MESSAGE")
-        assert b"[30.000s] Playback state" in output, "Seek boundary missing"
-        assert b"SECOND_PTY_MESSAGE" not in output, "Future content leaked into seek state"
+        if not watching:
+            assert b"[30.000s] Playback state" in output, "Seek boundary missing"
+            assert b"SECOND_PTY_MESSAGE" not in output, "Future content leaked into seek state"
         assert not termios.tcgetattr(slave)[3] & termios.ICANON, "Raw mode not active"
         os.write(master, b" ")
         time.sleep(0.1)
@@ -71,8 +73,10 @@ for quit_early in (True, False):
         if quit_early:
             os.write(master, b"q")
         else:
-            os.write(master, b"++++++++++ ")
+            os.write(master, b" " if watching else b"++++++++++ ")
             read_until(b"SECOND_PTY_MESSAGE")
+            if watching:
+                os.write(master, b"q")
         deadline = time.monotonic() + 10
         while child.poll() is None and time.monotonic() < deadline:
             ready, _, _ = select.select([master], [], [], 0.05)
@@ -87,7 +91,7 @@ for quit_early in (True, False):
             child.wait()
         os.close(master)
         os.close(slave)
-print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "quit": True, "terminalRestored": True, "seekState": True}))
+print(json.dumps({"success": True, "pauseResume": True, "speedChange": not watching, "quit": True, "terminalRestored": True, "seekState": not watching, "watchControls": watching}))
 `;
   const result = await promisify(execFile)(
     "python3",
@@ -96,14 +100,15 @@ print(json.dumps({"success": True, "pauseResume": True, "speedChange": True, "qu
       python,
       process.execPath,
       resolve("packages/cli/dist/main.js"),
-      "replay",
+      process.argv.includes("--watch") ? "watch" : "replay",
       "--stream",
       imported.streamId,
       "--server",
       server.url,
       "--interactive",
-      "--from-ms",
-      "30000",
+      "--state-dir",
+      root,
+      ...(process.argv.includes("--watch") ? [] : ["--from-ms", "30000"]),
     ],
     {
       env: { ...process.env, AGENTLIVE_OWNER_SECRET: secret },

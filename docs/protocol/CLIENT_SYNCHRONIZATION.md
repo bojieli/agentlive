@@ -51,3 +51,9 @@ The current reference reducer bounds unfinished replacement text to 32 Ã— 1024 Ã
 `object.visibility` addresses an existing message, tool, or attachment by object type and ID. Setting visibility false preserves its history and attachment versions while excluding it from current pending-work presentation. Setting it true restores the same object. Attachment updates preserve visibility. Legacy events without visibility fields remain visible by default.
 
 OpenCode capture records these transitions durably and reconstructs missing checkpoint state from its journal during upgrade. Source absence is distinct from session ending. Native revert metadata is not yet interpreted; these events currently reflect presence in reconciled snapshots.
+
+## Independent terminal presentation
+
+The terminal watcher advances receipt after subscriber-cache commit, independently of its renderer's applied sequence. Presentation reads a fixed cache range and then waits for a durable append notification. A paused renderer or unresolved asynchronous output write leaves receipt running; resumption consumes the retained prefix in order. No rendered-text backlog is queued in memory.
+
+Cancellation stops both loops and releases the cache lock. A custom output sink receives the cancellation signal; an unresolved sink is not awaited indefinitely during shutdown. Output that already entered an external sink may finish later, and synchronous blocking work still blocks the shared Node event loop. Cache quota exhaustion and renderer memory limits remain explicit errors. A durable receipt is not proof that every event has been semantically rendered; renderer errors preserve the cached evidence for recovery.

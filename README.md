@@ -123,7 +123,7 @@ npx --yes pnpm@12.3.4 agentlive watch --stream <recording-id>
 
 Use `--anonymous` for recordings that permit anonymous reads, or the existing owner credential options for private recordings. The local subscriber cache stores checksummed JSONL under `<state-dir>/subscriber`; it contains received recording content, but does not store the connection credential. Restarting displays the cached prefix and then reconnects from its durable receipt cursor. Cached history can render while the server is offline. Reconnection never silently switches to a different recording revision.
 
-This is the terminal reference viewer: completed messages, tools, and supported state updates render as they arrive. Token-by-token presentation, interactive playback controls, and paged state remain unfinished. It currently enforces a 64 MiB event budget for in-memory playback and a separate 512 MiB durable cache limit. Cache reconstruction replays history from the beginning; storage pagination and snapshots remain in the plan.
+This is the terminal reference viewer: completed messages, tools, and supported state updates render as they arrive. Use `--interactive` to pause/resume presentation with space or quit with q. Receipt continues into the durable cache while presentation is paused or awaiting an asynchronous output sink. On resume, presentation reads the cached backlog in order. Token-by-token presentation, live timeline seeking/speed controls, and paged state remain unfinished. It currently enforces a 64 MiB event budget for in-memory playback and a separate 512 MiB durable cache limit. Cache reconstruction replays history from the beginning; storage pagination and snapshots remain in the plan.
 
 Claude Code uses the same durable publication path:
 
