@@ -339,7 +339,7 @@ export class BrowserPagedSession {
     this.time = this.duration;
     this.changed();
   }
-  seek(time: number, follow = false): Promise<void> {
+  seek(time: number, follow = false, persistSelection = true): Promise<void> {
     if (!Number.isFinite(time) || time < 0)
       throw new RangeError("Invalid playback position");
     this.selection?.abort();
@@ -363,6 +363,8 @@ export class BrowserPagedSession {
           target,
           this.history.bind(this),
           signal,
+          undefined,
+          persistSelection,
         );
         signal.throwIfAborted();
         this.view = view;
@@ -394,7 +396,7 @@ export class BrowserPagedSession {
         this.requestedTime > this.time
       ) {
         const target = this.requestedTime;
-        await this.seek(target);
+        await this.seek(target, false, false);
         if (this.error || this.time < target) break;
       }
     })()

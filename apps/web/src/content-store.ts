@@ -1,3 +1,7 @@
+import {
+  MAX_SEEK_CHECKPOINTS,
+  retainSeekCheckpoint,
+} from "./checkpoint-catalog.js";
 import { PagedReducer, ActivityIndex } from "@agentlive/playback";
 import {
   TextContent,
@@ -296,6 +300,159 @@ export class BrowserContentStore {
       }),
     );
   }
+  private catalog(value: unknown): BrowserCheckpoint[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.length > MAX_SEEK_CHECKPOINTS) bad();
+    const entries = value.map((item) => this.checkpoint(item));
+    for (const [index, entry] of entries.entries()) {
+      const previous = entries[index - 1];
+      if (
+        !entry.activity ||
+        (previous &&
+          (previous.serverSeq >= entry.serverSeq ||
+            previous.timelineMs > entry.timelineMs))
+      )
+        bad();
+    }
+    return entries;
+  }
+  loadCheckpointBefore(
+    time: number,
+    through: number,
+    signal: AbortSignal,
+  ): Promise<BrowserCheckpoint | null> {
+    if (
+      !Number.isFinite(time) ||
+      time < 0 ||
+      !Number.isSafeInteger(through) ||
+      through < 0
+    )
+      return Promise.reject(new RangeError("Invalid seek checkpoint boundary"));
+    return this.run(signal, (active) =>
+      this.transaction("readonly", active, (tx, read, result) => {
+        const meta = tx.objectStore("meta");
+        read(meta.get(`root:${this.scope}`), (raw) => {
+          const head = raw === undefined ? null : this.checkpoint(raw);
+          read(meta.get(`seek:${this.scope}`), (raw) => {
+            const entries = this.catalog(raw);
+            if (
+              entries.length &&
+              (!head ||
+                entries.at(-1)!.serverSeq > head.serverSeq ||
+                entries.at(-1)!.timelineMs > head.timelineMs)
+            )
+              bad();
+            result(
+              entries.findLast(
+                (entry) =>
+                  entry.serverSeq <= through && entry.timelineMs <= time,
+              ) ?? null,
+            );
+          });
+        });
+      }),
+    );
+  }
+  private async validateCheckpoint(
+    next: BrowserCheckpoint,
+    active: AbortSignal,
+  ) {
+    // Use the codec directly inside store admission; public read would re-enter this queue.
+    const reducer = new PagedReducer({
+      read: (ref, offset, length, signal) =>
+        this.codec.read(ref, offset, length, signal),
+      put: async () => {
+        throw new Error("Checkpoint validation is read-only");
+      },
+      append: async () => {
+        throw new Error("Checkpoint validation is read-only");
+      },
+    });
+    const state = await reducer.open(next.ref, this.binding, active);
+    if (
+      state.appliedSeq !== next.serverSeq ||
+      state.timelineMs !== next.timelineMs
+    )
+      bad();
+    if (next.activity) {
+      const index = new ActivityIndex({
+        read: (ref, offset, length, signal) =>
+          this.codec.read(ref, offset, length, signal),
+        put: async () => {
+          throw new Error("Checkpoint validation is read-only");
+        },
+      });
+      const root = await index.open(next.activity, this.binding, active);
+      if (
+        root.appliedSeq !== next.serverSeq ||
+        root.gaps !== (state.maps.gaps?.size ?? 0)
+      )
+        bad();
+    }
+  }
+  /** Cache a reconstructed historical view without moving the receipt head. */
+  saveSeekCheckpoint(
+    input: BrowserCheckpoint,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const next = this.checkpoint(input);
+    if (!next.activity)
+      return Promise.reject(
+        new ProtocolError(
+          "precondition_failed",
+          "Seek checkpoint requires activity order",
+        ),
+      );
+    return this.run(signal, async (active) => {
+      await this.validateCheckpoint(next, active);
+      return this.transaction("readwrite", active, (tx, read, result) => {
+        const meta = tx.objectStore("meta");
+        read(meta.get(`root:${this.scope}`), (raw) => {
+          const head = raw === undefined ? null : this.checkpoint(raw);
+          if (
+            !head ||
+            next.serverSeq > head.serverSeq ||
+            next.timelineMs > head.timelineMs
+          )
+            throw new ProtocolError(
+              "precondition_failed",
+              "Seek checkpoint exceeds receipt",
+            );
+          if (
+            next.serverSeq === head.serverSeq &&
+            canonicalJson(next) !== canonicalJson(head)
+          )
+            throw new ProtocolError(
+              "event_conflict",
+              "Seek checkpoint differs from receipt",
+            );
+          read(meta.get(`seek:${this.scope}`), (raw) => {
+            const entries = this.catalog(raw);
+            const last = entries.at(-1);
+            if (
+              last &&
+              (last.serverSeq > head.serverSeq ||
+                last.timelineMs > head.timelineMs)
+            )
+              bad();
+            const existing = entries.find(
+              (entry) => entry.serverSeq === next.serverSeq,
+            );
+            if (existing && canonicalJson(existing) !== canonicalJson(next))
+              throw new ProtocolError(
+                "event_conflict",
+                "Seek checkpoint differs from saved prefix",
+              );
+            const retained = retainSeekCheckpoint(entries, next, true);
+            // Check order after inserting an older reconstructed prefix.
+            this.catalog(retained);
+            meta.put(retained, `seek:${this.scope}`);
+            result(undefined);
+          });
+        });
+      });
+    });
+  }
   /** Atomically choose a completed reducer root. A stale writer must reopen before retrying. */
   publishCheckpoint(
     expected: BrowserCheckpoint | null,
@@ -305,38 +462,7 @@ export class BrowserContentStore {
     expected = expected === null ? null : this.checkpoint(expected);
     next = this.checkpoint(next);
     return this.run(signal, async (active) => {
-      // Use the codec directly inside store admission; public read would re-enter this queue.
-      const reducer = new PagedReducer({
-        read: (ref, offset, length, signal) =>
-          this.codec.read(ref, offset, length, signal),
-        put: async () => {
-          throw new Error("Checkpoint validation is read-only");
-        },
-        append: async () => {
-          throw new Error("Checkpoint validation is read-only");
-        },
-      });
-      const state = await reducer.open(next.ref, this.binding, active);
-      if (
-        state.appliedSeq !== next.serverSeq ||
-        state.timelineMs !== next.timelineMs
-      )
-        bad();
-      if (next.activity) {
-        const index = new ActivityIndex({
-          read: (ref, offset, length, signal) =>
-            this.codec.read(ref, offset, length, signal),
-          put: async () => {
-            throw new Error("Checkpoint validation is read-only");
-          },
-        });
-        const root = await index.open(next.activity, this.binding, active);
-        if (
-          root.appliedSeq !== next.serverSeq ||
-          root.gaps !== (state.maps.gaps?.size ?? 0)
-        )
-          bad();
-      }
+      await this.validateCheckpoint(next, active);
       return this.transaction("readwrite", active, (tx, read, result) => {
         const meta = tx.objectStore("meta"),
           key = `root:${this.scope}`;
@@ -367,8 +493,30 @@ export class BrowserContentStore {
               "event_conflict",
               "Browser checkpoint cannot move backward or replace a sequence",
             );
-          meta.put(next, key);
-          result(next);
+          if (!next.activity) {
+            meta.put(next, key);
+            result(next);
+            return;
+          }
+          read(meta.get(`seek:${this.scope}`), (raw) => {
+            const entries = this.catalog(raw);
+            const last = entries.at(-1);
+            if (
+              last &&
+              (!current ||
+                last.serverSeq > current.serverSeq ||
+                last.timelineMs > current.timelineMs)
+            )
+              bad();
+            const retained = retainSeekCheckpoint(entries, next);
+            meta.put(next, key);
+            if (
+              retained.length !== entries.length ||
+              retained.at(-1) !== entries.at(-1)
+            )
+              meta.put(retained, `seek:${this.scope}`);
+            result(next);
+          });
         });
       });
     });

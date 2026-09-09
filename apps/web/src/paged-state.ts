@@ -352,6 +352,7 @@ export class BrowserPagedState {
     ) => AsyncIterable<StoredEvent>,
     parent: AbortSignal,
     through = this.root.appliedSeq,
+    persistSelection = false,
   ): Promise<PagedActivityView> {
     if (!Number.isFinite(time) || time < 0)
       return Promise.reject(new RangeError("Invalid playback position"));
@@ -395,6 +396,37 @@ export class BrowserPagedState {
             ? previous.rows
             : initialActivityIndex();
       if (root.appliedSeq < through) {
+        const checkpoint = await this.content.loadCheckpointBefore(
+          time,
+          through,
+          signal,
+        );
+        if (checkpoint && checkpoint.serverSeq > root.appliedSeq) {
+          const restored = await this.reducer.open(
+            checkpoint.ref,
+            this.binding,
+            signal,
+          );
+          const restoredRows = await this.activityIndex.open(
+            checkpoint.activity!,
+            this.binding,
+            signal,
+          );
+          if (
+            restored.appliedSeq !== checkpoint.serverSeq ||
+            restored.timelineMs !== checkpoint.timelineMs ||
+            restoredRows.appliedSeq !== restored.appliedSeq ||
+            restoredRows.gaps !== (restored.maps.gaps?.size ?? 0)
+          )
+            throw new ProtocolError(
+              "corrupt_storage",
+              "Seek checkpoint boundaries differ",
+            );
+          root = restored;
+          rows = restoredRows;
+        }
+      }
+      if (root.appliedSeq < through) {
         let boundary = false;
         for await (const event of cancellableHistory(
           history(root.appliedSeq, through, signal),
@@ -428,6 +460,28 @@ export class BrowserPagedState {
           );
       }
       signal.throwIfAborted();
+      if (
+        persistSelection &&
+        root.appliedSeq > 0 &&
+        root.appliedSeq < receipt.appliedSeq
+      ) {
+        const ref = await this.reducer.checkpoint(root, this.binding, signal);
+        const activity = await this.activityIndex.checkpoint(
+          rows,
+          this.binding,
+          signal,
+        );
+        await this.content.saveSeekCheckpoint(
+          {
+            format: "agentlive.paged-state",
+            serverSeq: root.appliedSeq,
+            timelineMs: root.timelineMs,
+            ref,
+            activity,
+          },
+          signal,
+        );
+      }
       this.selected = { root, rows };
       return new PagedActivityView(
         this.reducer,

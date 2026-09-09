@@ -473,3 +473,193 @@ it("restores an exact paused prefix when later events share its timestamp", asyn
     await state.close();
   }
 });
+
+it("reopens seek landmarks and requests only their missing suffix", async () => {
+  const factory = new IDBFactory();
+  let state = await BrowserPagedState.open(factory, binding, signal());
+  const events = [
+    started(),
+    {
+      ...event(2, {
+        kind: "message.text.append",
+        payload: { messageId: "m", text: "checkpoint" },
+      }),
+      timelineMs: 10001,
+    },
+    {
+      ...event(3, {
+        kind: "message.text.append",
+        payload: { messageId: "m", text: " suffix" },
+      }),
+      timelineMs: 10002,
+    },
+    {
+      ...event(4, {
+        kind: "message.text.append",
+        payload: { messageId: "m", text: " future" },
+      }),
+      timelineMs: 20001,
+    },
+  ];
+  try {
+    for (const item of events) await state.apply([item], signal());
+    await state.close();
+    state = await BrowserPagedState.open(factory, binding, signal());
+    const requests: number[][] = [];
+    const selected = await state.select(
+      10002,
+      (after, through) => {
+        requests.push([after, through]);
+        return history(...events.slice(after, through));
+      },
+      signal(),
+      undefined,
+      true,
+    );
+    expect(requests).toEqual([[2, 4]]);
+    expect(selected.sequence).toBe(3);
+    const row = (await selected.rows(0, 1, signal()))[0]!;
+    const source = (await selected.load(row, signal()))!.texts.text!;
+    expect(await source.read(0, source.units, signal())).toBe(
+      "checkpoint suffix",
+    );
+    expect(state.checkpoint!.serverSeq).toBe(4);
+    // An exact saved prefix never includes later objects at the same time.
+    const earlier = await state.select(
+      10001,
+      (_after, _through) => history(),
+      signal(),
+      2,
+    );
+    expect(earlier.sequence).toBe(2);
+    await state.close();
+    state = await BrowserPagedState.open(factory, binding, signal());
+    const restored = await state.select(
+      10002,
+      () => {
+        throw new Error("Saved seek should not download history");
+      },
+      signal(),
+      3,
+    );
+    expect(restored.sequence).toBe(3);
+    expect(state.checkpoint!.serverSeq).toBe(4);
+  } finally {
+    await state.close();
+  }
+});
+
+it("publishes a seek landmark atomically with its receipt head", async () => {
+  const factory = new IDBFactory();
+  const state = await BrowserPagedState.open(factory, binding, signal());
+  const store = await BrowserContentStore.open(factory, binding, signal());
+  const stop = new AbortController();
+  const original = IDBObjectStore.prototype.put;
+  try {
+    await state.apply([started()], signal());
+    const old = await store.loadCheckpointBefore(10001, 2, signal());
+    const spy = vi
+      .spyOn(IDBObjectStore.prototype, "put")
+      .mockImplementation(function (
+        this: IDBObjectStore,
+        value: unknown,
+        key?: IDBValidKey,
+      ) {
+        const result = original.call(this, value, key);
+        if (
+          this.name === "meta" &&
+          typeof key === "string" &&
+          key.startsWith("seek:")
+        )
+          stop.abort(new Error("cancel landmark"));
+        return result;
+      });
+    try {
+      await expect(
+        state.apply(
+          [
+            {
+              ...event(2, {
+                kind: "message.completed",
+                payload: { messageId: "m" },
+              }),
+              timelineMs: 10001,
+            },
+          ],
+          stop.signal,
+        ),
+      ).rejects.toThrow("cancel landmark");
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await store.loadCheckpoint())!.serverSeq).toBe(1);
+    expect(await store.loadCheckpointBefore(10001, 2, signal())).toEqual(old);
+  } finally {
+    await state.close();
+    await store.close();
+  }
+});
+it("cancels historical seek publication without moving receipt or retaining a partial landmark", async () => {
+  const factory = new IDBFactory();
+  const state = await BrowserPagedState.open(factory, binding, signal());
+  const store = await BrowserContentStore.open(factory, binding, signal());
+  const events = [
+    started(),
+    event(2, {
+      kind: "message.text.append",
+      payload: { messageId: "m", text: "middle" },
+    }),
+    event(3, { kind: "message.completed", payload: { messageId: "m" } }),
+  ];
+  const stop = new AbortController();
+  const original = IDBObjectStore.prototype.put;
+  try {
+    await state.apply(events, signal());
+    const spy = vi
+      .spyOn(IDBObjectStore.prototype, "put")
+      .mockImplementation(function (
+        this: IDBObjectStore,
+        value: unknown,
+        key?: IDBValidKey,
+      ) {
+        const request = original.call(this, value, key);
+        if (
+          this.name === "meta" &&
+          typeof key === "string" &&
+          key.startsWith("seek:")
+        )
+          stop.abort(new Error("cancel selected checkpoint"));
+        return request;
+      });
+    try {
+      await expect(
+        state.select(
+          2,
+          (after, through) => history(...events.slice(after, through)),
+          stop.signal,
+          undefined,
+          true,
+        ),
+      ).rejects.toThrow("cancel selected checkpoint");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await store.loadCheckpointBefore(2, 2, signal())).toBeNull();
+    expect((await store.loadCheckpoint())!.serverSeq).toBe(3);
+    const selected = await state.select(
+      2,
+      (after, through) => history(...events.slice(after, through)),
+      signal(),
+      undefined,
+      true,
+    );
+    expect(selected.sequence).toBe(2);
+    expect((await store.loadCheckpointBefore(2, 2, signal()))!.serverSeq).toBe(
+      2,
+    );
+    expect(state.checkpoint!.serverSeq).toBe(3);
+  } finally {
+    await state.close();
+    await store.close();
+  }
+});

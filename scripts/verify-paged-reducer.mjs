@@ -18,6 +18,8 @@ import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { TextStore } from "../packages/storage/dist/index.js";
 import {
+  apply,
+  initialState,
   ActivityIndex,
   initialActivityIndex,
   activityMentions,
@@ -248,6 +250,46 @@ export async function verifyPagedReducer(events, expected, signal) {
       )
         throw new Error("Native activity window differs from persisted order");
     }
+    let seekAfter = null;
+    const seekTime = events[Math.floor(events.length / 2)]?.timelineMs ?? 0;
+    const selected = await browser.select(
+      seekTime,
+      (after, through) => {
+        seekAfter = after;
+        return (async function* () {
+          yield* events.slice(after, through);
+        })();
+      },
+      signal,
+    );
+    let selectedReference = initialState();
+    for (const event of events) {
+      if (event.timelineMs > seekTime) break;
+      selectedReference = apply(selectedReference, event);
+    }
+    if (selected.sequence !== selectedReference.appliedSeq)
+      throw new Error(
+        "Local seek checkpoint selected the wrong event boundary",
+      );
+    const selectedKeys = [];
+    for (let offset = 0; offset < selected.rowCount; offset += 32)
+      selectedKeys.push(
+        ...(await selected.rows(offset, 32, signal)).map((row) => row.key),
+      );
+    if (
+      !isDeepStrictEqual(
+        selectedKeys,
+        activityRows(
+          selectedReference,
+          (key) => firstMention.get(key) ?? Number.MAX_SAFE_INTEGER,
+        ).map((row) => row.key),
+      )
+    )
+      throw new Error("Local checkpoint seek differs from reference activity");
+    if (seekAfter !== null && events.length && seekAfter < 1)
+      throw new Error(
+        "Local checkpoint seek discarded the saved first landmark",
+      );
     return {
       events: events.length,
       reopened,
@@ -260,6 +302,8 @@ export async function verifyPagedReducer(events, expected, signal) {
       indexedActivityRows: orderedKeys.length,
       pagedSearchQueries: queries.size,
       pagedWindowVerified: true,
+      localSeekAfter: seekAfter,
+      localSeekVerified: true,
       storedBytes: store.usage.storedBytes,
     };
   } finally {
