@@ -1,0 +1,26 @@
+{
+  "name": "agentlive-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@12.3.4",
+  "engines": {
+    "node": ">=26.8.1 <27"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "probe:agents": "node scripts/probe-agents.mjs",
+    "check": "pnpm format:check && pnpm typecheck && pnpm test",
+    "format": "prettier --write packages tests scripts *.json *.ts *.yaml .github/workflows/*.yml",
+    "format:check": "prettier --check packages tests scripts *.json *.ts *.yaml .github/workflows/*.yml"
+  },
+  "devDependencies": {
+    "@types/node": "26.5.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.0",
+    "prettier": "3.9.6"
+  }
+}

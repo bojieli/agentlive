@@ -1,0 +1,17 @@
+{
+  "files": [],
+  "references": [
+    {
+      "path": "packages/protocol"
+    },
+    {
+      "path": "packages/storage"
+    },
+    {
+      "path": "packages/playback"
+    },
+    {
+      "path": "packages/publisher"
+    }
+  ]
+}
