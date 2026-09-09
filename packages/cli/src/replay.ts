@@ -1,5 +1,10 @@
 import { openRecordingHistory } from "@agentlive/client";
-import { initialState, apply, renderTerminalEvent } from "@agentlive/playback";
+import {
+  initialState,
+  apply,
+  renderTerminalEvent,
+  renderTerminalPending,
+} from "@agentlive/playback";
 import { originOf } from "@agentlive/client/transport";
 export async function replayRecording(options: {
   serverOrigin: string;
@@ -36,5 +41,11 @@ export async function replayRecording(options: {
         ),
       );
   }
+  for (const text of renderTerminalPending(state))
+    await new Promise<void>((resolve, reject) =>
+      process.stdout.write(text, (error) =>
+        error ? reject(error) : resolve(),
+      ),
+    );
   return history.metadata;
 }

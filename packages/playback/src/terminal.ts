@@ -121,3 +121,32 @@ export function renderTerminalEvent(
       return "";
   }
 }
+/** Surface captured work that has no completion event at the selected history boundary. */
+export function* renderTerminalPending(
+  state: RecordingState,
+): Generator<string> {
+  const block = (label: string, text: string) =>
+    `[${(state.timelineMs / 1000).toFixed(3)}s] ${label}\n${terminalText(text)
+      .split("\n")
+      .map((line) => "  " + line)
+      .join("\n")}\n\n`;
+  for (const message of state.messages.values())
+    if (!message.completed)
+      yield block(
+        `${message.role}: incomplete`,
+        message.text || "[No text captured]",
+      );
+  for (const tool of state.tools.values())
+    if (tool.status === "running")
+      yield block(
+        "Tool incomplete",
+        `${tool.name}\nInput:\n${tool.input}\nOutput captured so far:\n${tool.output}`,
+      );
+  for (const artifact of state.artifacts.values())
+    if (artifact.pending) yield block("Attachment pending", artifact.filename);
+  if (state.replacements.size)
+    yield block(
+      "Text replacement incomplete",
+      "Previous complete text is retained until replacement chunks finish.",
+    );
+}

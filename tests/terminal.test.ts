@@ -4,6 +4,7 @@ import {
   initialState,
   renderTerminalEvent,
   terminalText,
+  renderTerminalPending,
 } from "../packages/playback/src/index.js";
 import type {
   EventContent,
@@ -102,4 +103,33 @@ it("renders captured object types with inert source text and attachment links", 
   expect(output).toContain("/api/v1/streams/stream/attachments/");
   expect(output).toContain("Capture gap");
   expect(terminalText("normal\ntext\tcolumn")).toBe("normal\ntext\tcolumn");
+});
+
+it("shows unfinished messages, tools, and attachments at the selected replay boundary", () => {
+  const state = initialState();
+  state.messages.set("m", {
+    id: "m",
+    role: "assistant",
+    text: "partial reply",
+    completed: false,
+  });
+  state.tools.set("t", {
+    id: "t",
+    name: "Shell",
+    input: "command",
+    output: "partial output\u001b[2J",
+    status: "running",
+  });
+  state.artifacts.set("a", {
+    filename: "pending.png",
+    pending: true,
+    versions: new Map(),
+  });
+  const output = [...renderTerminalPending(state)].join("");
+  expect(output).toContain("assistant: incomplete");
+  expect(output).toContain("partial reply");
+  expect(output).toContain("Tool incomplete");
+  expect(output).toContain("partial output\\u001b[2J");
+  expect(output).toContain("Attachment pending");
+  expect(output).not.toContain("\u001b");
 });

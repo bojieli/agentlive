@@ -84,3 +84,16 @@ A real Kimi recording passed private import, reducer replay, repeat-import dedup
 OpenCode's native `info`/`messages` JSON export now has inspection, normalization, and shared private import. The converter validates message/part ownership and unique identities, freezes a bounded export before capture, retains text/tool/error content and source times, filters known secrets, and reports unresolved file references and unknown parts. Tool-state fields were checked against the upstream [session schema](https://github.com/anomalyco/opencode/blob/dev/packages/schema/src/v1/session.ts). The current parser caps exports at 64 MiB; larger exports need a streaming parser. File/artifact resolution, newer incompatible export formats, subagent associations, and live integration remain unfinished.
 
 The installed CLI freshly listed and exported both local sessions using `session list --format json --pure` and `export <id> --pure`. Both passed isolated private import, reducer replay, anonymous-access rejection, and duplicate-free retry. Each contained two messages and one text part, producing eight producer events and ten stored events. These histories contain assistant errors and no tools, so real tool/export coverage is not established. The synthetic integration test covers failed tool states, unresolved files, secret filtering, rejected foreign part identities, and oversized exports. Native databases were not edited; raw exports remain local/private.
+
+### Full normalized reducer and terminal-render corpus pass (2026-09-09)
+
+`node scripts/validate-native-replay.mjs` invokes every converter, constructs sequential stored-event envelopes with reconstructed timing, applies the playback reducer, and calls the terminal event renderer. It checks event schemas, output frame limits, source-effect conflicts, replacement completion, and absence of terminal control sequences. It does not publish these histories or resolve source attachments. Raw rendered text is hashed and discarded; private aggregate reports are under `probe-results/native-replay-validation`. The command returns nonzero when any file fails.
+
+| Agent | Files checked | Passed | Rejected | Normalized events | Messages | Tools |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Codex | 510 | 510 | 0 | 263,228 | 19,508 | 56,987 |
+| Claude | 1,588 | 1,553 | 35 | 409,036 | 43,804 | 96,918 |
+| Kimi | 458 | 458 | 0 | 97,503 | 13,771 | 19,445 |
+| OpenCode | 2 | 2 | 0 | 16 | 4 | 0 |
+
+The rejected files are the previously classified Claude bridge/bookkeeping and started/result ledgers with missing standalone identity or time. The pass produced 1,294,172,567 bytes of terminal text for hashing, without retaining that text. It includes 89,828 explicit gaps and 1,840 unavailable artifact states, so passing does not imply complete raw-object support. This run is evidence for normalized event/reducer/render compatibility. Full source semantics, ledger/parent-child association, attachment conversion, the CLI's large-recording capacity, and browser/interactive playback still require work. Original sources were unchanged.

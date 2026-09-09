@@ -391,4 +391,8 @@ export function mapCaptureTime(
       )
     : previousTimeline;
 }
-export { terminalText, renderTerminalEvent } from "./terminal.js";
+export {
+  terminalText,
+  renderTerminalEvent,
+  renderTerminalPending,
+} from "./terminal.js";
