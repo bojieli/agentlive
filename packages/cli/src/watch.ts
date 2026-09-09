@@ -24,12 +24,13 @@ async function interruptible(work: Promise<void>, signal: AbortSignal) {
     if (signal.aborted) abort();
   });
 }
-export async function watchRecording(options: {
+async function runWatchRecording(options: {
   serverOrigin: string;
   streamId: string;
   credential?: string;
   cacheRoot: string;
   signal: AbortSignal;
+  cancellation?: AbortController;
   write?: (text: string, signal: AbortSignal) => Promise<void>;
   onStatus?: (status: SubscriberStatus) => void;
   onReceipt?: (serverSeq: number) => void;
@@ -66,7 +67,7 @@ export async function watchRecording(options: {
   let seekMetadata:
     Awaited<ReturnType<typeof openRecordingHistory>>["metadata"] | undefined;
   let openedCache: SubscriberCache | undefined;
-  const stop = new AbortController();
+  const stop = options.cancellation ?? new AbortController();
   const signal = AbortSignal.any([options.signal, stop.signal]);
   const write =
     options.write ??
@@ -259,11 +260,23 @@ export async function watchRecording(options: {
       }
     }
   };
+  let terminalInstalled = false;
+  const restoreTerminal = () => {
+    if (terminalInstalled) {
+      terminalInstalled = false;
+      process.stdin.off("data", onInput);
+      process.stdin.setRawMode(wasRaw);
+      if (!wasFlowing) process.stdin.pause();
+    }
+  };
+  signal.addEventListener("abort", restoreTerminal, { once: true });
   try {
+    signal.throwIfAborted();
     if (options.interactive) {
       process.stderr.write(
         "Watch controls: space pause/resume, +/- speed, [/] seek 30s, 0 beginning, l live catch-up, q quit (receipt continues independently)\n",
       );
+      terminalInstalled = true;
       process.stdin.setRawMode(true);
       process.stdin.on("data", onInput);
       process.stdin.resume();
@@ -329,11 +342,73 @@ export async function watchRecording(options: {
     stop.abort();
     unsubscribePlayback?.();
     unsubscribeSeek?.();
-    if (options.interactive) {
-      process.stdin.off("data", onInput);
-      process.stdin.setRawMode(wasRaw);
-      if (!wasFlowing) process.stdin.pause();
-    }
+    signal.removeEventListener("abort", restoreTerminal);
+    restoreTerminal();
     await openedCache?.close();
   }
+}
+
+/** Cancellation stopped waiting; accepted cache work still owns its files. */
+export class CancellationTimeoutError extends Error {
+  readonly code = "cancellation_timeout";
+  constructor(
+    readonly timeoutMs: number,
+    /** Actual completion, including cleanup failures after the deadline. */
+    readonly whenDrained: Promise<void>,
+  ) {
+    super(
+      `Watch cancellation exceeded ${timeoutMs}ms; cache ownership is retained until cleanup finishes`,
+    );
+    this.name = "CancellationTimeoutError";
+  }
+}
+
+export function watchRecording(
+  options: Omit<Parameters<typeof runWatchRecording>[0], "cancellation"> & {
+    /** Maximum wait after cancellation, including accepted writes and cleanup. */
+    cancellationTimeoutMs?: number;
+  },
+): Promise<void> {
+  const timeoutMs = options.cancellationTimeoutMs ?? 30_000;
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 2_147_483_647
+  )
+    return Promise.reject(
+      new RangeError(
+        "cancellationTimeoutMs must be an integer from 1 to 2147483647",
+      ),
+    );
+  const stop = new AbortController();
+  const signal = AbortSignal.any([options.signal, stop.signal]);
+  // Internal quit and failure cancellation must start the same deadline.
+  const work = runWatchRecording({ ...options, signal, cancellation: stop });
+  return new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const abort = () => {
+      if (timer !== undefined) return;
+      timer = setTimeout(
+        () => reject(new CancellationTimeoutError(timeoutMs, work)),
+        timeoutMs,
+      );
+    };
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+    };
+    // Keep observing work after expiry; never unlock or close files underneath it.
+    work.then(
+      () => {
+        cleanup();
+        resolve();
+      },
+      (error: unknown) => {
+        cleanup();
+        reject(error);
+      },
+    );
+  });
 }

@@ -26,7 +26,7 @@ Commands:
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
   agentlive publish --agent opencode --native-server <origin> --native-session <id> [--source <original-export> --resume-import]
-  agentlive watch --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive] [--resume-view | --restart-view] [--from-ms <position>]
+  agentlive watch --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive] [--resume-view | --restart-view] [--from-ms <position>] [--cancellation-timeout-ms 30000]
   agentlive replay --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--interactive] [--from-ms <position>]
 
 Shared options:
@@ -111,6 +111,7 @@ async function main() {
       port: { type: "string" },
       "max-cached-sessions": { type: "string" },
       "shutdown-timeout-ms": { type: "string" },
+      "cancellation-timeout-ms": { type: "string" },
       agent: { type: "string" },
       source: { type: "string" },
       server: { type: "string" },
@@ -150,6 +151,7 @@ async function main() {
                     "from-ms",
                     "resume-view",
                     "restart-view",
+                    "cancellation-timeout-ms",
                   ]),
             ]
           : [
@@ -259,6 +261,9 @@ async function main() {
     if (credential) secrets.push(credential);
     await (command === "watch" ? watchRecording : replayRecording)({
       cacheRoot: join(stateDir, "subscriber"),
+      ...(values["cancellation-timeout-ms"] === undefined
+        ? {}
+        : { cancellationTimeoutMs: Number(values["cancellation-timeout-ms"]) }),
       ...(speed === undefined ? {} : { speed }),
       ...(fromMs === undefined ? {} : { fromMs }),
       ...(values.interactive ? { interactive: true } : {}),

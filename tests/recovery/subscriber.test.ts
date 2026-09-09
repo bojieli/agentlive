@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -1226,3 +1226,82 @@ it("retains a seek between events across viewer restart and reads legacy positio
     await cache.close();
   }
 });
+
+it("bounds watch cancellation while retaining cache ownership until accepted writes drain", async () => {
+  const { watchRecording, CancellationTimeoutError } =
+    await import("../../packages/cli/src/watch.js");
+  const { SubscriberCache } =
+    await import("../../packages/storage/dist/index.js");
+  const { root, session, options, publish } = await setup();
+  await publish(2);
+  const cacheRoot = join(root, "deadline-cache");
+  const entered = deferred();
+  const release = deferred();
+  const original = SubscriberCache.prototype.commit;
+  const spy = vi
+    .spyOn(SubscriberCache.prototype, "commit")
+    .mockImplementation(async function (events, cursor) {
+      entered.resolve();
+      await release.promise;
+      return original.call(this, events, cursor);
+    });
+  const abort = new AbortController();
+  const done = watchRecording({
+    ...options,
+    streamId: session.info.id,
+    cacheRoot,
+    signal: abort.signal,
+    cancellationTimeoutMs: 25,
+    write: async () => {},
+  });
+  const result = done.catch((error: unknown) => error);
+  const cacheOptions = {
+    serverOrigin: options.serverOrigin,
+    streamId: session.info.id,
+    initialize: async () => ({ revision: session.info.revision }),
+  };
+  try {
+    await entered.promise;
+    abort.abort();
+    const error = await result;
+    expect(error).toBeInstanceOf(CancellationTimeoutError);
+    expect(error).toMatchObject({
+      code: "cancellation_timeout",
+      timeoutMs: 25,
+    });
+    await expect(
+      SubscriberCache.open(cacheRoot, cacheOptions),
+    ).rejects.toThrow();
+    release.resolve();
+    await (error as InstanceType<typeof CancellationTimeoutError>).whenDrained;
+    const reopened = await SubscriberCache.open(cacheRoot, cacheOptions);
+    try {
+      expect(reopened.cursor.serverSeq).toBe(session.boundary.sequence);
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    release.resolve();
+    abort.abort();
+    const error = await result;
+    if (error instanceof CancellationTimeoutError)
+      await error.whenDrained.catch(() => {});
+    spy.mockRestore();
+  }
+});
+
+it.each([0, -1, NaN, Infinity, 1.5, 2_147_483_648])(
+  "rejects invalid watch cancellation deadline %s before opening a cache",
+  async (cancellationTimeoutMs) => {
+    const { watchRecording } = await import("../../packages/cli/src/watch.js");
+    await expect(
+      watchRecording({
+        serverOrigin: "http://localhost",
+        streamId: "unused",
+        cacheRoot: "unused",
+        signal: new AbortController().signal,
+        cancellationTimeoutMs,
+      }),
+    ).rejects.toThrow("cancellationTimeoutMs");
+  },
+);
