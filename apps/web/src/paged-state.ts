@@ -1,3 +1,4 @@
+import { PagedActivityView } from "./paged-activity.js";
 import type { TextSource } from "./text-source.js";
 import {
   PagedReducer,
@@ -149,6 +150,11 @@ export class BrowserPagedState {
       read: (offset: number, length: number, signal: AbortSignal) =>
         this.content.read(ref, offset, length, signal),
     });
+  }
+  view(): PagedActivityView {
+    return new PagedActivityView(this.reducer, this.root, (ref) =>
+      this.textSource(ref),
+    );
   }
   close() {
     if (!this.closing) {

@@ -173,6 +173,7 @@ function StoredText({
   group: string;
   label?: string;
 }) {
+  const [attempt, setAttempt] = useState(0);
   const pages = useContext(Pages),
     [local, setLocal] = useState<Position>(0);
   const selected =
@@ -235,7 +236,7 @@ function StoredText({
           });
       });
     return () => stop.abort();
-  }, [text.key, text.units, text.read, target]);
+  }, [text.key, text.units, text.read, target, attempt]);
   useEffect(() => {
     if (!reveal || reveal.generation === handled) return;
     const stop = new AbortController(),
@@ -260,7 +261,7 @@ function StoredText({
         });
     });
     return () => stop.abort();
-  }, [reveal, handled, text.key, text.units, text.read]);
+  }, [reveal, handled, text.key, text.units, text.read, attempt]);
   return (
     <div className="paged-text" aria-busy={!result && !error}>
       {count > 1 && (
@@ -289,7 +290,12 @@ function StoredText({
         </div>
       )}
       {error ? (
-        <p role="alert">{error}</p>
+        <div role="alert">
+          <p>{error}</p>
+          <button onClick={() => setAttempt((value) => value + 1)}>
+            Retry text
+          </button>
+        </div>
       ) : (
         <pre>{result?.text ?? "Loading text…"}</pre>
       )}

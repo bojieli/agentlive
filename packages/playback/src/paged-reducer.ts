@@ -1,6 +1,7 @@
 import {
   canonicalJson,
   contentSchema,
+  attachmentSchema,
   storedEventSchema,
   idSchema,
   ProtocolError,
@@ -76,6 +77,7 @@ type Items = { [K in PlainName]: ValueOf<RecordingState[K]> } & {
   };
   gaps: RecordingState["gaps"][number];
 };
+export type PagedItem<K extends Name> = Items[K];
 export interface PagedRecordingState {
   version: 1;
   appliedSeq: number;
@@ -420,6 +422,61 @@ export class PagedReducer {
       );
     }
     signal?.throwIfAborted();
+    return result;
+  }
+  private async readAttachment(
+    artifactId: string,
+    version: OrderedMapKey,
+    reference: ContentReference,
+    signal?: AbortSignal,
+  ) {
+    const parsed = attachmentSchema.safeParse(
+      await this.json(reference, signal),
+    );
+    if (
+      !parsed.success ||
+      parsed.data.artifactId !== artifactId ||
+      parsed.data.version !== version
+    )
+      bad();
+    return parsed.data;
+  }
+  async artifactVersion(
+    state: PagedRecordingState,
+    artifactId: string,
+    version: number,
+    signal?: AbortSignal,
+  ) {
+    if (!Number.isSafeInteger(version) || version < 1)
+      throw new RangeError("Invalid artifact version");
+    const artifact = await this.get(state, "artifacts", artifactId, signal);
+    const reference = await this.map.get(
+      artifact?.versions ?? null,
+      version,
+      signal,
+    );
+    return reference
+      ? this.readAttachment(artifactId, version, reference, signal)
+      : undefined;
+  }
+  async artifactVersions(
+    state: PagedRecordingState,
+    artifactId: string,
+    offset: number,
+    limit: number,
+    signal?: AbortSignal,
+  ) {
+    const artifact = await this.get(state, "artifacts", artifactId, signal),
+      result = [];
+    for (const [version, reference] of await this.map.entries(
+      artifact?.versions ?? null,
+      offset,
+      limit,
+      signal,
+    ))
+      result.push(
+        await this.readAttachment(artifactId, version, reference, signal),
+      );
     return result;
   }
   async apply(

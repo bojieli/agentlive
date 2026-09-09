@@ -530,6 +530,7 @@ export {
   PagedReducer,
   initialPagedState,
   type PagedContent,
+  type PagedItem,
   type PagedRecordingState,
 } from "./paged-reducer.js";
 

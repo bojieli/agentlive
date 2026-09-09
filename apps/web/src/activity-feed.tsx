@@ -1,3 +1,5 @@
+import { PagedActivityCard } from "./paged-activity-card.js";
+import type { PagedActivityView } from "./paged-activity.js";
 import {
   useCallback,
   useEffect,
@@ -16,6 +18,7 @@ import { activityRange } from "./activity-range.js";
 import { ExpansionProvider, useRevealDisclosure } from "./disclosure.js";
 export function ActivityFeed(props: {
   state: RecordingState;
+  view?: PagedActivityView;
   following: boolean;
   onPause: () => void;
   order: (key: string) => number;
@@ -24,13 +27,20 @@ export function ActivityFeed(props: {
   return (
     <ExpansionProvider>
       <TextPagesProvider following={props.following}>
-        <VirtualActivity {...props} />
+        {props.view && props.view.sequence !== props.state.appliedSeq ? (
+          <p role="alert">
+            Activity view does not match the selected playback position.
+          </p>
+        ) : (
+          <VirtualActivity {...props} />
+        )}
       </TextPagesProvider>
     </ExpansionProvider>
   );
 }
 function VirtualActivity({
   state,
+  view,
   following,
   onPause,
   order,
@@ -221,11 +231,19 @@ function VirtualActivity({
                   transform: `translateY(${item.start}px)`,
                 }}
               >
-                <ActivityCard
-                  row={row}
-                  state={state}
-                  onAttachment={onAttachment}
-                />
+                {view ? (
+                  <PagedActivityCard
+                    row={row}
+                    view={view}
+                    onAttachment={onAttachment}
+                  />
+                ) : (
+                  <ActivityCard
+                    row={row}
+                    state={state}
+                    onAttachment={onAttachment}
+                  />
+                )}
               </div>
             );
           })}

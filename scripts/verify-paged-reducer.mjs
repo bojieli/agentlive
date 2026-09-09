@@ -1,3 +1,4 @@
+import { activityRows } from "../apps/web/dist/activity.js";
 import { readTextPage } from "../apps/web/dist/text-source.js";
 import { textPage } from "../apps/web/dist/text-page.js";
 import { BrowserPagedState } from "../apps/web/dist/paged-state.js";
@@ -102,6 +103,47 @@ export async function verifyPagedReducer(events, expected, signal) {
         }
       }
     }
+    const view = browser.view();
+    let pagedActivityCards = 0;
+    for (const row of activityRows(expected, () => 0)) {
+      const card = await view.load(row, signal);
+      if (!card) throw new Error("Visible paged activity is missing");
+      if (row.kind === "gaps") {
+        if (!isDeepStrictEqual(card.gap, expected.gaps[Number(row.id)]))
+          throw new Error("Paged capture note differs");
+      } else {
+        const original = expected[row.kind].get(row.id),
+          actual = { ...card.state[row.kind].get(row.id) };
+        for (const field of row.kind === "messages"
+          ? ["text"]
+          : row.kind === "tools"
+            ? ["input", "output"]
+            : row.kind === "changes"
+              ? ["patch"]
+              : []) {
+          if (
+            actual[field] !== "" ||
+            card.texts[field].units !== original[field].length
+          )
+            throw new Error(
+              "Paged activity loaded text eagerly or lost its reference",
+            );
+          actual[field] = original[field];
+        }
+        const wanted =
+          row.kind === "artifacts"
+            ? {
+                ...original,
+                versions: new Map([...original.versions].slice(0, 32)),
+              }
+            : original;
+        if (!isDeepStrictEqual(actual, wanted))
+          throw new Error(
+            "Paged activity metadata differs from reference state",
+          );
+      }
+      pagedActivityCards++;
+    }
     return {
       events: events.length,
       reopened,
@@ -110,6 +152,7 @@ export async function verifyPagedReducer(events, expected, signal) {
       browserCheckpointRecovered: true,
       identicalContentReferences: true,
       pagedTextFields,
+      pagedActivityCards,
       storedBytes: store.usage.storedBytes,
     };
   } finally {

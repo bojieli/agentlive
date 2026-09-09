@@ -458,6 +458,12 @@ it("rejects an artifact descriptor stored under a different identity or version"
       await expect(reducer.materialize(corrupted)).rejects.toMatchObject({
         code: "corrupt_storage",
       });
+      await expect(
+        reducer.artifactVersion(corrupted, "artifact", 1),
+      ).rejects.toMatchObject({ code: "corrupt_storage" });
+      await expect(
+        reducer.artifactVersions(corrupted, "artifact", 0, 32),
+      ).rejects.toMatchObject({ code: "corrupt_storage" });
     }
     expect(
       (await reducer.materialize(state)).artifacts

@@ -184,3 +184,10 @@ The full suite passed 312 tests in 43 files. A subsequent focused suite passed f
 On 2026-09-10, OpenCode `--resume-import` passed three native turns with 26 stored events, six messages and one verified attachment. After recovering persisted browser state, the verifier read first/latest pages of all six text fields through readTextPage, the same bounded reader used by source-backed PagedText, and compared them with reference string paging. Checkpoint identity, native-server restart, detached history recovery, import continuation and publisher deduplication also passed. The reopened snapshot range cache needed no additional content requests.
 
 Full local validation passed 317 tests in 44 files and package verification passed. Browser runtime discovery was retried using its documented recovery flow and returned no connected browsers. Actual React interaction/loading/focus behavior remains unverified; native data-path parity does not establish those checks or complete BrowserSession migration.
+
+
+## Frozen paged activity projections
+
+On 2026-09-10, a live Kimi Code run passed with 35 stored events, seven messages and 19 activity items. The verifier loaded all 19 visible cards through a frozen PagedActivityView, compared their selected metadata with reference state and confirmed message/tool/edit fields remained deferred text sources. All seven captured text fields also passed first/latest page equivalence. Native resume, full-history backfill, live suffix capture, persisted checkpoint recovery and deduplication passed. The reopened snapshot range cache required no additional content reads.
+
+The full suite passed 319 tests in 45 files, including workflow links, no retained-text reads during card loading, historical-view visibility, artifact version pagination and corrupt descriptor point/range rejection. Standalone package verification passed. An initial test fixture omitted required tool input; correcting the fixture resolved its schema failure. Production BrowserSession still needs to supply paged receipt/rows/seek/search, and actual browser interaction remains unverified.

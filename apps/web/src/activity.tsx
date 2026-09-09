@@ -1,3 +1,4 @@
+import type { TextSource } from "./text-source.js";
 import type { RecordingState } from "@agentlive/playback";
 import type { Attachment } from "./attachments.js";
 import {
@@ -54,10 +55,20 @@ export function ActivityCard({
   row,
   state,
   onAttachment,
+  texts,
+  gap,
+  artifactPage,
 }: {
   row: ActivityRow;
   state: RecordingState;
   onAttachment: (attachment: Attachment) => void;
+  texts?: Partial<Record<"text" | "input" | "output" | "patch", TextSource>>;
+  gap?: RecordingState["gaps"][number];
+  artifactPage?: {
+    offset: number;
+    total: number;
+    select: (offset: number) => void;
+  };
 }) {
   const { kind, id } = row;
   switch (kind) {
@@ -74,7 +85,7 @@ export function ActivityCard({
             state={state}
           />
           <PagedText
-            text={message.text || "…"}
+            text={texts?.text ?? (message.text || "…")}
             group={row.key}
             choice={`${row.key}/text`}
             label="Message"
@@ -95,14 +106,14 @@ export function ActivityCard({
           />
           <h4>Input</h4>
           <PagedText
-            text={tool.input}
+            text={texts?.input ?? tool.input}
             group={row.key}
             choice={`${row.key}/input`}
             label="Tool input"
           />
           <h4>Output</h4>
           <PagedText
-            text={tool.output}
+            text={texts?.output ?? tool.output}
             group={row.key}
             choice={`${row.key}/output`}
             label="Tool output"
@@ -116,7 +127,7 @@ export function ActivityCard({
         <Disclosure choice={row.key} className="card" id={row.anchor}>
           <summary>{change.path}</summary>
           <PagedText
-            text={change.patch}
+            text={texts?.patch ?? change.patch}
             group={row.key}
             choice={`${row.key}/patch`}
             label="Diff"
@@ -133,8 +144,37 @@ export function ActivityCard({
             {artifact.reason ??
               (artifact.pending
                 ? "Preparing attachment…"
-                : `${artifact.versions.size} saved version(s)`)}
+                : `${artifactPage?.total ?? artifact.versions.size} saved version(s)`)}
           </p>
+          {artifactPage && artifactPage.total > 32 && (
+            <div
+              className="text-navigation"
+              aria-label="Attachment version pages"
+            >
+              <span>
+                Versions {artifactPage.offset + 1}–
+                {artifactPage.offset + artifact.versions.size} of{" "}
+                {artifactPage.total}
+              </span>
+              <button
+                disabled={artifactPage.offset === 0}
+                onClick={() =>
+                  artifactPage.select(Math.max(0, artifactPage.offset - 32))
+                }
+              >
+                Previous versions
+              </button>
+              <button
+                disabled={
+                  artifactPage.offset + artifact.versions.size >=
+                  artifactPage.total
+                }
+                onClick={() => artifactPage.select(artifactPage.offset + 32)}
+              >
+                Next versions
+              </button>
+            </div>
+          )}
           {[...artifact.versions.values()].map((version) => (
             <button key={version.version} onClick={() => onAttachment(version)}>
               Open version {version.version}
@@ -146,7 +186,7 @@ export function ActivityCard({
     case "gaps":
       return (
         <div className="gap">
-          Capture note: {state.gaps[Number(id)]!.reason}
+          Capture note: {(gap ?? state.gaps[Number(id)]!).reason}
         </div>
       );
     default:

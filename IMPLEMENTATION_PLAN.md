@@ -1284,3 +1284,10 @@ Only update in-memory state after pointer publication succeeds. Failed/cancelled
 The existing PagedText renderer now accepts immutable TextSource range readers as well as strings. BrowserPagedState provides recording/content-bound sources. Read one 16,384-unit page plus boundary units, preserving exact surrogate behavior, page controls and follow-latest selection. Resolve search reveal through bounded overlapping scans with periodic yields and cancellation.
 
 Cancel obsolete source/page requests, hide mismatched results, show loading/error state and bound page/reveal waits. Verify parity with string paging, cross-chunk literal matches, partial-range rejection, stalled sources and native persisted text. Actual browser interaction and the BrowserSession receipt/row/viewport migration remain required.
+
+
+### Frozen paged activity projections
+
+BrowserPagedState now exposes a frozen PagedActivityView. Load a selected activity object and only its directly rendered links; pass immutable text sources into the existing card renderer. Preserve all card families and plan-version references. Page attachment descriptors in groups of at most 32, validating indexed identity/version before exposure.
+
+ActivityFeed accepts the paged view and mounts asynchronous cards with cancellation, boundary checks, stale-result suppression, loading/error states and retry controls. Tests verify metadata isolation, no retained-text reads while loading a card, frozen views after visibility updates, workflow links, version pagination and native metadata/text equivalence. Production BrowserSession receipt, row enumeration, seek/search migration and actual browser interaction remain required.
