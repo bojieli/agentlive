@@ -373,8 +373,15 @@ export class RecordingSession {
           });
           versions.set(attachment.artifactId, previous);
         }
-        if (event.content.kind === "reference.resolved") {
-          const reference = event.content.payload;
+        if (
+          event.content.kind === "reference.resolved" ||
+          (event.content.kind === "plan.updated" &&
+            event.content.payload.attachment)
+        ) {
+          const reference =
+            event.content.kind === "reference.resolved"
+              ? event.content.payload
+              : event.content.payload.attachment!;
           if (!versions.get(reference.artifactId)?.has(reference.version))
             throw new ProtocolError(
               "precondition_failed",
@@ -450,8 +457,15 @@ export class RecordingSession {
       this.attachmentVersions.set(attachment.artifactId, versions);
       this.referencedBlobs.add(attachment.hash);
     }
-    if (event.content.kind === "reference.resolved") {
-      const reference = event.content.payload;
+    if (
+      event.content.kind === "reference.resolved" ||
+      (event.content.kind === "plan.updated" &&
+        event.content.payload.attachment)
+    ) {
+      const reference =
+        event.content.kind === "reference.resolved"
+          ? event.content.payload
+          : event.content.payload.attachment!;
       if (
         !this.attachmentVersions
           .get(reference.artifactId)

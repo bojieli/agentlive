@@ -136,6 +136,8 @@ try {
     tools: state.tools.size,
     tasks: state.tasks.size,
     goals: state.goals.size,
+    interactions: state.interactions.size,
+    plans: state.plans.size,
     fileChanges: state.changes.size,
     gaps: state.gaps.length,
     unsupportedItemTypes:

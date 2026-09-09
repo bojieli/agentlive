@@ -139,6 +139,48 @@ export function renderTerminalEvent(
           .join("\n"),
       );
     }
+    case "interaction.updated": {
+      const interaction = content.payload;
+      return section(
+        `${interaction.interactionType}: ${interaction.status}`,
+        [
+          interaction.title,
+          interaction.prompt,
+          ...(interaction.questions ?? []).flatMap((question) => [
+            question.question,
+            ...(question.options ?? []).map(
+              (option) =>
+                `${option.label}${option.description ? `: ${option.description}` : ""}`,
+            ),
+          ]),
+          interaction.response === undefined
+            ? undefined
+            : `Recorded response: ${interaction.response}`,
+          interaction.scope === undefined
+            ? undefined
+            : `Scope: ${interaction.scope}`,
+        ]
+          .filter((value) => value !== undefined && value !== "")
+          .join("\n"),
+      );
+    }
+    case "plan.updated": {
+      const plan = content.payload;
+      return section(
+        `Plan: ${plan.status}`,
+        [
+          plan.version === undefined ? undefined : `Version: ${plan.version}`,
+          plan.sourceReference,
+          plan.sourceHash,
+          plan.byteSize === undefined ? undefined : `${plan.byteSize} bytes`,
+          plan.attachment
+            ? `Plan content: attachment ${plan.attachment.artifactId} version ${plan.attachment.version}`
+            : "Plan content requires attachment resolution",
+        ]
+          .filter((value) => value !== undefined)
+          .join("\n"),
+      );
+    }
     case "capture.gap":
       return section(
         content.payload.recoveredState ? "Capture recovered" : "Capture gap",

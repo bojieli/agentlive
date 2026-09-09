@@ -53,3 +53,5 @@ export {
   importOpenCodeRecording,
   type OpenCodeImportOptions,
 } from "./import-opencode.js";
+
+export type { FileArtifactResolver } from "./artifact-types.js";

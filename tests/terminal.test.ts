@@ -85,6 +85,27 @@ it("renders captured object types with inert source text and attachment links", 
       },
     },
     {
+      kind: "interaction.updated",
+      payload: {
+        interactionId: "approval",
+        interactionType: "approval",
+        status: "resolved",
+        title: "Shell",
+        prompt: "Run command",
+        response: "approved",
+        scope: "session",
+      },
+    },
+    {
+      kind: "plan.updated",
+      payload: {
+        planId: "plan",
+        status: "active",
+        version: 1,
+        sourceReference: "plan.md",
+      },
+    },
+    {
       kind: "capture.gap",
       payload: { reason: "missing source", recoveredState: false },
     },
@@ -121,6 +142,9 @@ it("renders captured object types with inert source text and attachment links", 
   expect(output).toContain("historical-version");
   expect(output).toContain("/api/v1/streams/stream/attachments/");
   expect(output).toContain("Capture gap");
+  expect(output).toContain("approval: resolved");
+  expect(output).toContain("Recorded response: approved");
+  expect(output).toContain("Plan: active");
   expect(output).toContain("Task process: completed");
   expect(output).toContain("Goal: paused");
   expect(output).toContain("Tokens used: 100");

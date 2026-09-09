@@ -37,6 +37,14 @@ export interface RecordingState {
     string,
     Extract<EventContent, { kind: "goal.updated" }>["payload"]
   >;
+  interactions: Map<
+    string,
+    Extract<EventContent, { kind: "interaction.updated" }>["payload"]
+  >;
+  plans: Map<
+    string,
+    Extract<EventContent, { kind: "plan.updated" }>["payload"]
+  >;
   messages: Map<string, Message>;
   tools: Map<string, Tool>;
   changes: Map<string, { path: string; patch: string; applied: boolean }>;
@@ -76,6 +84,8 @@ export function initialState(): RecordingState {
     agents: new Map(),
     tasks: new Map(),
     goals: new Map(),
+    interactions: new Map(),
+    plans: new Map(),
     messages: new Map(),
     tools: new Map(),
     changes: new Map(),
@@ -341,6 +351,27 @@ export function apply(
       break;
     case "goal.updated":
       next.goals = new Map(state.goals).set(content.payload.goalId, {
+        ...content.payload,
+      });
+      break;
+    case "interaction.updated":
+      next.interactions = new Map(state.interactions).set(
+        content.payload.interactionId,
+        { ...content.payload },
+      );
+      break;
+    case "plan.updated":
+      if (
+        content.payload.attachment &&
+        !state.artifacts
+          .get(content.payload.attachment.artifactId)
+          ?.versions.has(content.payload.attachment.version)
+      )
+        throw new ProtocolError(
+          "sequence_gap",
+          "Plan attachment version is unavailable",
+        );
+      next.plans = new Map(state.plans).set(content.payload.planId, {
         ...content.payload,
       });
       break;

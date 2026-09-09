@@ -325,3 +325,22 @@ it("rejects a reference whose uploaded bytes were collected before commit, witho
   ).rejects.toMatchObject({ code: "precondition_failed" });
   expect(session.boundary.sequence).toBe(1);
 });
+it("rejects plan links to attachment versions that have not been announced", async () => {
+  const { session, lease } = await setup();
+  const update: PublishedEvent = {
+    ...event(session.info.id, 1),
+    content: {
+      kind: "plan.updated",
+      payload: {
+        planId: "plan",
+        status: "active",
+        attachment: { artifactId: "missing", version: 1 },
+      },
+    },
+  };
+  const before = session.boundary.sequence;
+  await expect(session.append(lease, [update])).rejects.toMatchObject({
+    code: "precondition_failed",
+  });
+  expect(session.boundary.sequence).toBe(before);
+});

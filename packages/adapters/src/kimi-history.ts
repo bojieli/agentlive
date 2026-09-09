@@ -4,6 +4,7 @@ import { z } from "zod";
 import { canonicalJson, type EventContent } from "@agentlive/protocol";
 import { PublisherJournal, StreamingRedactor } from "@agentlive/publisher";
 import { readJsonlSource, type SourceCursor } from "./jsonl.js";
+import type { FileArtifactResolver } from "./artifact-types.js";
 import { chunkContent } from "./chunks.js";
 const hash = (value: string) =>
   createHash("sha256").update(value).digest("hex");
@@ -60,6 +61,7 @@ export async function captureKimiHistory(
   sink: KimiCaptureSink,
   secrets: readonly string[] = [],
   signal?: AbortSignal,
+  resolveArtifact?: FileArtifactResolver,
 ) {
   if (
     sink.identity.nativeAgent !== "kimi" ||
@@ -71,6 +73,8 @@ export async function captureKimiHistory(
     messages: 0,
     tools: 0,
     omittedReasoning: 0,
+    availableAttachments: 0,
+    unavailableAttachments: 0,
     unsupported: {} as Record<string, number>,
   };
   const agentId = hash(`${manifest.nativeSessionId}/${manifest.agentId}`),
@@ -79,6 +83,14 @@ export async function captureKimiHistory(
     string,
     Extract<EventContent, { kind: "goal.updated" }>["payload"]
   >();
+  type Interaction = Extract<
+    EventContent,
+    { kind: "interaction.updated" }
+  >["payload"];
+  type Plan = Extract<EventContent, { kind: "plan.updated" }>["payload"];
+  const interactions = new Map<string, Interaction>();
+  const approvalByTool = new Map<string, string>();
+  const plans = new Map<string, Plan>();
   let elapsedMs = 0;
   const filter = (text: string) => {
     const redactor = new StreamingRedactor(secrets);
@@ -483,6 +495,227 @@ export async function captureKimiHistory(
         );
         if (next.status === "cleared") goals.delete(owner);
         else goals.set(owner, next);
+      }
+    } else if (row.type === "interaction.request") {
+      const nativeId = z.string().parse(row.id),
+        request = object.parse(row.request);
+      const actor = await ensureAgent(
+        typeof row.agentId === "string" ? row.agentId : manifest.agentId,
+        timestamp,
+      );
+      const kind = z.enum(["approval", "question"]).parse(row.kind);
+      const display =
+        request.display && typeof request.display === "object"
+          ? object.parse(request.display)
+          : {};
+      const toolCall =
+        typeof row.toolCallId === "string"
+          ? row.toolCallId
+          : typeof request.toolCallId === "string"
+            ? request.toolCallId
+            : undefined;
+      const interaction: Interaction = {
+        interactionId: hash(`${agentId}/interaction/${nativeId}`),
+        agentId: actor,
+        interactionType: kind,
+        status: "pending",
+        title: filter(
+          typeof request.toolName === "string"
+            ? request.toolName
+            : kind === "question"
+              ? "Question"
+              : "Approval",
+        ),
+        prompt: filter(
+          [request.action, display.command, display.cwd]
+            .filter((value) => typeof value === "string")
+            .join("\n"),
+        ),
+        ...(toolCall ? { toolId: hash(`${actor}/${toolCall}`) } : {}),
+      };
+      if (kind === "question")
+        interaction.questions = z
+          .array(object)
+          .parse(request.questions)
+          .map((question) => ({
+            question: filter(z.string().parse(question.question)),
+            ...(typeof question.header === "string"
+              ? { header: filter(question.header) }
+              : {}),
+            ...(Array.isArray(question.options)
+              ? {
+                  options: question.options.map((raw) => {
+                    const option = object.parse(raw);
+                    return {
+                      label: filter(z.string().parse(option.label)),
+                      ...(typeof option.description === "string"
+                        ? { description: filter(option.description) }
+                        : {}),
+                    };
+                  }),
+                }
+              : {}),
+          }));
+      interactions.set(nativeId, interaction);
+      if (kind === "approval" && toolCall)
+        approvalByTool.set(`${actor}/${toolCall}`, nativeId);
+      await emit(
+        key + "/interaction",
+        [{ kind: "interaction.updated", payload: interaction }],
+        timestamp,
+      );
+    } else if (row.type === "interaction.resolved") {
+      const nativeId = z.string().parse(row.id),
+        interaction = interactions.get(nativeId);
+      if (!interaction)
+        await gap(key, "interaction/missing_request", timestamp);
+      else {
+        const response = object.parse(row.response);
+        const next: Interaction = {
+          ...interaction,
+          status: "resolved",
+          response: filter(
+            typeof response.decision === "string"
+              ? response.decision
+              : canonicalJson(response.answers ?? null),
+          ),
+          ...(typeof response.scope === "string"
+            ? { scope: filter(response.scope) }
+            : {}),
+        };
+        interactions.set(nativeId, next);
+        await emit(
+          key + "/interaction",
+          [{ kind: "interaction.updated", payload: next }],
+          timestamp,
+        );
+      }
+    } else if (row.type === "permission.record_approval_result") {
+      const actor = await ensureAgent(
+          typeof row.agentId === "string" ? row.agentId : manifest.agentId,
+          timestamp,
+        ),
+        toolCall = z.string().parse(row.toolCallId),
+        result = object.parse(row.result);
+      const nativeId =
+        approvalByTool.get(`${actor}/${toolCall}`) ??
+        `audit/${String(row.turnId)}/${toolCall}`;
+      const previous = interactions.get(nativeId);
+      const next: Interaction = {
+        ...(previous ?? {
+          interactionId: hash(`${agentId}/interaction/${nativeId}`),
+          agentId: actor,
+          toolId: hash(`${actor}/${toolCall}`),
+          interactionType: "approval",
+          title: filter(z.string().parse(row.toolName)),
+          prompt: filter(z.string().parse(row.action)),
+        }),
+        status: "resolved",
+        response: filter(z.string().parse(result.decision)),
+        ...(typeof result.scope === "string"
+          ? { scope: filter(result.scope) }
+          : {}),
+      };
+      interactions.set(nativeId, next);
+      await emit(
+        key + "/approval",
+        [{ kind: "interaction.updated", payload: next }],
+        timestamp,
+      );
+    } else if (
+      row.type === "plan_mode.enter" ||
+      row.type === "plan.revision" ||
+      row.type === "plan_mode.exit"
+    ) {
+      const owner =
+          typeof row.agentId === "string" ? row.agentId : manifest.agentId,
+        actor = await ensureAgent(owner, timestamp);
+      if (row.type === "plan_mode.enter")
+        plans.set(owner, {
+          planId: hash(`${actor}/plan/${z.string().parse(row.id)}`),
+          agentId: actor,
+          status: "active",
+        });
+      const plan = plans.get(owner);
+      if (!plan) await gap(key, "plan/missing_enter", timestamp);
+      else {
+        const next = { ...plan };
+        if (row.type === "plan_mode.exit") next.status = "inactive";
+        if (row.type === "plan.revision") {
+          if (plan.planId !== hash(`${actor}/plan/${z.string().parse(row.id)}`))
+            throw new Error("Plan revision belongs to another native plan");
+          next.version = z.number().int().positive().parse(row.version);
+          next.sourceHash = z
+            .string()
+            .regex(/^[a-f0-9]{64}$/)
+            .parse(row.sha256);
+          next.byteSize = z.number().int().nonnegative().parse(row.bytes);
+          const reference =
+            typeof row.key === "string"
+              ? row.key
+              : typeof row.path === "string"
+                ? row.path
+                : undefined;
+          if (reference !== undefined) next.sourceReference = filter(reference);
+          else delete next.sourceReference;
+          delete next.attachment;
+          const artifactId = hash(`${next.planId}/revision/${next.version}`);
+          const result =
+            reference && resolveArtifact
+              ? await resolveArtifact({
+                  artifactId,
+                  sourceKey: `kimi/plan/${next.planId}/${next.version}`,
+                  path: reference,
+                  historical: true,
+                  expectedSourceHash: next.sourceHash,
+                })
+              : { reason: "Plan revision file requires artifact resolution" };
+          await emit(
+            key + "/artifact-pending",
+            [
+              {
+                kind: "attachment.pending",
+                payload: { artifactId, filename: "plan.md" },
+              },
+            ],
+            timestamp,
+          );
+          if ("attachment" in result) {
+            next.attachment = {
+              artifactId,
+              version: result.attachment.version,
+            };
+            await emit(
+              key + "/artifact",
+              [
+                {
+                  kind: "attachment.available",
+                  payload: { attachment: result.attachment },
+                },
+              ],
+              timestamp,
+            );
+            report.availableAttachments++;
+          } else {
+            await emit(
+              key + "/artifact",
+              [
+                {
+                  kind: "attachment.unavailable",
+                  payload: { artifactId, reason: filter(result.reason) },
+                },
+              ],
+              timestamp,
+            );
+            report.unavailableAttachments++;
+          }
+        }
+        plans.set(owner, next);
+        await emit(
+          key + "/plan",
+          [{ kind: "plan.updated", payload: next }],
+          timestamp,
+        );
       }
     } else if (
       ![

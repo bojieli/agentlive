@@ -9,7 +9,7 @@ import {
   uploadArtifact,
   type InlineArtifactCapture,
 } from "@agentlive/publisher";
-import type { CodexArtifactResolver } from "./codex.js";
+import type { FileArtifactResolver } from "./artifact-types.js";
 const outcome = z.union([
   z.strictObject({ attachment: attachmentSchema }),
   z.strictObject({ reason: z.string() }),
@@ -37,7 +37,7 @@ export async function localArtifactResolver(options: {
     await spool.close();
     throw error;
   }
-  const resolveArtifact: CodexArtifactResolver = async (input) => {
+  const resolveArtifact: FileArtifactResolver = async (input) => {
     options.signal.throwIfAborted();
     const key = createHash("sha256").update(input.sourceKey).digest("hex");
     const checkpoint = join(results, key + ".json");
@@ -58,6 +58,8 @@ export async function localArtifactResolver(options: {
             ".gif": "image/gif",
             ".webp": "image/webp",
             ".svg": "image/svg+xml",
+            ".md": "text/markdown",
+            ".txt": "text/plain",
           } as Record<string, string>
         )[extension] ?? "application/octet-stream";
       try {
@@ -69,7 +71,7 @@ export async function localArtifactResolver(options: {
                 ? input.path
                 : resolve(options.baseDirectory, input.path),
               mediaType,
-              text: extension === ".svg",
+              text: [".svg", ".md", ".txt"].includes(extension),
             },
             options.signal,
           ),

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,6 +17,10 @@ it("imports Kimi wire text and failed tools with agent identity, filtering and s
   try {
     const sourcePath = join(root, "wire.jsonl"),
       time = Date.parse("2026-09-01T00:00:00.000Z");
+    const planPath = join(root, "plan.md"),
+      planText = "# Plan\nFinish private-key work";
+    const planHash = createHash("sha256").update(planText).digest("hex");
+    await writeFile(planPath, planText);
     const rows = [
       { type: "metadata", protocol_version: "1.5", created_at: time },
       {
@@ -117,6 +122,65 @@ it("imports Kimi wire text and failed tools with agent identity, filtering and s
         },
         outputTail: "partial monitor output",
       },
+      {
+        type: "interaction.request",
+        time: time + 11,
+        id: "approval1",
+        kind: "approval",
+        toolCallId: "tool1",
+        request: {
+          toolName: "Shell",
+          action: "Run command",
+          display: { command: "echo private-key" },
+        },
+      },
+      {
+        type: "interaction.resolved",
+        time: time + 12,
+        id: "approval1",
+        response: { decision: "approved", scope: "session" },
+      },
+      {
+        type: "permission.record_approval_result",
+        time: time + 13,
+        turnId: 1,
+        toolCallId: "tool1",
+        toolName: "Shell",
+        action: "Run command",
+        result: { decision: "approved", scope: "session" },
+      },
+      {
+        type: "interaction.request",
+        time: time + 14,
+        id: "question1",
+        kind: "question",
+        request: {
+          questions: [
+            {
+              question: "Continue?",
+              header: "Choice",
+              options: [{ label: "Yes", description: "Continue working" }],
+            },
+          ],
+        },
+      },
+      {
+        type: "interaction.resolved",
+        time: time + 15,
+        id: "question1",
+        response: { answers: { Choice: "Yes" }, method: "user" },
+      },
+      { type: "plan_mode.enter", time: time + 16, id: "plan1" },
+      {
+        type: "plan.revision",
+        time: time + 17,
+        id: "plan1",
+        version: 1,
+        sha256: planHash,
+        bytes: Buffer.byteLength(planText),
+        path: "plan.md",
+      },
+      { type: "plan_mode.exit", time: time + 18 },
     ];
     await writeFile(
       sourcePath,
@@ -171,10 +235,56 @@ it("imports Kimi wire text and failed tools with agent identity, filtering and s
           tool.status === "interrupted",
       ),
     ).toBe(true);
+    expect(state.interactions.size).toBe(2);
+    expect(
+      [...state.interactions.values()].find(
+        (value) => value.interactionType === "approval",
+      ),
+    ).toMatchObject({
+      status: "resolved",
+      response: "approved",
+      scope: "session",
+      prompt: "Run command\necho [REDACTED]",
+    });
+    expect(
+      [...state.interactions.values()].find(
+        (value) => value.interactionType === "question",
+      ),
+    ).toMatchObject({
+      status: "resolved",
+      questions: [
+        {
+          question: "Continue?",
+          header: "Choice",
+          options: [{ label: "Yes", description: "Continue working" }],
+        },
+      ],
+    });
+    expect([...state.plans.values()][0]).toMatchObject({
+      status: "inactive",
+      version: 1,
+      sourceHash: planHash,
+      byteSize: Buffer.byteLength(planText),
+    });
     expect(result.report.unsupported).toEqual({
       "tool_result/source_truncated": 1,
       "tool_result/image_url": 1,
     });
+    const attachment = [...state.artifacts.values()].flatMap((artifact) => [
+      ...artifact.versions.values(),
+    ])[0]!;
+    expect(attachment.provenance).toBe("historical-version");
+    expect(attachment.sourceHash).toBe(planHash);
+    expect([...state.plans.values()][0]!.attachment).toEqual({
+      artifactId: attachment.artifactId,
+      version: attachment.version,
+    });
+    const response = await fetch(
+      `${server.url}/api/v1/streams/${result.streamId}/attachments/${attachment.hash}`,
+      { headers: { authorization: `Bearer ${ownerCredential}` } },
+    );
+    expect(await response.text()).toBe("# Plan\nFinish [REDACTED] work");
+    await rm(planPath);
     const before = session.boundary.sequence;
     await importKimiRecording(options);
     expect(session.boundary.sequence).toBe(before);

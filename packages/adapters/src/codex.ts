@@ -2,11 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { z } from "zod";
 import { canonicalJson, type EventContent } from "@agentlive/protocol";
-import {
-  PublisherJournal,
-  StreamingRedactor,
-  type CapturedAttachment,
-} from "@agentlive/publisher";
+import { PublisherJournal, StreamingRedactor } from "@agentlive/publisher";
 import { chunkContent } from "./chunks.js";
 import type { RpcNotification } from "./stdio.js";
 const id = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -23,12 +19,8 @@ export type CodexCaptureSink = Pick<
   PublisherJournal,
   "identity" | "capture" | "capturedThrough"
 >;
-export type CodexArtifactResolver = (request: {
-  artifactId: string;
-  sourceKey: string;
-  path: string;
-  historical: boolean;
-}) => Promise<{ attachment: CapturedAttachment } | { reason: string }>;
+export type { FileArtifactResolver as CodexArtifactResolver } from "./artifact-types.js";
+import type { FileArtifactResolver as CodexArtifactResolver } from "./artifact-types.js";
 export class CodexCapture {
   readonly artifactReport = { available: 0, unavailable: 0, currentFile: 0 };
   private readonly segment = randomUUID();

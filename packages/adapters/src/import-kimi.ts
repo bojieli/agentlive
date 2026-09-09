@@ -14,15 +14,16 @@ export async function importKimiRecording(options: KimiImportOptions) {
   );
   return importNativeRecording(options, {
     agent: "kimi",
-    converterVersion: `kimi-history-2-${source.agentId}`,
+    converterVersion: `kimi-history-3-${source.agentId}`,
     source,
-    capture: (journal, secrets) =>
+    capture: (journal, secrets, artifacts) =>
       captureKimiHistory(
         options.sourcePath,
         source,
         journal,
         secrets,
         options.signal,
+        artifacts.resolveArtifact,
       ),
   });
 }

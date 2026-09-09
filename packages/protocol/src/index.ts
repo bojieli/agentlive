@@ -85,6 +85,43 @@ export const contentSchema = z.discriminatedUnion("kind", [
     turnsUsed: cursorSchema.optional(),
     wallClockMs: clock.optional(),
   }),
+  event("interaction.updated", {
+    interactionId: idSchema,
+    agentId: idSchema.optional(),
+    toolId: idSchema.optional(),
+    interactionType: z.enum(["approval", "question"]),
+    status: z.enum(["pending", "resolved", "cancelled", "unknown"]),
+    title: text,
+    prompt: text,
+    response: text.optional(),
+    scope: text.optional(),
+    questions: z
+      .array(
+        z.strictObject({
+          question: text,
+          header: text.optional(),
+          options: z
+            .array(
+              z.strictObject({ label: text, description: text.optional() }),
+            )
+            .optional(),
+        }),
+      )
+      .max(100)
+      .optional(),
+  }),
+  event("plan.updated", {
+    planId: idSchema,
+    agentId: idSchema.optional(),
+    status: z.enum(["active", "inactive"]),
+    version: sequenceSchema.optional(),
+    sourceHash: hashSchema.optional(),
+    byteSize: cursorSchema.optional(),
+    sourceReference: text.optional(),
+    attachment: z
+      .strictObject({ artifactId: idSchema, version: sequenceSchema })
+      .optional(),
+  }),
   event("turn.started", { turnId: idSchema }),
   event("turn.ended", {
     turnId: idSchema,
