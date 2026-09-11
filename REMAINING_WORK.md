@@ -11,7 +11,7 @@ The user-directed order remains: finish missing product features, then performan
 3. **Hosted authorization follow-ups.** Per-account quotas; real identity-provider acceptance; concurrent logout/disable race coverage beyond the tested revocation points.
 4. **Operations.** Recording-format upgrade and tested rollback automation. Online backup is implemented and passes the container probe; exercise it on an actual host.
 5. **Performance, capacity and lifecycle.** Meet the 500,000-event / eight-hour seek target; retention, global and account quotas; safe automatic server content collection; publisher spool pruning and durability before the first remote binding; independent artifact delivery; report archival; suspension/device/accessibility acceptance.
-6. **Release acceptance and publication.** Current-release CI, package and container verification; deployed pilot; provenance-signed npm publication (remove the `private` guard in `scripts/build-package.mjs`); external testers completing publish → watch → rewind → catch up → replay in both deployment modes.
+6. **Release acceptance and publication.** Current-release CI, package and container verification; deployed pilot; npm publication with provenance through the prepared [release workflow](RELEASING.md) (needs an `NPM_TOKEN` in the `npm` environment and a version tag); external testers completing publish → watch → rewind → catch up → replay in both deployment modes.
 
 ## 1. Scalable playback and complete viewers — M1/M4
 

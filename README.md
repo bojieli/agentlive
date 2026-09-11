@@ -127,7 +127,7 @@ npx --yes pnpm@12.3.4 check          # format, typecheck, build, offline tests
 npx --yes pnpm@12.3.4 package:verify # build and verify the standalone tarball
 ```
 
-Tests make no model calls. Opt-in probes under `scripts/` exercise installed agents and may incur provider charges. See [CONTRIBUTING.md](CONTRIBUTING.md) and report security issues as described in [SECURITY.md](SECURITY.md).
+Tests make no model calls. Opt-in probes under `scripts/` exercise installed agents and may incur provider charges. See [CONTRIBUTING.md](CONTRIBUTING.md), [RELEASING.md](RELEASING.md), and report security issues as described in [SECURITY.md](SECURITY.md).
 
 ## License
 

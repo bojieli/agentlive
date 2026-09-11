@@ -9,8 +9,8 @@ Last updated: 2026-09-11. **Production gate: not passed.** Every feature listed 
 | Full offline suite (`vitest run --maxWorkers=1`) | 693 tests in 135 files passed (258 s). The closed-pipe replay fix and sample-archive test added afterwards pass in their focused file (3 tests) |
 | Formatting, TypeScript project build, browser bundle | Pass |
 | Standalone package (`package:verify`: offline reproducible rebuild, isolated install, serve/import/replay/archive/backup round trips) | Pass: `agentlive-0.1.0.tgz`, byte-identical offline rebuild, isolated install with scripts disabled, 27 passing installed-package checks |
-| CI (Linux + macOS) | Last confirmed at `2bcb9ca`; this checkpoint is confirmed only once CI passes on the pushed commit |
-| Rendered Chrome probes | 21 checks passed at the last browser checkpoint (2026-09-10); not rerun for this checkpoint ([evidence](docs/browser/README.md)) |
+| CI (Linux + macOS) | `check` and `package:verify` passed on both platforms for `729f8cb`; later commits are confirmed as their runs complete |
+| Rendered Chrome probes | 21 checks passed in headless Chrome 152 on a clean build of `87484e3`, with zero console errors and zero automated axe violations at desktop and mobile viewport sizes ([evidence](docs/browser/chrome-release-prep-2026-09-11.json)) |
 | Docker image probe | 14 container checks passed on an image built from commit `87484e3`, including online backup while serving and its restore ([evidence](deployment/container-probe-2026-09-11.json)) |
 
 Local tests use synthetic fixtures and make no model calls. They are correctness evidence, not native-version, device, deployment or performance acceptance.

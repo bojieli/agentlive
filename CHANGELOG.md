@@ -21,5 +21,7 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 
 ### Changed
 
+- A tag-triggered release workflow builds a publishable manifest (`build-package.mjs --release`) and publishes `agentlive` to npm with provenance; see RELEASING.md.
+
 - The standalone package is named `agentlive` and licensed under MIT.
 - Documentation reorganized: concise README, detailed [usage guide](docs/usage.md), [compatibility matrix](docs/compatibility.md), contribution and security policies. Historical status logs moved to `docs/history/`.

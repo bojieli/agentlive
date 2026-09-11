@@ -1,0 +1,32 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .node-version
+          registry-url: https://registry.npmjs.org
+      - run: npx --yes pnpm@12.3.4 install --frozen-lockfile
+      - run: npx --yes pnpm@12.3.4 check
+      - run: npx --yes pnpm@12.3.4 package:verify
+      - name: Check tag matches package version
+        run: |
+          version=$(node -p "require('./packages/cli/package.json').version")
+          test "v$version" = "$GITHUB_REF_NAME"
+      - name: Build publishable package
+        run: node scripts/build-package.mjs --release
+      - name: Publish with provenance
+        run: npm publish dist/release/agentlive-*.tgz --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

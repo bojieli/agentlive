@@ -46,6 +46,7 @@ function collect(name) {
   }
 }
 collect("@agentlive/cli");
+const publishable = process.argv.includes("--release");
 const staging = join(root, "dist", "package");
 const release = join(root, "dist", "release");
 await rm(staging, { recursive: true, force: true });
@@ -70,8 +71,8 @@ await writeFile(
     {
       name: "agentlive",
       version: cli.version,
-      // Guard against accidental registry publication; remove when releasing.
-      private: true,
+      // Only the release workflow (--release) produces a publishable manifest.
+      ...(publishable ? {} : { private: true }),
       description:
         "Broadcast and replay coding-agent sessions from Claude Code, Codex, Kimi Code and OpenCode",
       keywords: [
