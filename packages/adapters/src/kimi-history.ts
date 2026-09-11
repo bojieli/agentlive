@@ -411,10 +411,14 @@ export async function createKimiHistoryConsumer(
         if (typeof result.output === "string") output = result.output;
         else {
           const text: string[] = [];
-          for (const [index, part] of z
-            .array(object)
-            .parse(result.output)
-            .entries()) {
+          // Kimi 1.5 may write a single content part (e.g. an image) instead of an array.
+          const parts =
+            result.output !== null &&
+            typeof result.output === "object" &&
+            !Array.isArray(result.output)
+              ? [result.output]
+              : result.output;
+          for (const [index, part] of z.array(object).parse(parts).entries()) {
             if (part.type === "text") text.push(z.string().parse(part.text));
             else
               await gap(

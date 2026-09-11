@@ -155,3 +155,15 @@ Shape inspection found 32 version-1 comment-monitor snapshots, all with native s
 A real existing 325-record session containing both kinds passed private import/replay/retry: 220 producer events, 222 stored events, and two retained monitor identities. Its 39 remaining gaps belong to other attachments, file history, tool references, frame links, turn duration, and queue records. The recorded monitor types no longer appear in its unsupported list.
 
 The refreshed full Claude pass processed 1,593 files: 1,558 passed and the same 35 failed standalone identity/timing preflight. Across passing files it reconstructed 10 monitor identities, emitted 414,531 events, and retained 71,338 explicit gaps and 1,746 unavailable attachment representations in the resolver-free pass. Event and state-snapshot renderings were checked and hashed locally.
+
+### Corpus rerun at the publication checkpoint (2026-09-11)
+
+`node scripts/validate-native-replay.mjs` (reference reducer and terminal render; no publication, no model calls; aggregate counts only) ran against every local history with converters at `d0e2370`:
+
+| Agent | Files | Passed | Rejected | Normalized events | Messages | Tools | Gaps | Unavailable artifacts |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Codex | 575 | 575 | 0 | 314,037 | 23,603 | 70,644 | 1,670 | 1,981 |
+| Claude | 1,684 | 1,649 | 35 | 444,720 | 47,091 | 103,161 | 78,799 | 1,816 |
+| Kimi | 500 | 494 → 500 | 6 → 0 | 103,244 | 14,135 | 21,207 | 10,606 | 7 |
+
+The 35 Claude rejections are the previously classified histories without standalone session identity or timestamps. The run found a new Kimi 1.5 shape: 27 `tool.result` records in six files whose `output` is a single content-part object (inline `image/png` data URLs) rather than an array, which the converter rejected. Conversion now treats a single object as a one-element array; the image is reported as the same explicit `tool_result/image` gap as images inside array outputs, so output for previously converting histories is unchanged and the Kimi converter identity stays `kimi-history-4`. After the fix all 500 Kimi files pass (the Kimi row above is the rerun). Capturing tool-result images as attachments needs a future converter version. No OpenCode exports were present in the local inventory directory for this run.

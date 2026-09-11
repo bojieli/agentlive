@@ -11,6 +11,7 @@ Last updated: 2026-09-11. **Production gate: not passed.** Every feature listed 
 | Standalone package (`package:verify`: offline reproducible rebuild, isolated install, serve/import/replay/archive/backup round trips) | Pass: `agentlive-0.1.0.tgz`, byte-identical offline rebuild, isolated install with scripts disabled, 27 passing installed-package checks |
 | CI (Linux + macOS) | `check` and `package:verify` passed on both platforms for `729f8cb`; later commits are confirmed as their runs complete |
 | Rendered Chrome probes | 21 checks passed in headless Chrome 152 on a clean build of `87484e3`, with zero console errors and zero automated axe violations at desktop and mobile viewport sizes ([evidence](docs/browser/chrome-release-prep-2026-09-11.json)) |
+| Native-history corpus (read-only, no model calls) | Codex 575/575, Claude 1,649/1,684 (35 known identity-less ledgers), Kimi 500/500 after fixing a new single-part tool output shape ([details](docs/adapters/NATIVE_HISTORY_CORPUS.md#corpus-rerun-at-the-publication-checkpoint-2026-09-11)) |
 | Docker image probe | 14 container checks passed on an image built from commit `87484e3`, including online backup while serving and its restore ([evidence](deployment/container-probe-2026-09-11.json)) |
 
 Local tests use synthetic fixtures and make no model calls. They are correctness evidence, not native-version, device, deployment or performance acceptance.

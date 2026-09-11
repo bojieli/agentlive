@@ -25,9 +25,9 @@ AgentLive captures what each coding agent durably exposes on the publisher machi
 
 ## Known limitations by agent
 
-- **Claude Code.** Bridge/bookkeeping ledgers without standalone session identity or timestamps are rejected rather than imported (35 of 1,588 files in the local corpus). File-history snapshots/deltas, queue operations and some attachment records remain explicit gaps. Reasoning/signatures are omitted by default.
+- **Claude Code.** Bridge/bookkeeping ledgers without standalone session identity or timestamps are rejected rather than imported (35 of 1,684 files in the 2026-09-11 local corpus run). File-history snapshots/deltas, queue operations and some attachment records remain explicit gaps. Reasoning/signatures are omitted by default.
 - **Codex.** Extension items and a small number of skill blocks remain explicit gaps. Mixed-thread *legacy* child rollouts are rejected for family capture because they lack structured ownership. Live text deltas from the app-server are not captured by file following.
-- **Kimi Code.** Runtime/telemetry, turn lifecycle and tool-store records remain explicit gaps. Shared session membership does not establish a parent relationship, so none is inferred between sibling agents.
+- **Kimi Code.** Tool-result images (array or single-part outputs) are explicit gaps rather than captured attachments. Runtime/telemetry, turn lifecycle and tool-store records remain explicit gaps. Shared session membership does not establish a parent relationship, so none is inferred between sibling agents.
 - **OpenCode.** Capture preserves observed snapshots, not every native delta notification. Discovery covers the native server's workspace scope. Imports read per-session exports; a family import requires every exported descendant.
 
 ## Platforms

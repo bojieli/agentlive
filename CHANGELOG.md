@@ -19,6 +19,7 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 
 ### Fixed
 
+- Kimi histories whose tool results contain a single content-part object (Kimi 1.5 image outputs) no longer fail conversion.
 - `agentlive replay` no longer crashes with an unhandled EPIPE when its output pipe is closed (for example `| head`).
 
 ### Changed
