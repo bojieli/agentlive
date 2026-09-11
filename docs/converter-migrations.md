@@ -1,6 +1,6 @@
 # Converter and import migration implementation audit
 
-Status: inspection, frozen-import child-source relocation and replacement import with changed converter/filter/artifact settings are implemented. Frozen-import replacement can also target another server. Compatible in-place continuation, existing live-binding migration and archive-only server transfer remain unfinished. Existing mismatched-option checks remain in force. This audit identifies the state that a migration must handle before native converter behavior can change safely.
+Status: implemented so far are inspection, frozen-import child-source relocation, replacement import with changed converter/filter/artifact settings (optionally on another server), and replacement of existing live Claude/Codex/Kimi bindings (`migrate-live`, below). Compatible in-place continuation, OpenCode live-binding migration and archive-only server transfer remain unfinished. Existing mismatched-option checks remain in force. This audit identifies the state that a migration must handle before native converter behavior can change safely.
 
 ## Inspect an existing binding
 
@@ -124,7 +124,7 @@ Before remote creation, `replacement-import.json` saves the source revision/mani
 
 Current evidence: 14 focused tests cover exact-prefix relocation and replacement families across all four agents, changed message/title filtering, changed OpenCode artifact bytes, private target visibility, retained/removed source disposition, actual CLI retries, appended-source rejection, changed-policy rejection and a lost removal response after the server committed removal. Eighteen CLI/OpenCode tests passed separately. TypeScript, browser/package builds and isolated-install/reproducible-rebuild checks pass; the installed-package probe now also executes replacement migration, confirms stable retry identity and replays redacted target text.
 
-Limits: same-sequence compatibility proof/checkpoint rebuild, existing live-binding replacement, archive-only server transfer without native history, arbitrary family-scope change and full process-death/storage-fault acceptance remain unfinished. Server/archive lineage is implemented as described below. A completed replacement is a feature checkpoint, not general migration or production-gate completion. Inspection's `migrationImplemented: false` continues to mean that general migration is incomplete.
+Limits: same-sequence compatibility proof/checkpoint rebuild, archive-only server transfer without native history, arbitrary family-scope change and full process-death/storage-fault acceptance remain unfinished. Server/archive lineage is implemented as described below. A completed replacement is a feature checkpoint, not general migration or production-gate completion. Inspection's `migrationImplemented: false` continues to mean that general migration is incomplete.
 
 The subsequent full regression passed all 673 tests across 128 files (232.20 seconds, one worker). Production code was unchanged during that run. This is local correctness evidence, not full production acceptance.
 
@@ -153,6 +153,76 @@ New receipts include `targetServerOrigin` and `stateDirectory`, alongside the ex
 
 Older replacement layouts remain retryable at their original directory and return `stateDirectory: null`; they retain the programmatic `publisherDirectory` workflow. The operation never silently moves an existing journal to a new path.
 
-Nineteen focused migration/inspection/account/family tests pass, including two actual HTTP servers with separate credentials, retain/remove dispositions, bad/missing destination credentials before intent, destination-switch rejection, private filtered output, external archive provenance, exact CLI retries, and destination live continuation/restart with full imported-prefix equality. Initial tests expected 401 for a source credential presented to the destination; the server correctly returns 403 and the assertions now match it. Legacy directory retry compatibility passes. The native transcripts are synthetic fixtures. This workflow recreates frozen imports under the current converter and selected policies; live-binding migration and archive-only transfer remain separate work.
+Nineteen focused migration/inspection/account/family tests pass, including two actual HTTP servers with separate credentials, retain/remove dispositions, bad/missing destination credentials before intent, destination-switch rejection, private filtered output, external archive provenance, exact CLI retries, and destination live continuation/restart with full imported-prefix equality. Initial tests expected 401 for a source credential presented to the destination; the server correctly returns 403 and the assertions now match it. Legacy directory retry compatibility passes. The native transcripts are synthetic fixtures. This workflow recreates frozen imports under the current converter and selected policies. Live bindings use `migrate-live` (below); archive-only transfer remains separate work.
 
 Final TypeScript/browser/package and isolated-install/reproducible-rebuild checks pass. The installed-package probe covers replacement migration on one server; the two-server workflows are tested through the built CLI.
+
+## Replace a live binding with a new projection
+
+```sh
+agentlive inspect-migration --source BINDING_DIR        # published.manifestHash
+agentlive migrate-live --stream OLD_RECORDING_ID --native-source ROOT_FILE \
+  --operation-id UNIQUE_ID --expected-manifest-hash LIVE_MANIFEST_HASH \
+  --old-recording retain [--title NEW_TITLE] [--redact-env NAME] \
+  [--artifact-root PATH]... [--artifact-base PATH] [--artifact-bundles] \
+  [--remote-artifact-policy FILE]
+agentlive publish --agent AGENT --source ROOT_FILE --resume-import \
+  --title NEW_TITLE [same new filter/artifact options]
+```
+
+Use this command when a live Claude, Codex or Kimi binding (one with `publish.json`, including a resumed import) must change its converter, filter, title or artifact policy. Restarting `publish` with changed options is still rejected. `--source BINDING_DIR` can be used instead of `--stream`. `--native-source` must be the transcript the binding follows. The binding's saved native cursor (and any earlier import boundary) must still be a prefix of that file. Use `published.manifestHash` from inspection. Options that are not given keep the binding's current values: the title and the artifact base and roots. Bundle and remote-artifact policies are not recorded in `publish.json`, so pass them again if you still want them. The effective filter is the automatic environment-secret filter, plus the owner credential, plus the `--redact-env` values. `publish` now accepts `--redact-env` too, so the same filter can be supplied when you continue.
+
+Order of operations. The command holds a per-key migration lock throughout. It also holds the source binding's publisher lock from validation until the binding is retired.
+
+1. **Validate.** The command rejects the migration, leaving the binding unchanged, when:
+   - a publisher is attached;
+   - any captured event is unacknowledged;
+   - the manifest hash is different;
+   - a credential rotation, import resume, family expansion, archive transfer or someone else's pending finish is still in progress;
+   - sharing is paused (the old recording cannot be ended then);
+   - the binding belongs to OpenCode.
+2. **Freeze and import.** The root is frozen at its last complete line, and each current family child is frozen the same way. Incomplete trailing lines, and children that appear later, are left for live capture. The frozen prefix must cover everything the old binding captured, including every child cursor. The current converter imports exactly that prefix as a new private recording, under the new policy and with fresh event mappings. The import goes into a staging binding under `publisher/live-migrations/<key>/<sha256(operation)>/`. Before the replacement recording is created, `publisher/live-migrations/<key>/intent.json` records: the source recording, revision, epoch and captured count; the manifest hash; the frozen root and child boundaries; the target policy hash; the disposition; and the staging and retirement paths. Retries import with exactly those saved offsets, so a native file that keeps growing does not change the target.
+3. **Verify and end.** The command checks that the replacement is a private, ended recording. It then ends the old recording at its captured boundary, which appends only a lifecycle event.
+4. **Record lineage.** It posts immutable server lineage (`migrationOrigin`, using the source and target converter versions). It writes `live-migration.json` into the old binding and moves that binding to `publisher/retired/<key>-live-migration-<id>` while still holding its lock.
+5. **Hand over the key.** It renames the staged replacement into the live key.
+6. **Apply the disposition.** It applies `retain`, or `remove` (which requires `--confirm-removal`), and marks the intent complete.
+
+The receipt (`event: "live-migrated"`) contains:
+
+- the target recording;
+- the frozen byte and child counts;
+- the retired directory;
+- a `continuation` object with the title, agent, `includeChildren`, Codex `sourceRoot`/`recordFormat` and artifact base/roots to pass to `publish --resume-import`. The replacement is private, so continue with the default `--visibility private`.
+
+Continuing with the old options fails with an options-mismatch error. The old recording keeps its visibility (for `retain`) and never receives replacement or continued content.
+
+Retry and restart behaviour:
+
+- The intent acts as a fence. While it is unfinished, `publish` for that native session refuses to start (it checks before creating a binding), so an interruption can never create a second target. Rerun the exact command; `--stream` still resolves after the old binding has been retired.
+- The command works out where it stopped from the saved intent and the filesystem: source still at the key, retired but not yet handed over, or handed over. An interruption after the intent, after the import, after lineage, or between retirement and hand-over resumes the same target.
+- Lost responses for the finish, lineage and removal requests reuse deterministic operation IDs. A completed operation repeated with the same arguments returns the saved receipt.
+- A different operation ID is rejected while an intent is unfinished. Changed title, filter or artifact options are rejected once the intent exists.
+- After completion, a new operation ID can migrate the replacement once it has been continued live. Only the latest receipt is kept.
+
+Current evidence (`tests/recovery/migrate-live.test.ts`, 5 tests, real CLI and HTTP server, synthetic native files):
+
+- Claude, Codex and Kimi root bindings, plus a Claude family binding.
+- A secret newly redacted through the environment filter, and a changed title. A public source is replaced by a private target.
+- The replacement's normalized publisher content equals a fresh import of the same frozen prefix (and child prefix) under the new policy.
+- An incomplete trailing line is excluded, then captured by the continuation.
+- The `retain` source keeps its exact prior history plus `recording.ended`. The `remove` source is removed.
+- Lineage is recorded, and exact retries are no-ops.
+- Interruptions after the intent, after the import, after lineage and after retirement are resumed through the CLI. Publishing is fenced while an intent is pending.
+- Wrong manifest hash, missing `--confirm-removal`, an attached publisher, undelivered events, a conflicting operation ID, a changed policy on retry and an OpenCode binding are all rejected; the rejection cases leave the binding files unchanged.
+- `publish --resume-import` with the new options continues live capture into the replacement for every agent, and the old recording stays unchanged.
+
+Limits:
+
+- **OpenCode is not supported.** Its live capture follows a native server rather than a file, so a frozen export boundary is not yet defined for it.
+- **No abandon command.** An intent that can never complete (for example, because the native source was deleted) blocks publishing for that session until the operator removes `publisher/live-migrations/<key>/intent.json` by hand. A staged replacement recording created before that point stays private and can be removed with `agentlive remove`.
+- **The fence covers `publish` only.** A concurrent `import` of the same session during the short gap between retirement and hand-over would make the hand-over fail rather than overwrite that binding.
+- **Children are not fully frozen.** A child with no complete line at freeze time fails the first attempt; retry once it has one.
+- **Titles.** Titles containing newly filtered values are redacted, so continue with the receipt's `continuation.title`.
+- **Moved sources.** Moved Kimi exports that need an explicit `--native-agent` identity are not supported.
+- **Cross-server replacement is not supported** for live bindings.
+- **Converter output.** Compatibility is not proven: the replacement is the current converter's projection, not an equivalence proof.

@@ -82,6 +82,22 @@ export async function finishPublisher(options: {
 }) {
   idSchema.parse(options.operationId);
   const journal = await PublisherJournal.openExisting(options.directory);
+  try {
+    return await finishJournal(journal, options);
+  } finally {
+    await journal.close();
+  }
+}
+/** Finish through an already exclusively opened journal; the caller keeps its lock. */
+export async function finishJournal(
+  journal: PublisherJournal,
+  options: {
+    operationId: string;
+    ownerCredential: string;
+    signal: AbortSignal;
+  },
+) {
+  idSchema.parse(options.operationId);
   const controller = new AbortController();
   let running: Promise<void> | undefined;
   try {
@@ -226,6 +242,5 @@ export async function finishPublisher(options: {
   } finally {
     controller.abort();
     await running;
-    await journal.close();
   }
 }

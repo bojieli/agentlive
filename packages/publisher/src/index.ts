@@ -5,7 +5,11 @@ export {
   type InlineArtifactCapture,
   type CapturedAttachment,
 } from "./artifacts.js";
-export { PublisherJournal } from "./journal.js";
+export { PublisherJournal, publisherBindingKey } from "./journal.js";
+export {
+  assertNoPendingLiveMigration,
+  liveMigrationDirectory,
+} from "./migration-fence.js";
 export type { PublisherBinding, CaptureInput } from "./journal.js";
 export {
   PublisherNetwork,
@@ -18,6 +22,7 @@ export { rotatePublisherCredential } from "./rotate-credential.js";
 
 export {
   finishPublisher,
+  finishJournal,
   assertPublisherNotFinished,
   readPublisherOperation,
 } from "./finish.js";

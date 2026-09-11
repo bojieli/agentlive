@@ -29,6 +29,7 @@ export async function inspectKimiHistory(
   signal?: AbortSignal,
   identity?: { nativeSessionId: string; agentId: string },
   tail: "parse" | "defer" = "parse",
+  through?: number,
 ): Promise<KimiHistoryManifest> {
   const components = resolve(path).split(/[\\/]/);
   const session = components.findLast((part) =>
@@ -43,6 +44,7 @@ export async function inspectKimiHistory(
     records = 0;
   for await (const record of readJsonlSource(path, {
     tail,
+    ...(through === undefined ? {} : { through }),
     ...(signal ? { signal } : {}),
   })) {
     const row = object.parse(record.value);

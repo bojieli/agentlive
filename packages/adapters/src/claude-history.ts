@@ -39,6 +39,7 @@ export async function inspectClaudeHistory(
   path: string,
   signal?: AbortSignal,
   tail: "parse" | "defer" = "parse",
+  through?: number,
 ): Promise<ClaudeHistoryManifest> {
   let nativeSessionId: string | undefined,
     createdAt: string | undefined,
@@ -46,6 +47,7 @@ export async function inspectClaudeHistory(
     records = 0;
   for await (const record of readJsonlSource(path, {
     tail,
+    ...(through === undefined ? {} : { through }),
     ...(signal ? { signal } : {}),
   })) {
     const row = rowSchema.parse(record.value);

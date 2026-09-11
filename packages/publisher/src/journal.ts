@@ -121,6 +121,23 @@ const parseBinding = (raw: unknown): PublisherBinding => {
   return binding;
 };
 
+/** Binding directory name for an exact server origin and native session. */
+export function publisherBindingKey(input: {
+  serverOrigin: string;
+  agent: PublisherBinding["nativeAgent"];
+  nativeSessionId: string;
+}): string {
+  return createHash("sha256")
+    .update(
+      canonicalJson({
+        serverOrigin: new URL(input.serverOrigin).origin,
+        agent: input.agent,
+        nativeSessionId: input.nativeSessionId,
+      }),
+    )
+    .digest("hex");
+}
+
 /** Durable local capture journal with exclusive kernel ownership per native-session binding. */
 export class PublisherJournal {
   private tail: Promise<unknown> = Promise.resolve();
@@ -155,15 +172,7 @@ export class PublisherJournal {
     )
       throw new Error("Expected server origin without credentials or path");
     idSchema.parse(input.nativeSessionId);
-    const key = createHash("sha256")
-      .update(
-        canonicalJson({
-          serverOrigin: url.origin,
-          agent: input.agent,
-          nativeSessionId: input.nativeSessionId,
-        }),
-      )
-      .digest("hex");
+    const key = publisherBindingKey({ ...input, serverOrigin: url.origin });
     const directory = join(root, key);
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const lock = await FileLock.acquire(join(directory, ".publisher.lock"));
@@ -248,15 +257,11 @@ export class PublisherJournal {
     const binding = parseBinding(
       JSON.parse(await readFile(join(directory, "binding.json"), "utf8")),
     );
-    const key = createHash("sha256")
-      .update(
-        canonicalJson({
-          serverOrigin: new URL(binding.serverOrigin).origin,
-          agent: binding.nativeAgent,
-          nativeSessionId: binding.nativeSessionId,
-        }),
-      )
-      .digest("hex");
+    const key = publisherBindingKey({
+      serverOrigin: new URL(binding.serverOrigin).origin,
+      agent: binding.nativeAgent,
+      nativeSessionId: binding.nativeSessionId,
+    });
     if (basename(directory) !== key)
       throw new Error("Publisher directory identity differs");
     return PublisherJournal.open(dirname(directory), {

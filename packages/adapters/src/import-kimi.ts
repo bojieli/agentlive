@@ -3,18 +3,28 @@ import { discoverNativeSessions } from "./discovery.js";
 import { kimiFamilyRoot } from "./kimi-family.js";
 import { inspectKimiHistory, captureKimiHistory } from "./kimi-history.js";
 import {
+  type FrozenSourceSnapshot,
+  snapshotTail,
+  snapshotChild,
+  assertSnapshotChildren,
+} from "./frozen-source.js";
+import {
   importNativeRecording,
   type NativeImportOptions,
 } from "./import-native.js";
 export type KimiImportOptions = NativeImportOptions & {
   includeChildren?: boolean;
   nativeIdentity?: { nativeSessionId: string; agentId: string };
+  snapshot?: FrozenSourceSnapshot;
 };
 export async function importKimiRecording(options: KimiImportOptions) {
+  const tail = snapshotTail(options.snapshot);
   const source = await inspectKimiHistory(
     options.sourcePath,
     options.signal,
     options.nativeIdentity,
+    tail,
+    options.snapshot?.rootThrough,
   );
   const family: {
     sourcePath: string;
@@ -51,9 +61,14 @@ export async function importKimiRecording(options: KimiImportOptions) {
           throw new Error("Kimi family import root changed");
         continue;
       }
+      const frozen = snapshotChild(options.snapshot, agent);
+      if (!frozen.include) continue;
       const manifest = await inspectKimiHistory(
         candidate.source,
         options.signal,
+        undefined,
+        tail,
+        frozen.through,
       );
       if (
         manifest.nativeSessionId !== source.nativeSessionId ||
@@ -69,6 +84,10 @@ export async function importKimiRecording(options: KimiImportOptions) {
     if (!agents.has("main"))
       throw new Error("Kimi family import main log disappeared");
     family.sort((a, b) => a.nativeAgent.localeCompare(b.nativeAgent));
+    assertSnapshotChildren(
+      options.snapshot,
+      family.map((child) => child.nativeAgent),
+    );
   }
   return importNativeRecording(options, {
     agent: "kimi",

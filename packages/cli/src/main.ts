@@ -3,6 +3,11 @@ import { migrateRecording } from "./migrate-recording.js";
 import { finishPublisher } from "@agentlive/publisher";
 import { migrateImport } from "./migrate-import.js";
 import {
+  migrateLiveBinding,
+  resolveLiveMigrationDirectory,
+  liveMigrationServerOrigin,
+} from "./migrate-live.js";
+import {
   inspectMigration,
   relocateImportSources,
 } from "./inspect-migration.js";
@@ -92,6 +97,7 @@ Commands:
   agentlive finish-publisher --source <binding-directory> --operation-id <id>
   agentlive migrate-recording --source <binding-directory> --operation-id <id> --target-server <url> --target-owner-file <file> --old-recording retain|remove
   agentlive migrate-import --source <binding-directory> --native-source <file> --operation-id <id> --expected-manifest-hash <hash> --old-recording retain|remove [--confirm-removal] [--redact-env <name>]
+  agentlive migrate-live --stream <id> | --source <binding-directory> --native-source <file> --operation-id <id> --expected-manifest-hash <hash> --old-recording retain|remove [--confirm-removal] [--title <text>] [--redact-env <name>] [--artifact-root <path>] [--artifact-base <path>]
   agentlive relocate-import-sources --source <binding-directory> --native-source <file> --family-source <child-id=path> --operation-id <id> --expected-manifest-hash <hash>
   agentlive inspect-migration --source <publisher-binding-directory> [--native-source <file>] [--verify-family] [--family-source <child-id=path>]
   agentlive reports [--server <origin>] [--limit 50] [--after <report-id>]
@@ -159,6 +165,7 @@ Import options:
   --artifact-bundles      Capture HTML artifacts with their supported dependencies
   --artifact-root <path>  Allowed local artifact root; repeat for multiple roots
   --artifact-base <path>  Base directory for relative artifact paths
+  --redact-env <name>     Extra exact redaction value from this environment variable (publish, migrate-import, migrate-live)
   --expand-family        Expand a live recording to include children
   --resume-import        Continue an ended import with its original options
   --native-session <id>   Native session to select, or Kimi ID for a moved export
@@ -271,6 +278,7 @@ async function main() {
     command !== "doctor" &&
     command !== "migrate-recording" &&
     command !== "migrate-import" &&
+    command !== "migrate-live" &&
     command !== "relocate-import-sources" &&
     command !== "inspect-migration" &&
     command !== "reports" &&
@@ -387,6 +395,7 @@ async function main() {
     ...([
       "login",
       "migrate-import",
+      "migrate-live",
       "finish-publisher",
       "migrate-recording",
       "remove",
@@ -463,6 +472,24 @@ async function main() {
           "remote-artifact-policy",
         ]
       : []),
+    ...(command === "migrate-live"
+      ? [
+          "stream",
+          "source",
+          "native-source",
+          "operation-id",
+          "expected-manifest-hash",
+          "server",
+          "old-recording",
+          "confirm-removal",
+          "redact-env",
+          "title",
+          "artifact-root",
+          "artifact-base",
+          "artifact-bundles",
+          "remote-artifact-policy",
+        ]
+      : []),
     ...(command === "relocate-import-sources"
       ? [
           "source",
@@ -511,6 +538,7 @@ async function main() {
             command === "doctor" ||
             command === "migrate-recording" ||
             command === "migrate-import" ||
+            command === "migrate-live" ||
             command === "relocate-import-sources" ||
             command === "reports" ||
             command === "accounts" ||
@@ -583,6 +611,7 @@ async function main() {
                                     "native-server",
                                     "launch",
                                     "cwd",
+                                    "redact-env",
                                   ]
                                 : []),
                               "include-children",
@@ -602,9 +631,24 @@ async function main() {
   ]);
   if (Object.keys(values).some((key) => !allowed.has(key)))
     throw new Error("Option does not apply to this command; use --help");
+  // Explicit extra redaction values (migrate-import, migrate-live and publish continuation).
+  for (const name of values["redact-env"] ?? []) {
+    const value = process.env[name];
+    if (
+      !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
+      !value ||
+      value.length < 8 ||
+      value.length > 4096
+    )
+      throw new Error(
+        "Redaction environment variable must contain 8 to 4096 characters",
+      );
+    secrets.push(value);
+  }
   if (
     values["remote-artifact-policy"] &&
     command !== "migrate-import" &&
+    command !== "migrate-live" &&
     values.agent !== "opencode" &&
     values.agent !== "claude" &&
     values.agent !== "kimi" &&
@@ -1069,19 +1113,6 @@ async function main() {
         "Replacement migration currently requires the original server origin",
       );
     values.server = sourceBinding.serverOrigin;
-    for (const name of values["redact-env"] ?? []) {
-      const value = process.env[name];
-      if (
-        !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ||
-        !value ||
-        value.length < 8 ||
-        value.length > 4096
-      )
-        throw new Error(
-          "Redaction environment variable must contain 8 to 4096 characters",
-        );
-      secrets.push(value);
-    }
     const credential = await loadCredential();
     secrets.push(credential);
     const targetServer = values["target-server"];
@@ -1132,6 +1163,56 @@ async function main() {
     });
     process.stdout.write(
       JSON.stringify({ event: "import-migrated", ...result }) + "\n",
+    );
+    return;
+  }
+  if (command === "migrate-live") {
+    if (
+      !values["native-source"] ||
+      !values["operation-id"] ||
+      !values["expected-manifest-hash"] ||
+      !["retain", "remove"].includes(values["old-recording"] ?? "") ||
+      !!values.stream === !!values.source
+    )
+      throw new Error(
+        "Live migration requires one of --stream or --source, --native-source, --operation-id, --expected-manifest-hash and --old-recording retain|remove",
+      );
+    const directory = values.source
+      ? resolve(values.source)
+      : await resolveLiveMigrationDirectory({
+          publisherRoot,
+          streamId: values.stream!,
+          signal: controller.signal,
+        });
+    const serverOrigin = await liveMigrationServerOrigin(directory);
+    if (values.server && values.server !== serverOrigin)
+      throw new Error("Live migration uses the binding's server origin");
+    values.server = serverOrigin;
+    const credential = await loadCredential();
+    secrets.push(credential);
+    const result = await migrateLiveBinding({
+      directory,
+      nativeSource: resolve(values["native-source"]),
+      operationId: values["operation-id"],
+      expectedManifestHash: values["expected-manifest-hash"],
+      disposition: values["old-recording"] as "retain" | "remove",
+      confirmRemoval: values["confirm-removal"] ?? false,
+      ...(values.stream ? { sourceStreamId: values.stream } : {}),
+      ownerCredential: credential,
+      secrets,
+      signal: controller.signal,
+      ...(values.title === undefined ? {} : { title: values.title }),
+      ...(values["artifact-root"]
+        ? { artifactRoots: values["artifact-root"] }
+        : {}),
+      ...(values["artifact-base"]
+        ? { artifactBaseDirectory: values["artifact-base"] }
+        : {}),
+      ...(values["artifact-bundles"] ? { artifactBundles: true } : {}),
+      ...(remoteArtifacts ? { remoteArtifacts } : {}),
+    });
+    process.stdout.write(
+      JSON.stringify({ event: "live-migrated", ...result }) + "\n",
     );
     return;
   }

@@ -1,4 +1,7 @@
-import { assertPublisherNotFinished } from "@agentlive/publisher";
+import {
+  assertPublisherNotFinished,
+  assertNoPendingLiveMigration,
+} from "@agentlive/publisher";
 import {
   validateRemoteArtifactPolicy,
   remoteArtifactSecrets,
@@ -76,11 +79,14 @@ export async function publishNativeRecording(
         "agentlive-artifact-bundle-policy-v2",
       ],
     };
-  const journal = await PublisherJournal.open(options.publisherRoot, {
+  const binding = {
     serverOrigin: options.serverOrigin,
     agent: adapter.agent,
     nativeSessionId: adapter.nativeSessionId,
-  });
+  };
+  // Checked before open, which would otherwise create a binding at a retired key.
+  await assertNoPendingLiveMigration(options.publisherRoot, binding);
+  const journal = await PublisherJournal.open(options.publisherRoot, binding);
   const controller = new AbortController();
   const signal = AbortSignal.any([options.signal, controller.signal]);
   let artifacts: Awaited<ReturnType<typeof localArtifactResolver>> | undefined;

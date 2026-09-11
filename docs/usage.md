@@ -145,6 +145,8 @@ agentlive doctor [--server <origin>]         # runtime/credential/server/agent c
 
 `retire` moves a finished, transferred or fully delivered imported binding to `<state-dir>/publisher/retired/` while holding its lock. Bindings are keyed by server, agent and native session, so this is how to start a *new* recording of a native session that already has one: the next `publish` creates a fresh binding and recording and, for file agents, captures the retained native history from the beginning. Retired directories are kept for inspection and are not listed by `status`.
 
+To change the redaction filter, title or artifact policy of a live Claude, Codex or Kimi binding, don't restart it with new options (that is rejected). Use `migrate-live` instead. It builds a verified private replacement recording from the retained native history under the new policy and puts it in the binding's place. You then continue it with `publish --resume-import` and the new options; see [live-binding migration](converter-migrations.md#replace-a-live-binding-with-a-new-projection).
+
 `doctor` checks the Node version, state-directory and owner-credential permissions, server `/healthz` and `/readyz`, local publisher bindings needing attention, and whether each native agent is on `PATH` with its default history root. It prints JSON and exits nonzero when a check fails.
 
 ## Managed launch

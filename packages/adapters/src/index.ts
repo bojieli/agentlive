@@ -43,6 +43,7 @@ export {
   type KimiCaptureSink,
 } from "./kimi-history.js";
 export { importKimiRecording, type KimiImportOptions } from "./import-kimi.js";
+export { type FrozenSourceSnapshot } from "./frozen-source.js";
 export {
   inspectOpenCodeHistory,
   captureOpenCodeHistory,

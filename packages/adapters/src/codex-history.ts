@@ -30,6 +30,7 @@ export async function inspectCodexHistory(
   path: string,
   signal?: AbortSignal,
   tail: "parse" | "defer" = "parse",
+  through?: number,
 ): Promise<CodexHistoryManifest> {
   const nativeThreadIds = new Set<string>();
   const parents = new Map<string, string | undefined>();
@@ -43,6 +44,7 @@ export async function inspectCodexHistory(
     legacyRecords = 0;
   for await (const record of readJsonlSource(path, {
     tail,
+    ...(through === undefined ? {} : { through }),
     ...(signal ? { signal } : {}),
   })) {
     const row = rowSchema.parse(record.value);

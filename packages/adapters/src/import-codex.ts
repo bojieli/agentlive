@@ -2,12 +2,27 @@ import { discoverCodexFamily } from "./codex-family.js";
 import { CodexCapture } from "./codex.js";
 import { inspectCodexHistory, captureCodexHistory } from "./codex-history.js";
 import {
+  type FrozenSourceSnapshot,
+  snapshotTail,
+  snapshotChild,
+  assertSnapshotChildren,
+} from "./frozen-source.js";
+import {
   importNativeRecording,
   type NativeImportOptions,
 } from "./import-native.js";
-export type CodexImportOptions = NativeImportOptions & { familyRoot?: string };
+export type CodexImportOptions = NativeImportOptions & {
+  familyRoot?: string;
+  snapshot?: FrozenSourceSnapshot;
+};
 export async function importCodexRecording(options: CodexImportOptions) {
-  const source = await inspectCodexHistory(options.sourcePath, options.signal);
+  const tail = snapshotTail(options.snapshot);
+  const source = await inspectCodexHistory(
+    options.sourcePath,
+    options.signal,
+    tail,
+    options.snapshot?.rootThrough,
+  );
   const family: {
     sourcePath: string;
     nativeAgent: string;
@@ -24,8 +39,15 @@ export async function importCodexRecording(options: CodexImportOptions) {
       throw new Error("Codex family import requires a root rollout");
     for (const [thread, candidate] of threads) {
       if (thread === source.nativeSessionId) continue;
+      const frozen = snapshotChild(options.snapshot, thread);
+      if (!frozen.include) continue;
       const sourcePath = candidate.source!;
-      const manifest = await inspectCodexHistory(sourcePath, options.signal);
+      const manifest = await inspectCodexHistory(
+        sourcePath,
+        options.signal,
+        tail,
+        frozen.through,
+      );
       if (
         manifest.nativeSessionId !== source.nativeSessionId ||
         manifest.nativeThreadIds[0] !== thread ||
@@ -59,6 +81,10 @@ export async function importCodexRecording(options: CodexImportOptions) {
       family.push({ sourcePath, nativeAgent: thread, manifest });
     }
     family.sort((a, b) => a.nativeAgent.localeCompare(b.nativeAgent));
+    assertSnapshotChildren(
+      options.snapshot,
+      family.map((child) => child.nativeAgent),
+    );
   }
   return importNativeRecording(options, {
     agent: "codex",

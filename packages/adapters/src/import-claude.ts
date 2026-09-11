@@ -7,14 +7,27 @@ import {
   captureClaudeHistory,
 } from "./claude-history.js";
 import {
+  type FrozenSourceSnapshot,
+  snapshotTail,
+  snapshotChild,
+  assertSnapshotChildren,
+} from "./frozen-source.js";
+import {
   importNativeRecording,
   type NativeImportOptions,
 } from "./import-native.js";
 export type ClaudeImportOptions = NativeImportOptions & {
   includeChildren?: boolean;
+  snapshot?: FrozenSourceSnapshot;
 };
 export async function importClaudeRecording(options: ClaudeImportOptions) {
-  const source = await inspectClaudeHistory(options.sourcePath, options.signal);
+  const tail = snapshotTail(options.snapshot);
+  const source = await inspectClaudeHistory(
+    options.sourcePath,
+    options.signal,
+    tail,
+    options.snapshot?.rootThrough,
+  );
   const family: {
     sourcePath: string;
     nativeAgent: string;
@@ -55,14 +68,25 @@ export async function importClaudeRecording(options: ClaudeImportOptions) {
         if (family.length >= 199)
           throw new Error("Claude family exceeds 199 subagent logs");
         const nativeAgent = idSchema.parse(entry.name.slice(6, -6));
+        const frozen = snapshotChild(options.snapshot, nativeAgent);
+        if (!frozen.include) continue;
         const sourcePath = join(directory, entry.name);
-        const manifest = await inspectClaudeHistory(sourcePath, options.signal);
+        const manifest = await inspectClaudeHistory(
+          sourcePath,
+          options.signal,
+          tail,
+          frozen.through,
+        );
         if (manifest.nativeSessionId !== source.nativeSessionId)
           throw new Error("Claude subagent belongs to another session");
         family.push({ sourcePath, nativeAgent, manifest });
       }
     }
     family.sort((a, b) => a.nativeAgent.localeCompare(b.nativeAgent));
+    assertSnapshotChildren(
+      options.snapshot,
+      family.map((child) => child.nativeAgent),
+    );
   }
   return importNativeRecording(options, {
     agent: "claude",
