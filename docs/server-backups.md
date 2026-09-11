@@ -53,6 +53,18 @@ For rollback, retain the stopped original data directory and its compatible imag
 
 Local integration checks cover backup/restore, credential and event preservation, corrupt events/attachments, traversal and symlink rejection, startup fencing, removal of old snapshots, and old publisher/HTTP revision rejection. The isolated installed-package probe also creates a backup and restores it, verifies every backup hash and the persisted fresh revisions. This does not establish process-death fault coverage, actual-host disaster recovery, or full production acceptance.
 
+## Data format versions, upgrades and rollback
+
+Every server data directory carries `server/format.json` (`{"format": "agentlive-server-data", "version": 1}`). The server writes it under its lock at startup; directories created before the marker existed are format 1 and are stamped on first start. A release refuses to start on a directory, and `restore` refuses a backup, whose format is newer than it supports, with an error naming both versions, before reading or rewriting any other state. So rolling back to an older binary cannot silently reinterpret data written by a newer one. Offline and online backups include the marker.
+
+Format 1 is the only format so far. A future release that changes the on-disk layout will bump the version and migrate one explicit step at a time at startup. Before upgrading:
+
+1. Take a backup (`backup --server` while running, or offline) and keep the current image or package.
+2. Upgrade and start the new release; check `agentlive doctor` and `/readyz`.
+3. To roll back after a format change, stop the new release and `restore` the pre-upgrade backup into a new directory with the old release. Recordings written only after the upgrade are not merged back; clients revalidate against the restored revisions as described above.
+
+Releases built before the marker existed do not check it; do not start them on data touched by a newer release.
+
 ## Recover an existing publisher after restore
 
 Stop the publisher process, start the restored server at its original origin, then run on the publisher machine:

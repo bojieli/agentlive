@@ -1,4 +1,5 @@
 import { Reports } from "./reports.js";
+import { ensureDataFormat } from "./data-format.js";
 import { WriteBarrier } from "./write-barrier.js";
 import { cleanRemovedStorage } from "./removed-storage.js";
 import {
@@ -81,6 +82,7 @@ export class RecordingStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
+      await ensureDataFormat(directory);
       await mkdir(join(directory, "sessions"), {
         recursive: true,
         mode: 0o700,

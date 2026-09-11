@@ -1,4 +1,5 @@
 import { Reports } from "./reports.js";
+import { assertSupportedDataFormat } from "./data-format.js";
 import { cleanRemovedStorage } from "./removed-storage.js";
 import { constants } from "node:fs";
 import {
@@ -182,6 +183,8 @@ export async function restoreServer(options: {
         await input.close();
       }
     }
+    // Refuse a backup written by a newer data format before rewriting anything.
+    await assertSupportedDataFormat(server);
     const owner = JSON.parse(
       await readFile(join(output, "owner.json"), "utf8"),
     );
