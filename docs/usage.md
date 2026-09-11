@@ -276,6 +276,19 @@ The manifest records the source recording boundary, known agent/provenance, form
 
 Current archive limits are 8 GiB of expanded event/attachment data, 16 MiB of manifest data, 100,000 listed files, 1 MiB per event line and 64 MiB per attachment. ZIP entries with unsupported paths, duplicates, symlinks, executable permissions, encryption, incompatible versions or mismatched hashes/sizes are rejected. The server admits up to two concurrent imports and two concurrent exports. These are implementation limits, not measured large-archive throughput claims.
 
+## Moving a recording to another server
+
+`migrate-recording` transfers an ended recording that a local binding published to a different server using only its committed history, so the native transcript is not needed:
+
+```sh
+agentlive finish --stream <recording-id>
+agentlive migrate-recording --source <binding-directory> --operation-id <unique-id> \
+  --target-server https://new.example.com --target-owner-file <destination-owner.json> \
+  --old-recording retain            # or: remove --confirm-removal
+```
+
+`status` shows the binding directory. The command requires every captured event to be delivered and the source recording to be ended at the binding's boundary. It persists an intent, exports a staged `.agentlive` archive into the binding directory, verifies the archive against the source boundary, and imports it into the destination as a private ended recording whose metadata records the source server, recording, revision and boundary (`archiveOrigin`). Only then does it apply the requested disposition to the source. Rerunning with the same operation ID after an interruption or a lost response reuses the staged archive and destination recording; a different destination or operation for the same binding is rejected. The destination recording is continued like any archive import (a new identity); the old binding is marked transferred and cannot publish again, and `retire` can set it aside. To re-convert history under a changed converter or filter policy instead, see [converter migrations](converter-migrations.md).
+
 ## Standalone package
 
 Build and verify a standalone installation with Node 26:
