@@ -6,6 +6,7 @@ import {
   type EventContent,
   type PublishedEvent,
 } from "@agentlive/protocol";
+import type { UnfinishedCounts } from "./completeness.js";
 
 export interface Message {
   visible?: boolean;
@@ -508,19 +509,39 @@ export function mapCaptureTime(
       )
     : previousTimeline;
 }
-/** Replay-time notice for an ended boundary whose visible messages/tools never completed.
+/** Unfinished-object predicates shared by importers' notice counts and viewer derivations. */
+export const unfinished = {
+  message: (item: { completed: boolean; visible?: boolean }) =>
+    !item.completed && item.visible !== false,
+  tool: (item: { status: string; visible?: boolean }) =>
+    item.status === "running" && item.visible !== false,
+  /** Only `running` is active; `unknown` does not claim unfinished work. */
+  task: (item: { status: string }) => item.status === "running",
+  interaction: (item: { status: string }) => item.status === "pending",
+  attachment: (item: { pending: boolean; visible?: boolean }) =>
+    item.pending && item.visible !== false,
+};
+/** Replay-time notice for an ended boundary whose visible work never finished.
  * It is derived from reduced state only and never appended to history. */
-export function unfinishedActivity(state: RecordingState): {
-  unfinishedMessages: number;
-  unfinishedTools: number;
-} {
-  let unfinishedMessages = 0,
-    unfinishedTools = 0;
-  for (const message of state.messages.values())
-    if (!message.completed && message.visible !== false) unfinishedMessages++;
-  for (const tool of state.tools.values())
-    if (tool.status === "running" && tool.visible !== false) unfinishedTools++;
-  return { unfinishedMessages, unfinishedTools };
+export function unfinishedActivity(state: RecordingState): UnfinishedCounts {
+  const counted = <T>(items: Iterable<T>, test: (item: T) => boolean) => {
+    let total = 0;
+    for (const item of items) if (test(item)) total++;
+    return total;
+  };
+  return {
+    unfinishedMessages: counted(state.messages.values(), unfinished.message),
+    unfinishedTools: counted(state.tools.values(), unfinished.tool),
+    runningTasks: counted(state.tasks.values(), unfinished.task),
+    pendingInteractions: counted(
+      state.interactions.values(),
+      unfinished.interaction,
+    ),
+    pendingAttachments: counted(
+      state.artifacts.values(),
+      unfinished.attachment,
+    ),
+  };
 }
 export {
   terminalText,
@@ -533,6 +554,7 @@ export {
   completenessSummary,
   completenessText,
   type CompletenessSummary,
+  type UnfinishedCounts,
 } from "./completeness.js";
 export { createSnapshot, SnapshotReader } from "./snapshot.js";
 export type {

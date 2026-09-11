@@ -12,7 +12,7 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 - Operator account administration for hosted mode: `agentlive accounts` and `agentlive account-status` (`GET /api/v1/admin/accounts`, `POST /api/v1/admin/accounts/:id/status`); disabling ends the account's sessions, transfers and sockets immediately.
 - Online server backup: `agentlive backup --server <origin> --output <dir>` and owner-only `POST /api/v1/admin/backup` back up a running server in the restore-compatible format.
 - In-flight private HTTP transfers are aborted when their authorizing session, device, grant or publisher credential is revoked, when an account is disabled, or when the recording becomes private or is removed. Open viewing sockets close immediately on the same changes.
-- `capture.completeness` notices for recordings imported from unfinished native sessions, shown by the browser and terminal viewers and carried in `.agentlive` provenance.
+- `capture.completeness` notices for recordings imported from unfinished native sessions, counting unfinished messages and tools, running tasks, pending interactions and pending attachments; shown by the browser and terminal viewers and carried in `.agentlive` provenance.
 - Portable `.agentlive` export, offline replay and import; artifact bundles and authenticated remote artifacts for all four agents; hosted OIDC/device login, sharing grants, public discovery, removal and abuse reports; Docker/Compose deployment; offline backup/restore and publisher recovery; family (parent/subagent) capture, import and continuation for all four agents; managed launch; paged, cached browser and terminal playback.
 - A synthetic sample recording in `docs/sample` that replays without a server or agent.
 

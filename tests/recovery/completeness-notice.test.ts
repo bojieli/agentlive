@@ -24,6 +24,7 @@ import {
   renderTerminalEvent,
   renderTerminalPending,
   renderTerminalSnapshot,
+  unfinishedActivity,
   type RecordingState,
 } from "../../packages/playback/src/index.js";
 import {
@@ -86,6 +87,102 @@ const frozen: EventContent[] = [
     kind: "recording.ended",
     payload: { producerEpoch: "epoch", throughProducerSeq: 7 },
   },
+];
+const noticeV2 = {
+  version: 2 as const,
+  reason: "frozen-native-source" as const,
+  unfinishedMessages: 1,
+  unfinishedTools: 1,
+  withheldTextMessages: 0,
+  runningTasks: 2,
+  pendingInteractions: 1,
+  pendingAttachments: 1,
+};
+/** Two running tasks, one pending interaction and one visible pending attachment. */
+const workflow: EventContent[] = [
+  {
+    kind: "task.updated",
+    payload: {
+      taskId: "task-process",
+      taskType: "process",
+      status: "running",
+      description: "Monitor",
+    },
+  },
+  {
+    kind: "task.updated",
+    payload: {
+      taskId: "task-agent",
+      taskType: "agent",
+      status: "running",
+      description: "Child agent",
+    },
+  },
+  {
+    kind: "task.updated",
+    payload: {
+      taskId: "task-done",
+      taskType: "process",
+      status: "completed",
+      description: "Build",
+    },
+  },
+  {
+    kind: "task.updated",
+    payload: {
+      taskId: "task-unknown",
+      taskType: "unknown",
+      status: "unknown",
+      description: "Unclassified",
+    },
+  },
+  {
+    kind: "interaction.updated",
+    payload: {
+      interactionId: "approval",
+      interactionType: "approval",
+      status: "pending",
+      title: "Shell",
+      prompt: "Run command",
+    },
+  },
+  {
+    kind: "interaction.updated",
+    payload: {
+      interactionId: "answered",
+      interactionType: "question",
+      status: "resolved",
+      title: "Question",
+      prompt: "Which?",
+      response: "A",
+    },
+  },
+  {
+    kind: "attachment.pending",
+    payload: { artifactId: "upload", filename: "report.pdf" },
+  },
+  {
+    kind: "attachment.pending",
+    payload: { artifactId: "hidden", filename: "hidden.png" },
+  },
+  {
+    kind: "object.visibility",
+    payload: { objectType: "attachment", objectId: "hidden", visible: false },
+  },
+  {
+    kind: "attachment.pending",
+    payload: { artifactId: "missing", filename: "gone.bin" },
+  },
+  {
+    kind: "attachment.unavailable",
+    payload: { artifactId: "missing", reason: "not captured" },
+  },
+];
+const frozenV2: EventContent[] = [
+  ...frozen.slice(0, 7),
+  ...workflow,
+  { kind: "capture.completeness", payload: noticeV2 },
+  frozen.at(-1)!,
 ];
 async function reduceBoth(contents: EventContent[]) {
   const root = await mkdtemp(join(tmpdir(), "agentlive-completeness-"));
@@ -196,6 +293,9 @@ it("keeps recordings without the event byte-identical and derives ended notices 
       source: "derived",
       unfinishedMessages: 1,
       unfinishedTools: 1,
+      runningTasks: 0,
+      pendingInteractions: 0,
+      pendingAttachments: 0,
       exhaustive: true,
     });
     const pending = [...renderTerminalPending(reference)].join("");
@@ -388,4 +488,288 @@ it("records the effective notice in archive provenance and rejects mismatches", 
       payload: { ...notice, text: "content" },
     }).success,
   ).toBe(false);
+});
+it("reduces, checkpoints and renders version 2 notices with task, interaction and attachment counts", async () => {
+  const { store, reducer, reference, paged, events } =
+    await reduceBoth(frozenV2);
+  try {
+    expect(reference.completeness).toEqual({ ...noticeV2, at: 19 });
+    expect(paged.completeness).toEqual({ ...noticeV2, at: 19 });
+    // The viewer derivation over the same boundary agrees with the importer counts.
+    const {
+      version: _v,
+      reason: _r,
+      withheldTextMessages: _w,
+      ...counts
+    } = noticeV2;
+    expect(unfinishedActivity(reference)).toEqual(counts);
+    const reopened = await reducer.open(
+      await reducer.checkpoint(paged, binding),
+      binding,
+    );
+    expect(reopened).toStrictEqual(paged);
+    expect(await reducer.applyBatch(initialPagedState(), events)).toStrictEqual(
+      paged,
+    );
+    const noticeEvent = events[18]!;
+    const text = renderTerminalEvent(
+      noticeEvent,
+      reference,
+      "https://example.test",
+      "stream",
+    );
+    expect(text).toBe(
+      "[0.190s] Incomplete capture: the native session was unfinished when this recording was imported\n" +
+        "  1 message never completed.\n" +
+        "  1 tool call never completed.\n" +
+        "  2 tasks were still running.\n" +
+        "  1 approval or question was still awaiting a response.\n" +
+        "  1 attachment was still pending.\n" +
+        "  Content shown for unfinished items is partial.\n\n",
+    );
+    const renderer = new PagedTerminalRenderer(
+      reducer,
+      store,
+      "https://example.test",
+      "stream",
+    );
+    expect(
+      await collect(
+        renderer.event(noticeEvent, paged, AbortSignal.timeout(10000)),
+      ),
+    ).toBe(text);
+    const snapshot = [
+      ...renderTerminalSnapshot(reference, "https://example.test", "stream"),
+    ].join("");
+    expect(snapshot).toContain("2 tasks were still running.");
+    expect(snapshot).not.toContain("Incomplete activity:");
+    expect(
+      await collect(renderer.snapshot(paged, AbortSignal.timeout(10000))),
+    ).toBe(snapshot);
+    const view = new PagedActivityView(reducer, paged, () => {
+      throw new Error("No text reads");
+    });
+    const summary = await view.completeness(AbortSignal.timeout(10000));
+    expect(summary).toEqual({ source: "recorded", ...noticeV2, at: 19 });
+    const markup = renderToStaticMarkup(
+      createElement(CompletenessNotice, { summary }),
+    );
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain("1 approval or question was still awaiting");
+    expect(markup).not.toContain("report.pdf");
+    // A later version 2 notice replaces a version 1 notice in both reducers.
+    const v1 = await reduceBoth(frozen.slice(0, 8));
+    try {
+      const next = event(9, {
+        kind: "capture.completeness",
+        payload: noticeV2,
+      });
+      const afterReference = apply(v1.reference, next);
+      const afterPaged = await v1.reducer.apply(v1.paged, next);
+      expect(afterReference.completeness).toEqual({ ...noticeV2, at: 9 });
+      expect(await v1.reducer.materialize(afterPaged)).toStrictEqual(
+        afterReference,
+      );
+    } finally {
+      await v1.store.close();
+    }
+    // Payload versions are strict: no mixed or unknown shapes.
+    const { runningTasks: _t, ...missing } = noticeV2;
+    for (const payload of [
+      missing,
+      { ...notice, runningTasks: 1 },
+      { ...noticeV2, version: 3 },
+    ])
+      expect(
+        contentSchema.safeParse({ kind: "capture.completeness", payload })
+          .success,
+      ).toBe(false);
+    await expect(
+      reducer.apply(
+        {
+          ...paged,
+          completeness: { ...noticeV2, version: 1, at: 19 } as never,
+        },
+        event(21, { kind: "recording.reopened", payload: {} }),
+      ),
+    ).rejects.toMatchObject({ code: "corrupt_storage" });
+  } finally {
+    await store.close();
+  }
+});
+it("derives running tasks, pending interactions and pending attachments at ended boundaries", async () => {
+  // Only the new categories are unfinished: derivation must not depend on messages/tools.
+  const contents: EventContent[] = [
+    frozen[0]!,
+    ...workflow,
+    {
+      kind: "recording.ended",
+      payload: { producerEpoch: "epoch", throughProducerSeq: 11 },
+    },
+  ];
+  const { store, reducer, reference, paged } = await reduceBoth(contents);
+  try {
+    const checkpoint = await reducer.checkpoint(paged, binding);
+    expect(await store.read(checkpoint, 0, checkpoint.units)).not.toContain(
+      "completeness",
+    );
+    const expected = {
+      source: "derived",
+      unfinishedMessages: 0,
+      unfinishedTools: 0,
+      runningTasks: 2,
+      pendingInteractions: 1,
+      pendingAttachments: 1,
+      exhaustive: true,
+    };
+    expect(
+      completenessSummary(reference, unfinishedActivity(reference)),
+    ).toEqual(expected);
+    const pending = [...renderTerminalPending(reference)].join("");
+    expect(pending).toContain(
+      "Incomplete activity: the recording ended before some captured work finished\n" +
+        "  2 tasks were still running.\n" +
+        "  1 approval or question was still awaiting a response.\n" +
+        "  1 attachment was still pending.\n",
+    );
+    expect(pending).not.toContain("message never completed");
+    const renderer = new PagedTerminalRenderer(
+      reducer,
+      store,
+      "https://example.test",
+      "stream",
+    );
+    expect(
+      await collect(renderer.pending(paged, AbortSignal.timeout(10000))),
+    ).toBe(pending);
+    expect(
+      await collect(renderer.snapshot(paged, AbortSignal.timeout(10000))),
+    ).toBe(
+      [
+        ...renderTerminalSnapshot(reference, "https://example.test", "stream"),
+      ].join(""),
+    );
+    const view = new PagedActivityView(reducer, paged, () => {
+      throw new Error("No text reads");
+    });
+    expect(await view.completeness(AbortSignal.timeout(10000))).toEqual(
+      expected,
+    );
+    // Bounded scans check only the most recent entries of each map: a lower bound.
+    const bounded = await view.completeness(AbortSignal.timeout(10000), 3);
+    expect(bounded).toMatchObject({ source: "derived", exhaustive: false });
+    for (const key of [
+      "runningTasks",
+      "pendingInteractions",
+      "pendingAttachments",
+    ] as const)
+      expect((bounded as typeof expected)[key]).toBeLessThanOrEqual(
+        expected[key],
+      );
+    const markup = renderToStaticMarkup(
+      createElement(CompletenessNotice, {
+        summary: { ...expected, exhaustive: false } as never,
+      }),
+    );
+    expect(markup).toContain('role="status"');
+    expect(markup).toContain("At least 2 tasks were still running.");
+    const feed = renderToStaticMarkup(
+      createElement(ActivityFeed, {
+        state: reference,
+        following: false,
+        onPause: () => {},
+        order: () => 0,
+        onAttachment: () => {},
+      }),
+    );
+    expect(feed).toContain('aria-label="Recording completeness"');
+    expect(feed).toContain("1 attachment was still pending.");
+    // Open boundaries are still capturing.
+    const open: RecordingState = { ...reference, lifecycle: "open" };
+    expect([...renderTerminalPending(open)].join("")).not.toContain(
+      "Incomplete activity",
+    );
+    // A version 1 notice predates these counts and never reports them.
+    const recorded = completenessSummary({
+      ...reference,
+      completeness: { ...notice, at: 1 },
+    });
+    expect(recorded).toEqual({ source: "recorded", ...notice, at: 1 });
+  } finally {
+    await store.close();
+  }
+});
+it("accepts version 1 and version 2 notices in archive provenance", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agentlive-notice-v2-"));
+  roots.push(directory);
+  const events = frozenV2.map((content, index) => event(index + 1, content));
+  const metadata: ArchiveMetadata = {
+    format: "agentlive.recording",
+    version: 1,
+    protocolVersion: 1,
+    reducerVersion: 1,
+    exportedAt: "2026-09-11T00:00:00Z",
+    recording: {
+      streamId: "source",
+      revision: "revision",
+      title: "Frozen import",
+      createdAt: "2026-09-11T00:00:00Z",
+      throughServerSeq: events.length,
+      timelineMs: events.at(-1)!.timelineMs,
+      lifecycle: "ended",
+    },
+    provenance: {
+      agent: null,
+      sourceVersion: null,
+      adapterVersion: null,
+      capabilities: [],
+      completeness: "ended-recording",
+      gapCount: 0,
+      completenessNotice: { ...noticeV2, at: 19 },
+    },
+  };
+  const none = async () => Readable.from([]);
+  const source = async function* () {
+    yield* events;
+  };
+  const path = join(directory, "v2.agentlive");
+  await writeArchive(path, metadata, source(), none);
+  const archive = await openArchive(path);
+  try {
+    expect(archive.manifest.provenance.completenessNotice).toEqual({
+      ...noticeV2,
+      at: 19,
+    });
+  } finally {
+    await archive.close();
+  }
+  // A v1-shaped provenance for a v2 event is a mismatch, not a silent downgrade.
+  const { runningTasks, pendingInteractions, pendingAttachments, ...v1Counts } =
+    noticeV2;
+  expect(runningTasks + pendingInteractions + pendingAttachments).toBe(4);
+  await expect(
+    writeArchive(
+      join(directory, "downgraded.agentlive"),
+      {
+        ...metadata,
+        provenance: {
+          ...metadata.provenance,
+          completenessNotice: { ...v1Counts, version: 1, at: 19 },
+        },
+      },
+      source(),
+      none,
+    ),
+  ).rejects.toThrow("manifest boundary/count mismatch");
+  for (const completenessNotice of [
+    { ...notice, at: 8 },
+    { ...noticeV2, at: 19 },
+  ])
+    expect(
+      archiveManifestSchema.safeParse({
+        ...metadata,
+        provenance: { ...metadata.provenance, completenessNotice },
+        files: [{ path: "events.jsonl", byteSize: 1, hash: "0".repeat(64) }],
+      }).success,
+    ).toBe(true);
 });

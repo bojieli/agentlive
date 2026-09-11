@@ -84,20 +84,36 @@ export const attachmentSchema = z.strictObject({
 });
 
 /** Content-free counts describing captured work that the native source never finished.
- * Version 1 has one reason: the importer froze a native source at a boundary where
- * normalized messages/tools were still active or text was withheld by redaction. */
-export const completenessNoticeSchema = z.strictObject({
+ * Both versions have one reason: the importer froze a native source at a boundary where
+ * normalized work was still active or text was withheld by redaction. Version 1 counts
+ * messages, tools and withheld text; version 2 adds running tasks, interactions awaiting
+ * a response and attachments still pending. Version 1 remains valid for old recordings. */
+const completenessNoticeV1Shape = {
   version: z.literal(1),
   reason: z.enum(["frozen-native-source"]),
   unfinishedMessages: cursorSchema,
   unfinishedTools: cursorSchema,
   withheldTextMessages: cursorSchema,
-});
+};
+const completenessNoticeV2Shape = {
+  ...completenessNoticeV1Shape,
+  version: z.literal(2),
+  runningTasks: cursorSchema,
+  pendingInteractions: cursorSchema,
+  pendingAttachments: cursorSchema,
+};
+export const completenessNoticeSchema = z.discriminatedUnion("version", [
+  z.strictObject(completenessNoticeV1Shape),
+  z.strictObject(completenessNoticeV2Shape),
+]);
 export type CompletenessNotice = z.infer<typeof completenessNoticeSchema>;
+/** Newest payload version written by native imports that are not pinned to an older one. */
+export const COMPLETENESS_NOTICE_VERSION = 2;
 /** Reduced form: the notice plus the server sequence that recorded it. */
-export const reducedCompletenessNoticeSchema = completenessNoticeSchema.extend({
-  at: sequenceSchema,
-});
+export const reducedCompletenessNoticeSchema = z.discriminatedUnion("version", [
+  z.strictObject({ ...completenessNoticeV1Shape, at: sequenceSchema }),
+  z.strictObject({ ...completenessNoticeV2Shape, at: sequenceSchema }),
+]);
 export type ReducedCompletenessNotice = z.infer<
   typeof reducedCompletenessNoticeSchema
 >;
@@ -268,7 +284,10 @@ export const contentSchema = z.discriminatedUnion("kind", [
     version: sequenceSchema,
   }),
   event("capture.gap", { reason: text, recoveredState: z.boolean() }),
-  event("capture.completeness", completenessNoticeSchema.shape),
+  z.strictObject({
+    kind: z.literal("capture.completeness"),
+    payload: completenessNoticeSchema,
+  }),
   event("capture.clock", {
     segmentId: idSchema,
     wallAnchor: z.iso.datetime(),

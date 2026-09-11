@@ -3,6 +3,7 @@ import { objectAnchor } from "./workflow-card.js";
 import {
   completenessSummary,
   initialState,
+  unfinished,
   type CompletenessSummary,
   type RecordingState,
   type PagedReducer,
@@ -117,7 +118,8 @@ export class PagedActivityView {
     };
   }
   /** Persisted notice, or a bounded derivation for an ended boundary. At most
-   * `limit` of the most recently inserted messages and tools are each checked. */
+   * `limit` of the most recently inserted messages, tools, tasks, interactions and
+   * attachments are each checked. */
   completeness(
     signal: AbortSignal,
     limit = 2048,
@@ -125,10 +127,14 @@ export class PagedActivityView {
     return this.readRecovery(async () => {
       if (this.root.completeness || this.root.lifecycle !== "ended")
         return completenessSummary(this.root);
-      let unfinishedMessages = 0,
-        unfinishedTools = 0,
-        exhaustive = true;
-      for (const name of ["messages", "tools"] as const) {
+      let exhaustive = true;
+      const count = async <
+        K extends "messages" | "tools" | "tasks" | "interactions" | "artifacts",
+      >(
+        name: K,
+        test: (item: PagedItem<K>) => boolean,
+      ) => {
+        let total = 0;
         const size = this.root.maps[name]?.size ?? 0;
         if (size > limit) exhaustive = false;
         for (
@@ -142,26 +148,22 @@ export class PagedActivityView {
             offset,
             32,
             signal,
-          )) {
-            if (item.visible === false) continue;
-            if (
-              name === "messages" &&
-              !(item as PagedItem<"messages">).completed
-            )
-              unfinishedMessages++;
-            if (
-              name === "tools" &&
-              (item as PagedItem<"tools">).status === "running"
-            )
-              unfinishedTools++;
-          }
-      }
+          ))
+            if (test(item)) total++;
+        return total;
+      };
+      const counts = {
+        unfinishedMessages: await count("messages", unfinished.message),
+        unfinishedTools: await count("tools", unfinished.tool),
+        runningTasks: await count("tasks", unfinished.task),
+        pendingInteractions: await count(
+          "interactions",
+          unfinished.interaction,
+        ),
+        pendingAttachments: await count("artifacts", unfinished.attachment),
+      };
       signal.throwIfAborted();
-      return completenessSummary(this.root, {
-        unfinishedMessages,
-        unfinishedTools,
-        exhaustive,
-      });
+      return completenessSummary(this.root, { ...counts, exhaustive });
     }, signal);
   }
   attachment(artifactId: string, version: number, signal: AbortSignal) {

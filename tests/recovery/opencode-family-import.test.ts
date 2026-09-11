@@ -276,12 +276,16 @@ it("reports frozen incomplete child text and preserves withheld suffixes across 
       }
       expect(notices).toBe(1);
       // Persisted counts only: normalized unfinished messages plus withheld native text.
-      expect(state.completeness).toMatchObject({
-        version: 1,
+      expect(state.completeness).toEqual({
+        version: 2,
         reason: "frozen-native-source",
         unfinishedMessages: 1,
         unfinishedTools: 0,
         withheldTextMessages: 1,
+        runningTasks: 0,
+        pendingInteractions: 0,
+        pendingAttachments: 0,
+        at: expect.any(Number),
       });
       expect(JSON.stringify(state.completeness)).not.toContain("secret");
       expect(

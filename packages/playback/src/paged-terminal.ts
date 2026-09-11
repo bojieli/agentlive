@@ -1,5 +1,5 @@
 import type { EventContent, StoredEvent } from "@agentlive/protocol";
-import { initialState } from "./index.js";
+import { initialState, unfinished } from "./index.js";
 import { renderTerminalEvent, terminalText } from "./terminal.js";
 import { completenessSummary, completenessText } from "./completeness.js";
 import {
@@ -240,9 +240,10 @@ export class PagedTerminalRenderer {
     signal: AbortSignal,
   ): AsyncGenerator<string> {
     let unfinishedMessages = 0,
-      unfinishedTools = 0;
+      unfinishedTools = 0,
+      pendingAttachments = 0;
     for await (const [, message] of this.entries(state, "messages", signal))
-      if (!message.completed && message.visible !== false) {
+      if (unfinished.message(message)) {
         unfinishedMessages++;
         yield* this.section(
           state.timelineMs,
@@ -252,7 +253,7 @@ export class PagedTerminalRenderer {
         );
       }
     for await (const [, tool] of this.entries(state, "tools", signal))
-      if (tool.status === "running" && tool.visible !== false) {
+      if (unfinished.tool(tool)) {
         unfinishedTools++;
         yield* this.section(
           state.timelineMs,
@@ -268,13 +269,15 @@ export class PagedTerminalRenderer {
         );
       }
     for await (const [, artifact] of this.entries(state, "artifacts", signal))
-      if (artifact.pending && artifact.visible !== false)
+      if (unfinished.attachment(artifact)) {
+        pendingAttachments++;
         yield* this.section(
           state.timelineMs,
           "Attachment pending",
           [artifact.filename],
           signal,
         );
+      }
     if (state.maps.replacements?.size)
       yield* this.section(
         state.timelineMs,
@@ -283,10 +286,23 @@ export class PagedTerminalRenderer {
         signal,
       );
     // Same rule as the reference renderer: derive only without a persisted notice.
-    if (!state.completeness) {
+    if (!state.completeness && state.lifecycle === "ended") {
+      let runningTasks = 0,
+        pendingInteractions = 0;
+      for await (const [, task] of this.entries(state, "tasks", signal))
+        if (unfinished.task(task)) runningTasks++;
+      for await (const [, interaction] of this.entries(
+        state,
+        "interactions",
+        signal,
+      ))
+        if (unfinished.interaction(interaction)) pendingInteractions++;
       const summary = completenessSummary(state, {
         unfinishedMessages,
         unfinishedTools,
+        runningTasks,
+        pendingInteractions,
+        pendingAttachments,
       });
       if (summary) {
         const notice = completenessText(summary);

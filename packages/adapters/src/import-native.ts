@@ -13,6 +13,7 @@ import { atomicJson } from "@agentlive/storage";
 import { request, delay } from "@agentlive/client/transport";
 import {
   canonicalJson,
+  COMPLETENESS_NOTICE_VERSION,
   cursorSchema,
   type CompletenessNotice,
 } from "@agentlive/protocol";
@@ -124,13 +125,23 @@ export async function importNativeRecording<Report>(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    // Bindings created before completeness notices keep their original output on retry.
+    // Bindings created before completeness notices keep their original output on retry;
+    // pinned bindings keep the notice version they were created with.
     const legacy =
       previous !== undefined &&
       !(
         typeof previous === "object" &&
         previous !== null &&
         "completenessNotice" in previous
+      );
+    const noticeVersion: 1 | 2 | undefined = legacy
+      ? undefined
+      : previous === undefined
+        ? COMPLETENESS_NOTICE_VERSION
+        : (previous.completenessNotice as 1 | 2);
+    if (noticeVersion !== undefined && ![1, 2].includes(noticeVersion))
+      throw new Error(
+        "Import binding pins an unsupported completeness notice version",
       );
     const identity = {
       version: 1,
@@ -148,7 +159,9 @@ export async function importNativeRecording<Report>(
       nativeSessionId: source.nativeSessionId,
       title: options.title,
       visibility: options.visibility,
-      ...(legacy ? {} : { completenessNotice: 1 }),
+      ...(noticeVersion === undefined
+        ? {}
+        : { completenessNotice: noticeVersion }),
     };
     await options.beforeImport?.(identity, journal.directory);
     if (previous !== undefined) {
@@ -195,11 +208,12 @@ export async function importNativeRecording<Report>(
       ],
       artifacts,
     );
-    if (!legacy)
+    if (noticeVersion !== undefined)
       await captureCompletenessNotice(
         journal,
         adapter.withheldTextMessages?.(report) ?? 0,
         options.signal,
+        noticeVersion,
       );
     const base = `${journal.identity.serverOrigin}/api/v1/streams/${journal.identity.streamId}`;
     const remoteBefore = z
@@ -335,19 +349,26 @@ export async function importNativeRecording<Report>(
   }
 }
 
-/** Stable journal source key; one frozen-boundary notice per import binding. */
+/** Stable journal source key; one frozen-boundary notice per import binding. The key is
+ * shared by both payload versions because a binding pins exactly one version. */
 export const IMPORT_COMPLETENESS_SOURCE_KEY = "agentlive-import-completeness-1";
 /** Append a content-free completeness notice after the converter output and before the
  * import ends. Counts are recomputed from the durable normalized prefix, so a retry
- * resolves to the same journal record instead of adding an event. */
+ * resolves to the same journal record instead of adding an event. `version` is the
+ * binding's pin: version 1 reproduces the original payload and emission rule exactly. */
 export async function captureCompletenessNotice(
   journal: PublisherJournal,
   withheldTextMessages: number,
   signal: AbortSignal,
+  version: 1 | 2 = COMPLETENESS_NOTICE_VERSION,
 ): Promise<CompletenessNotice | undefined> {
   cursorSchema.parse(withheldTextMessages);
-  const messages = new Map<string, { open: boolean; visible: boolean }>(),
-    tools = new Map<string, { open: boolean; visible: boolean }>();
+  type Item = { open: boolean; visible: boolean };
+  const messages = new Map<string, Item>(),
+    tools = new Map<string, Item>(),
+    attachments = new Map<string, Item>(),
+    tasks = new Map<string, boolean>(),
+    interactions = new Map<string, boolean>();
   let last:
     | { observedAt: string; clockSegmentId: string; elapsedMs: number }
     | undefined;
@@ -356,14 +377,11 @@ export async function captureCompletenessNotice(
     if (event.source.eventId === IMPORT_COMPLETENESS_SOURCE_KEY) continue;
     last = event;
     const content = event.content;
-    const set = (
-      map: typeof messages,
-      id: string,
-      change: Partial<{ open: boolean; visible: boolean }>,
-    ) => {
+    const set = (map: Map<string, Item>, id: string, change: Partial<Item>) => {
       const current = map.get(id) ?? { open: false, visible: true };
       map.set(id, { ...current, ...change });
     };
+    // Same transitions as the reducers: starts reset visibility, updates preserve it.
     switch (content.kind) {
       case "message.started":
         messages.set(content.payload.messageId, { open: true, visible: true });
@@ -383,32 +401,63 @@ export async function captureCompletenessNotice(
           open: content.kind === "tool.reopened",
         });
         break;
+      case "attachment.pending":
+        set(attachments, content.payload.artifactId, { open: true });
+        break;
+      case "attachment.available":
+        set(attachments, content.payload.attachment.artifactId, {
+          open: false,
+        });
+        break;
+      case "attachment.unavailable":
+        set(attachments, content.payload.artifactId, { open: false });
+        break;
+      case "task.updated":
+        // Only `running` is active; `unknown` does not claim unfinished work.
+        tasks.set(content.payload.taskId, content.payload.status === "running");
+        break;
+      case "interaction.updated":
+        interactions.set(
+          content.payload.interactionId,
+          content.payload.status === "pending",
+        );
+        break;
       case "object.visibility":
-        if (content.payload.objectType !== "attachment")
-          set(
-            content.payload.objectType === "message" ? messages : tools,
-            content.payload.objectId,
-            { visible: content.payload.visible },
-          );
+        set(
+          content.payload.objectType === "message"
+            ? messages
+            : content.payload.objectType === "tool"
+              ? tools
+              : attachments,
+          content.payload.objectId,
+          { visible: content.payload.visible },
+        );
         break;
     }
   }
-  const unfinished = (map: typeof messages) =>
+  const unfinished = (map: Map<string, Item>) =>
     [...map.values()].filter((item) => item.open && item.visible).length;
-  const notice: CompletenessNotice = {
-    version: 1,
-    reason: "frozen-native-source",
+  const active = (map: Map<string, boolean>) =>
+    [...map.values()].filter(Boolean).length;
+  const base = {
+    reason: "frozen-native-source" as const,
     unfinishedMessages: unfinished(messages),
     unfinishedTools: unfinished(tools),
     withheldTextMessages,
   };
-  if (
-    !last ||
-    (!notice.unfinishedMessages &&
-      !notice.unfinishedTools &&
-      !notice.withheldTextMessages)
-  )
-    return undefined;
+  // Version 1 bindings keep their original payload and emission rule on retry.
+  const notice: CompletenessNotice =
+    version === 1
+      ? { version: 1, ...base }
+      : {
+          version: 2,
+          ...base,
+          runningTasks: active(tasks),
+          pendingInteractions: active(interactions),
+          pendingAttachments: unfinished(attachments),
+        };
+  const { version: _version, reason: _reason, ...counts } = notice;
+  if (!last || !Object.values(counts).some(Boolean)) return undefined;
   // Share the last imported event's clock so the notice sits at the frozen boundary.
   await journal.capture({
     sourceKey: IMPORT_COMPLETENESS_SOURCE_KEY,
