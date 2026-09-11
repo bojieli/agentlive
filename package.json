@@ -2,6 +2,7 @@
   "name": "agentlive-workspace",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@12.3.4",
   "engines": {
@@ -22,8 +23,12 @@
     "package:lock": "pnpm build && node scripts/build-package.mjs --update-lock"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@types/node": "26.5.0",
+    "@types/yauzl": "3.4.0",
+    "@types/yazl": "3.3.1",
     "esbuild": "0.28.2",
+    "playwright": "1.63.0",
     "prettier": "3.9.6",
     "typescript": "7.0.2",
     "vitest": "5.0.0"

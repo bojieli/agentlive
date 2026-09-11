@@ -68,15 +68,33 @@ await writeFile(
   join(staging, "package.json"),
   JSON.stringify(
     {
-      name: "@agentlive/cli",
+      name: "agentlive",
       version: cli.version,
+      // Guard against accidental registry publication; remove when releasing.
       private: true,
-      description: "Record, share, and replay coding-agent sessions",
+      description:
+        "Broadcast and replay coding-agent sessions from Claude Code, Codex, Kimi Code and OpenCode",
+      keywords: [
+        "coding-agent",
+        "claude-code",
+        "codex",
+        "opencode",
+        "kimi",
+        "replay",
+        "live",
+        "broadcast",
+      ],
+      homepage: "https://github.com/bojieli/agentlive#readme",
+      bugs: { url: "https://github.com/bojieli/agentlive/issues" },
+      repository: {
+        type: "git",
+        url: "git+https://github.com/bojieli/agentlive.git",
+      },
       type: "module",
-      license: "UNLICENSED",
+      license: "MIT",
       engines: cli.engines,
       bin: { agentlive: "cli.mjs" },
-      files: ["cli.mjs", "npm-shrinkwrap.json", "README.md", "web"],
+      files: ["cli.mjs", "npm-shrinkwrap.json", "README.md", "LICENSE", "web"],
       dependencies: Object.fromEntries(Object.entries(dependencies).sort()),
     },
     null,
@@ -84,6 +102,7 @@ await writeFile(
   ) + "\n",
 );
 await copyFile(join(root, "README.md"), join(staging, "README.md"));
+await copyFile(join(root, "LICENSE"), join(staging, "LICENSE"));
 await cp(join(root, "packages/server/dist/web"), join(staging, "web"), {
   recursive: true,
 });
