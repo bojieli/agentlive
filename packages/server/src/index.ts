@@ -14,6 +14,12 @@ export { WriteBarrier } from "./write-barrier.js";
 
 export { restoreServer } from "./restore.js";
 export { Accounts, type Account } from "./accounts.js";
+export {
+  AccountQuotas,
+  quotaLimitsSchema,
+  type QuotaLimits,
+  type AccountUsage,
+} from "./quotas.js";
 export { OidcLogin } from "./oidc-login.js";
 export {
   SERVER_DATA_FORMAT,

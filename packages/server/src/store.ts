@@ -3,6 +3,11 @@ import { ensureDataFormat } from "./data-format.js";
 import { WriteBarrier } from "./write-barrier.js";
 import { cleanRemovedStorage } from "./removed-storage.js";
 import {
+  AccountQuotas,
+  scanRecordingUsage,
+  type QuotaLimits,
+} from "./quotas.js";
+import {
   SnapshotScheduler,
   type SnapshotScheduleOptions,
 } from "./snapshot-scheduler.js";
@@ -60,17 +65,21 @@ export class RecordingStore {
     readonly reports: Reports,
     /** Shared by every durable writer of this server directory (online backup). */
     readonly barrier: WriteBarrier,
+    /** Per-account usage and hosted quota admission (the local owner is untracked). */
+    readonly quotas: AccountQuotas,
   ) {}
   static async open(
     directory: string,
     options: {
       maxCachedSessions?: number;
       snapshots?: SnapshotScheduleOptions;
+      quotas?: QuotaLimits;
     } = {},
   ): Promise<RecordingStore> {
     const maximum = options.maxCachedSessions ?? 128;
     if (!Number.isSafeInteger(maximum) || maximum < 1)
       throw new RangeError("Invalid session cache capacity");
+    const quotas = new AccountQuotas(options.quotas);
     const scheduler = new SnapshotScheduler(options.snapshots);
     const lock = await FileLock.acquire(join(directory, ".server.lock"));
     try {
@@ -99,6 +108,7 @@ export class RecordingStore {
         scheduler,
         reports,
         barrier,
+        quotas,
       );
       for (const entry of await readdir(join(directory, "sessions"), {
         withFileTypes: true,
@@ -130,6 +140,17 @@ export class RecordingStore {
           );
         if (metadata.removed)
           await cleanRemovedStorage(join(directory, "sessions", entry.name));
+        else if (AccountQuotas.tracks(metadata.ownerId)) {
+          const usage = await scanRecordingUsage(
+            join(directory, "sessions", entry.name),
+          );
+          quotas.track(
+            metadata.id,
+            metadata.ownerId,
+            usage.storedBytes,
+            usage.open,
+          );
+        }
         store.requests.set(key, {
           id: metadata.id,
           digest: metadata.creationDigest,
@@ -315,7 +336,17 @@ export class RecordingStore {
           "precondition_failed",
           "New creation request timestamp is outside its acceptance window",
         );
-      await this.makeRoom();
+      // Admission before any write; the first log record is well under 4 KiB.
+      const admission = this.quotas.reserveRecording(request.ownerId, {
+        bytes: 4096,
+        open: true,
+      });
+      try {
+        await this.makeRoom();
+      } catch (error) {
+        admission.release();
+        throw error;
+      }
       const id = randomUUID();
       const directory = join(this.directory, "sessions", id);
       const temporary = join(
@@ -339,9 +370,10 @@ export class RecordingStore {
         leaseGeneration: 0,
         lastAttempt: 0,
       };
-      await mkdir(temporary, { mode: 0o700 });
       let installed = false;
+      let storedBytes = 0;
       try {
+        await mkdir(temporary, { mode: 0o700 });
         await atomicJson(join(temporary, "metadata.json"), metadata);
         const log = await JsonlLog.open(join(temporary, "events.jsonl"), {
           parse: (value) => storedEventSchema.parse(value),
@@ -359,6 +391,7 @@ export class RecordingStore {
             origin: { type: "server", operationId: request.requestId },
           };
           await log.append([first]);
+          storedBytes = log.boundary.byteOffset;
         } finally {
           await log.close();
         }
@@ -370,9 +403,11 @@ export class RecordingStore {
         // A directory-sync failure after rename has an uncertain durability result.
         // Reopen/rebuild the request index before accepting another create retry.
         if (installed) this.closed = true;
+        admission.release();
         await rm(temporary, { recursive: true, force: true }).catch(() => {});
         throw error;
       }
+      admission.commit(id, storedBytes);
       this.requests.set(key, { id, digest });
       return this.load(id);
     });
@@ -399,14 +434,25 @@ export class RecordingStore {
           );
         return this.load(existing.id);
       }
-      await this.makeRoom();
-      const id = randomUUID(),
-        revision = randomUUID();
-      const temporary = join(this.directory, "sessions", `.importing-${id}`);
-      const destination = join(this.directory, "sessions", id);
-      await mkdir(temporary, { mode: 0o700 });
+      // Admit the archive's declared size first, then its measured stored size
+      // before installation.
+      const admission = this.quotas.reserveRecording(ownerId, {
+        bytes: archive.manifest.files.reduce(
+          (total, file) => total + file.byteSize,
+          0,
+        ),
+        open: false,
+      });
       let installed = false;
+      let temporary: string | undefined;
       try {
+        await this.makeRoom();
+        const id = randomUUID(),
+          revision = randomUUID();
+        temporary = join(this.directory, "sessions", `.importing-${id}`);
+        const destination = join(this.directory, "sessions", id);
+        await mkdir(temporary, { mode: 0o700 });
+        let storedBytes = 0;
         const blobs = await BlobStore.open(join(temporary, "attachments"));
         try {
           for (const file of archive.manifest.files) {
@@ -423,6 +469,7 @@ export class RecordingStore {
               await blobs.discard(staged);
             }
           }
+          storedBytes += blobs.usage.storedBytes;
         } finally {
           await blobs.close();
         }
@@ -487,9 +534,11 @@ export class RecordingStore {
               },
             });
           await flush();
+          storedBytes += log.boundary.byteOffset;
         } finally {
           await log.close();
         }
+        admission.adjust(storedBytes);
         const metadata: SessionMetadata = {
           version: 1,
           id,
@@ -536,6 +585,7 @@ export class RecordingStore {
         await rename(temporary, destination);
         installed = true;
         await syncDirectory(join(this.directory, "sessions"));
+        admission.commit(id, storedBytes);
         this.requests.set(canonicalJson([ownerId, requestId]), {
           id,
           digest: metadata.creationDigest,
@@ -545,7 +595,9 @@ export class RecordingStore {
         if (installed) this.closed = true;
         throw error;
       } finally {
-        if (!installed) await rm(temporary, { recursive: true, force: true });
+        admission.release();
+        if (!installed && temporary !== undefined)
+          await rm(temporary, { recursive: true, force: true });
       }
     });
   }
@@ -593,6 +645,7 @@ export class RecordingStore {
           "Recording revision changed",
         );
       if (metadata.removed) {
+        this.quotas.forget(input.id);
         await this.cleanRemoved(input.id);
         return {
           streamId: metadata.id,
@@ -607,6 +660,8 @@ export class RecordingStore {
           input.revision,
           input.expectedServerSeq,
         );
+        // The durable tombstone releases the account's usage immediately.
+        this.quotas.forget(input.id);
         await this.snapshotScheduler.remove(session);
         return result;
       } finally {
@@ -653,6 +708,14 @@ export class RecordingStore {
       const session = await RecordingSession.open(
         join(this.directory, "sessions", id),
         this.barrier,
+        this.quotas.forRecording(id, metadata.ownerId),
+      );
+      // Reconcile the startup estimate with the recovered committed state.
+      this.quotas.track(
+        id,
+        metadata.ownerId,
+        session.storedBytes,
+        session.info.lifecycle === "open",
       );
       this.sessions.set(id, { session, users: 1, touched: ++this.clock });
       this.snapshotScheduler.add(session);

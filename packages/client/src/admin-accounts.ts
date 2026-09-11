@@ -11,6 +11,18 @@ const accountSchema = z.object({
   createdAt: z.number().int().nonnegative().safe(),
   updatedAt: z.number().int().nonnegative().safe(),
 });
+const usageSchema = z.strictObject({
+  recordings: z.number().int().nonnegative().safe(),
+  activeRecordings: z.number().int().nonnegative().safe(),
+  storedBytes: z.number().int().nonnegative().safe(),
+});
+const limit = z.number().int().positive().safe().nullable();
+/** Hosted per-account quota limits; `null` is unlimited. */
+const limitsSchema = z.strictObject({
+  maxRecordingsPerAccount: limit,
+  maxActiveRecordingsPerAccount: limit,
+  maxStoredBytesPerAccount: limit,
+});
 
 /** Operator-only listing of hosted accounts; never includes identity subjects. */
 export async function listAccounts(options: {
@@ -36,8 +48,11 @@ export async function listAccounts(options: {
   );
   return z
     .strictObject({
-      accounts: z.array(accountSchema.strict()).max(100),
+      accounts: z
+        .array(accountSchema.extend({ usage: usageSchema.optional() }).strict())
+        .max(100),
       nextAfter: z.uuid().nullable(),
+      limits: limitsSchema.optional(),
     })
     .parse(JSON.parse(response.text));
 }
@@ -72,5 +87,28 @@ export async function setAccountDisabled(options: {
   return accountSchema
     .omit({ issuer: true })
     .strict()
+    .parse(JSON.parse(response.text));
+}
+
+/** The signed-in account's stored usage and the server's per-account quota limits. */
+export async function getAccountUsage(options: {
+  serverOrigin: string;
+  credential: string;
+  signal: AbortSignal;
+  fetch?: typeof fetch;
+}) {
+  const response = await request(
+    options.fetch ?? fetch,
+    `${originOf(options.serverOrigin)}/api/v1/account/usage`,
+    { headers: { authorization: `Bearer ${options.credential}` } },
+    options.signal,
+    8192,
+  );
+  return z
+    .strictObject({
+      accountId: z.uuid(),
+      usage: usageSchema,
+      limits: limitsSchema,
+    })
     .parse(JSON.parse(response.text));
 }

@@ -459,6 +459,8 @@ export const errorCodes = [
   "storage_failed",
   "recording_ended",
   "precondition_failed",
+  /** A hosted per-account quota rejects the write; not retryable until usage drops. */
+  "quota_exceeded",
 ] as const;
 export type ErrorCode = (typeof errorCodes)[number];
 export class ProtocolError extends Error {

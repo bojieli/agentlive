@@ -1,6 +1,7 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { z } from "zod";
+import { quotaLimitsSchema } from "@agentlive/server";
 
 /** Configuration names environment variables; provider/cookie secrets never appear in argv or JSON errors. */
 export async function loadHostedConfig(
@@ -45,9 +46,20 @@ export async function loadHostedConfig(
       clientId: z.string().min(1).max(1024),
       clientSecretEnv: variable,
       cookiePasswordEnv: variable,
+      quotas: z.unknown().optional(),
     })
     .safeParse(raw);
   if (!parsed.success) throw new Error("Invalid hosted configuration");
+  const quotas =
+    parsed.data.quotas === undefined
+      ? undefined
+      : quotaLimitsSchema.safeParse(parsed.data.quotas);
+  if (quotas && !quotas.success) {
+    const issue = quotas.error.issues[0];
+    throw new Error(
+      `Invalid hosted quotas${issue?.path.length ? ` (${issue.path.join(".")})` : ""}: ${issue?.message ?? "invalid value"}`,
+    );
+  }
   const value = parsed.data;
   for (const urlText of [value.publicOrigin, value.issuer]) {
     let url;
@@ -89,5 +101,6 @@ export async function loadHostedConfig(
       clientSecret,
       cookiePassword,
     },
+    ...(quotas?.data ? { quotas: quotas.data } : {}),
   };
 }

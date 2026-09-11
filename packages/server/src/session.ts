@@ -1,5 +1,6 @@
 import { RecordingSnapshots } from "./snapshots.js";
 import type { WriteBarrier } from "./write-barrier.js";
+import type { RecordingUsage } from "./quotas.js";
 import type { ContentReference } from "@agentlive/playback";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -177,6 +178,7 @@ export class RecordingSession {
     private readonly log: JsonlLog<StoredEvent>,
     private readonly blobs: BlobStore,
     private readonly barrier?: WriteBarrier,
+    private readonly usage?: RecordingUsage,
   ) {
     this.snapshots = new RecordingSnapshots(join(directory, "snapshots"), {
       streamId: metadata.id,
@@ -186,6 +188,7 @@ export class RecordingSession {
   static async open(
     directory: string,
     barrier?: WriteBarrier,
+    usage?: RecordingUsage,
   ): Promise<RecordingSession> {
     const metadata = sessionMetadataSchema.parse(
       JSON.parse(await readFile(join(directory, "metadata.json"), "utf8")),
@@ -206,6 +209,7 @@ export class RecordingSession {
       log,
       blobs,
       barrier,
+      usage,
     );
     try {
       const verified = new Map<string, number>();
@@ -281,6 +285,10 @@ export class RecordingSession {
   }
   get boundary(): LogBoundary {
     return this.log.boundary;
+  }
+  /** Quota-counted durable bytes: committed event log plus installed attachments. */
+  get storedBytes(): number {
+    return this.log.boundary.byteOffset + this.blobs.usage.storedBytes;
   }
   buildSnapshot(through: number, signal?: AbortSignal) {
     this.snapshotBoundary(through);
@@ -701,7 +709,25 @@ export class RecordingSession {
           },
         });
       }
-      await this.log.append(additions);
+      // Admit the batch against the account byte quota before writing. The estimate
+      // bounds each log line (event plus sequence/hash envelope); the commit records
+      // the exact committed growth. Pure retries add nothing and are always accepted.
+      const reservation = additions.length
+        ? this.usage?.reserveBytes(
+            additions.reduce(
+              (total, event) =>
+                total + Buffer.byteLength(canonicalJson(event)) + 256,
+              0,
+            ),
+          )
+        : undefined;
+      const before = this.log.boundary.byteOffset;
+      try {
+        await this.log.append(additions);
+      } finally {
+        // A failed append leaves the committed boundary unchanged (recovery truncates).
+        reservation?.commit(this.log.boundary.byteOffset - before);
+      }
       for (const event of additions) {
         this.applyCommitted(event, false);
         this.broadcast(event);
@@ -828,14 +854,29 @@ export class RecordingSession {
     this.authorize(secret);
     if (this.closing)
       throw new ProtocolError("stream_gone", "Session is closing");
-    const staged = await this.blobs.stage(descriptor, source, signal);
+    // Reserve the declared size before reading any body bytes; an already
+    // installed (deduplicated) blob commits zero new bytes.
+    const reservation =
+      Number.isSafeInteger(descriptor.byteSize) && descriptor.byteSize >= 0
+        ? this.usage?.reserveBytes(descriptor.byteSize)
+        : undefined;
     try {
-      return await this.mutate(async () => {
-        this.authorize(secret);
-        return this.blobs.install(staged);
-      });
+      const staged = await this.blobs.stage(descriptor, source, signal);
+      try {
+        return await this.mutate(async () => {
+          this.authorize(secret);
+          const before = this.blobs.usage.storedBytes;
+          try {
+            return await this.blobs.install(staged);
+          } finally {
+            reservation?.commit(this.blobs.usage.storedBytes - before);
+          }
+        });
+      } finally {
+        await this.blobs.discard(staged);
+      }
     } finally {
-      await this.blobs.discard(staged);
+      reservation?.release();
     }
   }
   async attachmentStatus(
@@ -874,9 +915,14 @@ export class RecordingSession {
       return Promise.reject(
         new ProtocolError("invalid_request", "Invalid collection cutoff"),
       );
-    return this.mutate(() =>
-      this.blobs.collect(this.referencedBlobs, olderThan),
-    );
+    return this.mutate(async () => {
+      const before = this.blobs.usage.storedBytes;
+      try {
+        return await this.blobs.collect(this.referencedBlobs, olderThan);
+      } finally {
+        this.usage?.adjustBytes(this.blobs.usage.storedBytes - before);
+      }
+    });
   }
   subscribe(subscriber: Subscriber): Promise<{
     boundary: LogBoundary;
@@ -957,7 +1003,23 @@ export class RecordingSession {
         content,
         origin: { type: "server", operationId },
       };
-      await this.log.append([record]);
+      // Ending is never quota-limited; reopening counts against open recordings.
+      // Lifecycle records are small and always counted toward stored bytes.
+      const active =
+        content.kind === "recording.reopened"
+          ? this.usage?.reserveActive()
+          : undefined;
+      const before = this.log.boundary.byteOffset;
+      try {
+        await this.log.append([record]);
+      } catch (error) {
+        active?.release();
+        throw error;
+      } finally {
+        this.usage?.adjustBytes(this.log.boundary.byteOffset - before);
+      }
+      if (content.kind === "recording.ended") this.usage?.ended();
+      else active?.commit(0);
       this.applyCommitted(record, false);
       this.broadcast(record);
       return record;

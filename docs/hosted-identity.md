@@ -54,12 +54,59 @@ The routes are `GET /api/v1/admin/accounts` (pages of at most 100 ordered by acc
 
 Disabling commits the new status, then immediately rechecks active HTTP transfers and open viewing sockets, which are aborted or closed with code 1008. Browser sessions and device credentials stop authenticating. Re-enabling restores login but does not revive credentials issued before the disable, because the account's authentication version advanced. Recordings are not removed; use the removal workflow for content. Tests: `tests/recovery/account-admin.test.ts`.
 
+## Per-account quotas
+
+The hosted configuration accepts an optional `quotas` object:
+
+```json
+{
+  "version": 1,
+  "publicOrigin": "https://recordings.example.com",
+  "issuer": "https://identity.example.com",
+  "clientId": "registered-client-id",
+  "clientSecretEnv": "AGENTLIVE_OIDC_CLIENT_SECRET",
+  "cookiePasswordEnv": "AGENTLIVE_SESSION_PASSWORD",
+  "quotas": {
+    "maxRecordingsPerAccount": 200,
+    "maxActiveRecordingsPerAccount": 5,
+    "maxStoredBytesPerAccount": 10737418240
+  }
+}
+```
+
+Every field is optional. A missing field, a missing `quotas` object, or `{}` means that dimension is unlimited. The loader rejects unknown fields and non-integer values. `maxRecordingsPerAccount` and `maxActiveRecordingsPerAccount` must be from 1 to 1,000,000, and the active limit cannot exceed the recording limit. `maxStoredBytesPerAccount` must be from 4,096 to 2^50. `startServer` validates `ServerOptions.quotas` the same way. Limits apply only to recordings owned by hosted accounts. Recordings created or imported with the operator (owner) credential belong to the local owner, which is never limited or counted.
+
+What counts:
+
+- **Recordings**: every recording the account owns that has not been removed, whether open or ended, created live or imported.
+- **Active recordings**: recordings whose lifecycle is open. Creation opens a recording, ending closes it and reopening opens it again. Imports are always ended.
+- **Stored bytes**: the committed event log (`events.jsonl`) plus the installed attachment files of those recordings. Server-built snapshots, metadata, archive provenance and in-progress uploads are not counted. An attachment already stored in the recording (the same hash) adds no bytes. A repeated upload is still admitted by its declared size, but the publisher checks attachment status first and skips it.
+
+Enforcement happens before anything is written. The server reserves the size of a write against the account, then records the actual committed growth, and releases the reservation if the write fails. Concurrent creations, uploads and appends therefore cannot jointly exceed a limit.
+
+- Creating a recording requires a free recording slot, a free active slot and 4 KiB of byte headroom. Retrying an already committed creation with the same request returns the existing recording and is never rejected.
+- An archive import is refused before the upload is received when the account already has no free recording slot or no remaining bytes. After staging, the import is admitted by its declared manifest size and then by its measured stored size before it is installed.
+- An attachment upload is admitted by its declared `X-Attachment-Bytes` before any body bytes are read.
+- A publisher event batch is admitted by a conservative estimate of its log lines (the event plus at most 256 bytes of sequence/hash envelope per event) and rejected whole. Retried events that are already committed add nothing and are always accepted.
+- Ending a recording is never refused. Its small lifecycle record, and a reopen record, are always counted. Reopening needs a free active slot.
+
+A rejected request fails with protocol error code `quota_exceeded`, HTTP 403 (or a WebSocket `error` message for publisher batches). The message names the limit and current usage, for example `Account storage quota exceeded: 180000 of 262144 bytes used; this write needs 98304 more bytes`. `details.quota` is `maxRecordingsPerAccount`, `maxActiveRecordingsPerAccount` or `maxStoredBytesPerAccount`, with `limit` and `used` (and `requested` for bytes). Clients treat `quota_exceeded` as non-retryable. The live publisher and the attachment uploader stop with that error instead of retrying, and the CLI prints the message. Unacknowledged events stay in the local publisher journal. After usage drops (removal, finishing another recording) or the operator raises the limit and restarts the server, running publish again resumes from the acknowledged prefix.
+
+Removal releases a recording's slot, active slot and bytes as soon as the removal tombstone is durable. Usage is kept in memory. On startup it is rebuilt from durable state by a scan of every non-removed account recording (log file size, attachment file sizes and whether the last complete log record is `recording.ended`). It is reconciled with the exact recovered state whenever a recording is loaded. A restart, a restore into a new directory or a crash therefore cannot leave stale usage. Changing limits takes effect on restart. Lowering a limit below current usage removes nothing; it only refuses further growth.
+
+Visibility:
+
+- `GET /api/v1/account/usage` (browser session or device credential) returns `{accountId, usage: {recordings, activeRecordings, storedBytes}, limits}`. An unlimited dimension is `null`. The operator credential receives 401, and a standalone server returns 404. The client package exposes this as `getAccountUsage`.
+- `GET /api/v1/admin/accounts` and `agentlive accounts` include each account's `usage` and the server-wide `limits`.
+
+Tests: `tests/recovery/account-quotas.test.ts` runs over real HTTP with the hosted fixture. It covers recording and active limits (creation, reopen and import), idempotent creation retries, local-owner and cross-account independence, byte limits on attachment upload and publisher batches (both surface a non-retryable `quota_exceeded`), release on removal, identical usage after restart, operator and CLI listing and configuration validation.
+
 ## Next integration work
 
 1. Complete the actual-provider browser redirect journey and broader session-expiry/relogin/multiple-tab acceptance.
 2. Complete account authorization acceptance across attachments/import/export and concurrent logout/disable races beyond the in-flight transfer checks below.
 3. Add short-lived CLI device linking and origin-bound credential persistence.
-4. Per-account quotas and actual deployed-provider acceptance.
+4. Actual deployed-provider acceptance. (Per-account quotas are implemented; see [per-account quotas](#per-account-quotas).)
 
 The full production gate remains open. Performance benchmarks remain paused while missing product features are completed.
 

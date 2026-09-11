@@ -7,6 +7,7 @@ import { hostedAuth } from "./hosted-auth.js";
 import { viewingResponse } from "./viewing-response.js";
 import { TransferAuthority } from "./transfer-authority.js";
 import { adminBackups } from "./admin-backup.js";
+import { quotaLimitsSchema, type QuotaLimits } from "./quotas.js";
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import {
@@ -62,6 +63,8 @@ export interface ServerOptions {
     cookiePassword: string;
     fetch?: import("openid-client").CustomFetch;
   };
+  /** Hosted per-account limits; absent fields are unlimited. The local owner is never limited. */
+  quotas?: QuotaLimits;
   maxConnections?: number;
   maxCachedSessions?: number;
   snapshots?: import("./snapshot-scheduler.js").SnapshotScheduleOptions;
@@ -93,7 +96,7 @@ function protocolError(error: unknown): ProtocolError {
 const statusFor = (code: ErrorCode): 400 | 401 | 403 | 404 | 409 | 503 =>
   code === "unauthorized"
     ? 401
-    : code === "forbidden"
+    : code === "forbidden" || code === "quota_exceeded"
       ? 403
       : code === "stream_gone"
         ? 404
@@ -173,7 +176,13 @@ export async function startServer(options: ServerOptions) {
     throw new Error(
       "shutdownTimeoutMs must be an integer from 1 to 2147483647",
     );
+  if (
+    options.quotas !== undefined &&
+    !quotaLimitsSchema.safeParse(options.quotas).success
+  )
+    throw new Error("Invalid per-account quota configuration");
   const store = await RecordingStore.open(options.directory, {
+    ...(options.quotas === undefined ? {} : { quotas: options.quotas }),
     ...(options.maxCachedSessions === undefined
       ? {}
       : { maxCachedSessions: options.maxCachedSessions }),
@@ -603,6 +612,9 @@ export async function startServer(options: ServerOptions) {
     if (importRequestId !== undefined) idSchema.parse(importRequestId);
     if (!c.req.raw.body)
       throw new ProtocolError("invalid_request", "Archive body is required");
+    // Reject an over-quota account before receiving the archive body; the store
+    // rechecks the measured size authoritatively before installation.
+    store.quotas.precheckRecording(ownerId);
     if (activeImports >= 2)
       throw new ProtocolError("retry_later", "Import capacity is busy");
     const secret = token(c.req.header("authorization"));
@@ -854,12 +866,31 @@ export async function startServer(options: ServerOptions) {
   app.get("/api/v1/admin/accounts", (c) => {
     const after = c.req.query("after");
     if (after !== undefined) z.uuid().parse(after);
-    return c.json(
-      operatorAccounts(token(c.req.header("authorization"))).list(
-        after,
-        integer(c.req.query("limit"), 50),
-      ),
+    const page = operatorAccounts(token(c.req.header("authorization"))).list(
+      after,
+      integer(c.req.query("limit"), 50),
     );
+    return c.json({
+      accounts: page.accounts.map((account) => ({
+        ...account,
+        usage: store.quotas.usage(account.id),
+      })),
+      nextAfter: page.nextAfter,
+      limits: store.quotas.publicLimits,
+    });
+  });
+  // The signed-in account's own usage (browser session or device credential).
+  app.get("/api/v1/account/usage", (c) => {
+    if (!accounts)
+      throw new ProtocolError("stream_gone", "Hosted accounts are not enabled");
+    const accountId = c.get("accountId");
+    if (accountId === undefined)
+      throw new ProtocolError("unauthorized", "Account authorization required");
+    return c.json({
+      accountId,
+      usage: store.quotas.usage(accountId),
+      limits: store.quotas.publicLimits,
+    });
   });
   app.post("/api/v1/admin/accounts/:id/status", async (c) => {
     const target = operatorAccounts(token(c.req.header("authorization")));
