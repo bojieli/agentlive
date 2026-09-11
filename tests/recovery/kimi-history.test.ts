@@ -114,7 +114,23 @@ it("captures Kimi sibling logs, follows idle-main updates and deduplicates resta
             "worker later",
             "new agent",
           ]);
-          baseline = result.sequence;
+          // Trailing events for the new agent may still be committing after the
+          // texts appear; take the baseline only once the boundary is stable.
+          let previous = -1;
+          await expect
+            .poll(
+              async () => {
+                const recording = await server.store.get(streamId);
+                const current = recording.boundary.sequence;
+                server.store.release(recording);
+                const stable = current === previous;
+                previous = current;
+                return stable;
+              },
+              { timeout: 10000, interval: 300 },
+            )
+            .toBe(true);
+          baseline = previous;
           expect(result.state.agents.size).toBe(3);
           expect(
             new Set(
