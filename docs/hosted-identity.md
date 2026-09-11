@@ -37,16 +37,29 @@ Synthetic signed-provider tests verify PKCE, state, nonce, issuer, audience, exp
 
 `Accounts` stores one protected `accounts/<account-id>.json` file per identity and rebuilds its identity index from those files. It identifies a user by the exact OIDC issuer and subject pair. Email addresses and display names are not identity keys, and identities from different issuers are never automatically merged. A profile-name update preserves the account ID. A successful login cannot reactivate a disabled account.
 
-The directory has an exclusive process lock, serialized mutations, atomic replacement and bounded admission: 10,000 accounts, 16 KiB per file and 32 pending writes. Reads reject invalid schemas, unsafe permissions, symlinks and duplicate identity mappings. Profile results exclude issuer/subject fields. Account disable/enable uses a version precondition and must be called only after authenticating the service operator. No administration endpoint is exposed yet.
+The directory has an exclusive process lock, serialized mutations, atomic replacement and bounded admission: 10,000 accounts, 16 KiB per file and 32 pending writes. Reads reject invalid schemas, unsafe permissions, symlinks and duplicate identity mappings. Profile results exclude issuer/subject fields. Account disable/enable uses a version precondition and is exposed only through the operator routes below.
 
 Tests cover concurrent identity resolution, exact issuer separation, profile changes, version conflicts, disabled-account persistence across restart, returned-value isolation, duplicate/corrupt/unsafe files, failed writes and bounded admission. Broader process-death, operational administration and hosted request-authorization acceptance remain open.
+
+## Operator account administration
+
+With hosted mode enabled, the server operator (the owner credential) can list and disable accounts:
+
+```sh
+agentlive accounts --server https://recordings.example.com [--limit 50] [--after <account-id>]
+agentlive account-status --server https://recordings.example.com --account-id <id> --action disable --expected-version <version>
+```
+
+The routes are `GET /api/v1/admin/accounts` (pages of at most 100 ordered by account ID, with `nextAfter`) and `POST /api/v1/admin/accounts/:id/status` with `{ "disabled": true|false, "expectedVersion": n }`. Both require the owner bearer credential; account sessions, devices and grants receive 401, and a standalone server without hosted mode returns 404. Listings include the issuer and display name but never the OIDC subject. A stale `expectedVersion` returns 409.
+
+Disabling commits the new status, then immediately rechecks active HTTP transfers and open viewing sockets, which are aborted or closed with code 1008. Browser sessions and device credentials stop authenticating. Re-enabling restores login but does not revive credentials issued before the disable, because the account's authentication version advanced. Recordings are not removed; use the removal workflow for content. Tests: `tests/recovery/account-admin.test.ts`.
 
 ## Next integration work
 
 1. Complete the actual-provider browser redirect journey and broader session-expiry/relogin/multiple-tab acceptance.
 2. Complete account authorization acceptance across attachments/import/export and concurrent logout/disable races beyond the in-flight transfer checks below.
 3. Add short-lived CLI device linking and origin-bound credential persistence.
-4. Complete ownership/public flows, account administration, quotas/removal/abuse handling and actual deployed-provider acceptance.
+4. Per-account quotas and actual deployed-provider acceptance.
 
 The full production gate remains open. Performance benchmarks remain paused while missing product features are completed.
 

@@ -238,6 +238,23 @@ export class Accounts {
       return publicAccount(next);
     });
   }
+  /** Operator listing ordered by account ID. Includes the issuer but never the subject. */
+  list(after: string | undefined, limit: number) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+      throw new ProtocolError("invalid_request", "Limit must be 1-100");
+    const ids = [...this.records.keys()]
+      .filter((id) => after === undefined || id > after)
+      .sort()
+      .slice(0, limit + 1);
+    const page = ids.slice(0, limit).map((id) => {
+      const record = this.records.get(id)!;
+      return { ...publicAccount(record), issuer: record.issuer };
+    });
+    return {
+      accounts: page,
+      nextAfter: ids.length > limit ? page.at(-1)!.id : null,
+    };
+  }
   /** Observe committed disable/enable changes, e.g. to recheck active transfers. */
   onStatusChange(listener: (id: string) => void) {
     this.listeners.add(listener);

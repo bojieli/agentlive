@@ -17,6 +17,8 @@ import { loadRemoteArtifactPolicy } from "./remote-artifact-policy.js";
 import {
   listReports,
   decideReport,
+  listAccounts,
+  setAccountDisabled,
   listRecordings,
   removeRecording,
   requestOnlineBackup,
@@ -93,6 +95,8 @@ Commands:
   agentlive relocate-import-sources --source <binding-directory> --native-source <file> --family-source <child-id=path> --operation-id <id> --expected-manifest-hash <hash>
   agentlive inspect-migration --source <publisher-binding-directory> [--native-source <file>] [--verify-family] [--family-source <child-id=path>]
   agentlive reports [--server <origin>] [--limit 50] [--after <report-id>]
+  agentlive accounts [--server <origin>] [--limit 50] [--after <account-id>]
+  agentlive account-status --account-id <id> --action <disable|enable> --expected-version <version> [--server <origin>]
   agentlive review-report --report-id <id> --action <dismiss|remove> --revision <revision> --operation-id <unique-id> --note <reason> [--confirm-removal] [--server <origin>]
   agentlive discover --agent <codex|claude|kimi> [--source-root <directory>] [--limit 50]
   agentlive discover --agent opencode --native-server <origin> [--limit 50]
@@ -238,6 +242,8 @@ async function main() {
     command !== "relocate-import-sources" &&
     command !== "inspect-migration" &&
     command !== "reports" &&
+    command !== "accounts" &&
+    command !== "account-status" &&
     command !== "review-report" &&
     command !== "login" &&
     command !== "logout" &&
@@ -280,6 +286,7 @@ async function main() {
       label: { type: "string" },
       "expires-at": { type: "string" },
       "grant-id": { type: "string" },
+      "account-id": { type: "string" },
       "operation-id": { type: "string" },
       "expected-version": { type: "string" },
       revision: { type: "string" },
@@ -365,6 +372,10 @@ async function main() {
       "revoke-publisher-credential",
     ].includes(command)
       ? ["account-file"]
+      : []),
+    ...(command === "accounts" ? ["server", "limit", "after"] : []),
+    ...(command === "account-status"
+      ? ["server", "account-id", "action", "expected-version"]
       : []),
     ...(command === "reports"
       ? ["server", "limit", "after"]
@@ -470,6 +481,8 @@ async function main() {
             command === "migrate-import" ||
             command === "relocate-import-sources" ||
             command === "reports" ||
+            command === "accounts" ||
+            command === "account-status" ||
             command === "review-report" ||
             command === "remove" ||
             command === "publisher-credential" ||
@@ -901,6 +914,42 @@ async function main() {
       signal: controller.signal,
     });
     process.stdout.write(JSON.stringify(result) + "\n");
+    return;
+  }
+  if (command === "accounts" || command === "account-status") {
+    const credential = await loadCredential();
+    secrets.push(credential);
+    const serverOrigin = values.server ?? "http://127.0.0.1:7331";
+    if (command === "accounts") {
+      const page = await listAccounts({
+        serverOrigin,
+        credential,
+        signal: controller.signal,
+        ...(values.after === undefined ? {} : { after: values.after }),
+        ...(values.limit === undefined ? {} : { limit: Number(values.limit) }),
+      });
+      process.stdout.write(JSON.stringify(page) + "\n");
+      return;
+    }
+    const expectedVersion = Number(values["expected-version"]);
+    if (
+      !values["account-id"] ||
+      (values.action !== "disable" && values.action !== "enable") ||
+      !Number.isSafeInteger(expectedVersion) ||
+      expectedVersion < 1
+    )
+      throw new Error(
+        "account-status requires --account-id, --action disable|enable and --expected-version",
+      );
+    const account = await setAccountDisabled({
+      serverOrigin,
+      credential,
+      accountId: values["account-id"],
+      expectedVersion,
+      disabled: values.action === "disable",
+      signal: controller.signal,
+    });
+    process.stdout.write(JSON.stringify(account) + "\n");
     return;
   }
   if (command === "retire") {

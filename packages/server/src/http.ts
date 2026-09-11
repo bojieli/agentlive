@@ -841,6 +841,40 @@ export async function startServer(options: ServerOptions) {
     isOwner,
   });
   app.post("/api/v1/admin/backup", (c) => backups.handle(c.req.raw));
+  const operatorAccounts = (secret: string) => {
+    if (!isOwner(secret))
+      throw new ProtocolError(
+        "unauthorized",
+        "Operator authorization required",
+      );
+    if (!accounts)
+      throw new ProtocolError("stream_gone", "Hosted accounts are not enabled");
+    return accounts;
+  };
+  app.get("/api/v1/admin/accounts", (c) => {
+    const after = c.req.query("after");
+    if (after !== undefined) z.uuid().parse(after);
+    return c.json(
+      operatorAccounts(token(c.req.header("authorization"))).list(
+        after,
+        integer(c.req.query("limit"), 50),
+      ),
+    );
+  });
+  app.post("/api/v1/admin/accounts/:id/status", async (c) => {
+    const target = operatorAccounts(token(c.req.header("authorization")));
+    const id = z.uuid().parse(c.req.param("id"));
+    const input = z
+      .strictObject({
+        disabled: z.boolean(),
+        expectedVersion: z.number().int().positive().safe(),
+      })
+      .parse(await boundedJson(c.req.raw, 4096));
+    // Disabling notifies the transfer registry and open sockets via onStatusChange.
+    return c.json(
+      await target.setDisabled(id, input.expectedVersion, input.disabled),
+    );
+  });
   app.get("/api/v1/reports", async (c) => {
     if (!isOwner(token(c.req.header("authorization"))))
       throw new ProtocolError(
