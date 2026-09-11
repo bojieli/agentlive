@@ -43,7 +43,7 @@ import { launchNewKimi } from "./new-kimi.js";
 import { launchNewCodex } from "./new-codex.js";
 import { launchManagedOpenCode } from "./managed-opencode.js";
 import { parseArgs } from "node:util";
-import { homedir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import {
   startServer,
@@ -195,6 +195,38 @@ const secrets = Object.entries(process.env)
       value.length <= 4096,
   )
   .map(([, value]) => value!);
+/** Describe which viewer URLs actually reach a bound server; never call loopback public. */
+function reachability(bound: string) {
+  const url = new URL(bound);
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const loopback =
+    host === "localhost" || /^127\./.test(host) || host === "::1";
+  const wildcard = host === "0.0.0.0" || host === "::";
+  const format = (address: string, family: string) =>
+    `http://${family === "IPv6" ? `[${address}]` : address}:${url.port}/`;
+  const viewerUrls = wildcard
+    ? [
+        format("127.0.0.1", "IPv4"),
+        ...Object.values(networkInterfaces())
+          .flat()
+          .filter(
+            (entry) =>
+              entry &&
+              !entry.internal &&
+              (host === "::" || entry.family === "IPv4") &&
+              !entry.address.startsWith("fe80:"),
+          )
+          .map((entry) => format(entry!.address, entry!.family)),
+      ]
+    : [new URL("/", bound).toString()];
+  return {
+    viewerUrls,
+    reachability: loopback ? "this-machine" : "network",
+    note: loopback
+      ? "Reachable only from this machine. Remote viewers need --host with an HTTPS reverse proxy or a tunnel."
+      : "Reachable from networks that can route to these addresses over plain HTTP. Put an HTTPS reverse proxy in front for remote or public viewers.",
+  };
+}
 /** Accept a browser viewer URL (`/?stream=<id>` or `/s/<id>`) as watch/replay arguments. */
 function viewerArguments(value: string): string[] {
   let url: URL;
@@ -1400,6 +1432,7 @@ async function main() {
         JSON.stringify({
           event: "ready",
           url: server.url,
+          ...reachability(server.url),
           ...(process.env.AGENTLIVE_OWNER_SECRET ? {} : { ownerFile }),
         }) + "\n",
       );

@@ -10,25 +10,37 @@ const exec = promisify(execFile),
   cli = resolve("packages/cli/dist/main.js");
 const env = { PATH: process.env.PATH ?? "" };
 
-async function start(stateDir: string) {
+async function start(stateDir: string, host?: string) {
   const child = spawn(
     process.execPath,
-    [cli, "serve", "--state-dir", stateDir, "--port", "0"],
+    [
+      cli,
+      "serve",
+      "--state-dir",
+      stateDir,
+      "--port",
+      "0",
+      ...(host ? ["--host", host] : []),
+    ],
     { env, stdio: ["ignore", "pipe", "pipe"] },
   );
   const exited = new Promise<number | null>((resolve) =>
     child.once("exit", resolve),
   );
   const lines = createInterface({ input: child.stdout! });
-  const ready = await new Promise<{ url: string; ownerFile: string }>(
-    (resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error("startup")), 10000);
-      lines.once("line", (line) => {
-        clearTimeout(timer);
-        resolve(JSON.parse(line));
-      });
-    },
-  );
+  const ready = await new Promise<{
+    url: string;
+    ownerFile: string;
+    viewerUrls: string[];
+    reachability: string;
+    note: string;
+  }>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("startup")), 10000);
+    lines.once("line", (line) => {
+      clearTimeout(timer);
+      resolve(JSON.parse(line));
+    });
+  });
   lines.close();
   return { child, exited, ...ready };
 }
@@ -369,3 +381,28 @@ it("retires a finished binding so the same native session starts a new recording
     await rm(root, { recursive: true, force: true });
   }
 }, 60_000);
+
+it("reports honest viewer reachability for loopback and wildcard binds", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-publication-reach-"));
+  const servers: Awaited<ReturnType<typeof start>>[] = [];
+  try {
+    const local = await start(join(root, "local"));
+    servers.push(local);
+    expect(local.reachability).toBe("this-machine");
+    expect(local.viewerUrls).toEqual([local.url + "/"]);
+    expect(local.note).toContain("only from this machine");
+    const wide = await start(join(root, "wide"), "0.0.0.0");
+    servers.push(wide);
+    expect(wide.reachability).toBe("network");
+    const port = new URL(wide.url).port;
+    expect(wide.viewerUrls[0]).toBe(`http://127.0.0.1:${port}/`);
+    expect(wide.viewerUrls.every((url) => !url.includes("0.0.0.0"))).toBe(true);
+    expect((await fetch(wide.viewerUrls[0] + "healthz")).status).toBe(200);
+  } finally {
+    for (const server of servers) {
+      server.child.kill("SIGTERM");
+      await server.exited;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});

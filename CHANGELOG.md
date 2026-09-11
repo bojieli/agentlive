@@ -7,6 +7,7 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 ### Added
 
 - Publication control commands: `agentlive status`, `pause`, `resume`, `finish` and `reopen` operate on local publisher bindings without printing credentials or content; `agentlive retire` sets a finished binding aside so the next publish of that native session starts a new recording; `agentlive doctor` checks the runtime, credentials, server and installed agents.
+- `serve` reports the viewer URLs that actually reach it and whether it is reachable only from this machine.
 - `publish` output includes the recording's stable `viewerUrl`; `watch` and `replay` accept a viewer URL; the server redirects `/s/<id>` short links.
 - Operator account administration for hosted mode: `agentlive accounts` and `agentlive account-status` (`GET /api/v1/admin/accounts`, `POST /api/v1/admin/accounts/:id/status`); disabling ends the account's sessions, transfers and sockets immediately.
 - Online server backup: `agentlive backup --server <origin> --output <dir>` and owner-only `POST /api/v1/admin/backup` back up a running server in the restore-compatible format.
