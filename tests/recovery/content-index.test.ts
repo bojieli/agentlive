@@ -244,7 +244,80 @@ it("traces validated branches and opaque values with callback isolation and canc
         throw new Error("unexpected");
       }),
     ).toEqual({ nodes: 0, values: 0 });
+    // A reused subtree is neither loaded nor visited, but still counted.
+    reads.length = 0;
+    const skipped = new Set<string>();
+    const partial = await index.trace(
+      root,
+      async (item) => {
+        if (item.kind === "node")
+          expect(skipped.has(item.ref.hash)).toBe(false);
+      },
+      undefined,
+      (ref) => {
+        if (ref.hash === root.ref.hash || skipped.size) return false;
+        skipped.add(ref.hash);
+        return true;
+      },
+    );
+    expect(partial.values).toBe(70);
+    expect(partial.nodes).toBe(traced.nodes - 1);
+    expect(reads).not.toContain([...skipped][0]);
+    reads.length = 0;
+    expect(
+      await index.trace(
+        root,
+        async () => {},
+        undefined,
+        () => true,
+      ),
+    ).toEqual({ nodes: 0, values: 70 });
+    expect(reads).toHaveLength(0);
   } finally {
     await store.close();
+  }
+});
+
+it("fast content-reference parsing matches the schema decision and output", async () => {
+  const { parseContentReference, snapshotContentReferenceSchema } =
+    await import("../../packages/protocol/src/index.js");
+  const hash = "ab".repeat(32);
+  const cases: unknown[] = [
+    { hash, byteSize: 1, units: 0 },
+    { hash, byteSize: 1048576, units: 67108864 },
+    { units: 5, byteSize: 9, hash },
+    { hash, byteSize: 0, units: 0 },
+    { hash, byteSize: 1048577, units: 0 },
+    { hash, byteSize: 1, units: -1 },
+    { hash, byteSize: 1, units: 67108865 },
+    { hash, byteSize: 1.5, units: 0 },
+    { hash, byteSize: Number.NaN, units: 0 },
+    { hash, byteSize: 1, units: Infinity },
+    { hash, byteSize: "1", units: 0 },
+    { hash: hash.toUpperCase(), byteSize: 1, units: 0 },
+    { hash: hash.slice(1), byteSize: 1, units: 0 },
+    { hash: `${hash}\n`, byteSize: 1, units: 0 },
+    { hash, byteSize: 1 },
+    { hash, byteSize: 1, units: 0, extra: true },
+    { hash, byteSize: 1, units: undefined },
+    Object.assign(Object.create(null), { hash, byteSize: 1, units: 0 }),
+    Object.assign(Object.create({ units: 0 }), { hash, byteSize: 1 }),
+    Object.defineProperty({ hash, byteSize: 1, extra: 0 }, "units", {
+      value: 0,
+    }),
+    Object.defineProperty({ hash, byteSize: 1, units: 0 }, "hidden", {
+      value: 1,
+    }),
+    [hash, 1, 0],
+    null,
+    undefined,
+    "reference",
+    7,
+  ];
+  for (const value of cases) {
+    const expected = snapshotContentReferenceSchema.safeParse(value);
+    const actual = parseContentReference(value);
+    expect(actual).toEqual(expected.success ? expected.data : undefined);
+    if (actual) expect(actual).not.toBe(value);
   }
 });

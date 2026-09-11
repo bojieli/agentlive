@@ -8,6 +8,8 @@ import { ActivityIndex } from "./activity-index.js";
 import type { ContentReference, SnapshotBinding } from "./snapshot.js";
 /** Trace a coherent paired checkpoint. Callback output is provisional until success.
  * Caller owns root pins, codec-page tracing and any later reclamation.
+ * Optional `reuse` skips subtrees the caller already retains; scopes are
+ * prefixed with "reducer/" or "activity/".
  */
 export async function tracePairedSnapshot(
   content: PagedContent,
@@ -15,6 +17,7 @@ export async function tracePairedSnapshot(
   binding: SnapshotBinding,
   visit: (reference: ContentReference) => Promise<void>,
   signal?: AbortSignal,
+  reuse?: (reference: ContentReference, scope: string) => boolean,
 ): Promise<void> {
   binding = { ...binding };
   const selected = snapshotDescriptorSchema.parse(descriptor);
@@ -37,7 +40,19 @@ export async function tracePairedSnapshot(
       "corrupt_storage",
       "Paired checkpoint boundaries differ",
     );
-  await reducer.trace(selected.ref, binding, visit, signal);
-  await activity.trace(selected.activity, binding, visit, signal);
+  await reducer.trace(
+    selected.ref,
+    binding,
+    visit,
+    signal,
+    reuse && ((ref, scope) => reuse(ref, `reducer/${scope}`)),
+  );
+  await activity.trace(
+    selected.activity,
+    binding,
+    visit,
+    signal,
+    reuse && ((ref, scope) => reuse(ref, `activity/${scope}`)),
+  );
   signal?.throwIfAborted();
 }

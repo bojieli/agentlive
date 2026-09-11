@@ -1,7 +1,7 @@
 import {
   canonicalJson,
   ProtocolError,
-  snapshotContentReferenceSchema,
+  parseContentReference,
 } from "@agentlive/protocol";
 import {
   ContentIndex,
@@ -35,9 +35,7 @@ function key(value: unknown): OrderedMapKey {
   );
 }
 function reference(value: unknown): ContentReference {
-  const result = snapshotContentReferenceSchema.safeParse(value);
-  if (!result.success) bad();
-  return result.data;
+  return parseContentReference(value) ?? bad();
 }
 function equal(a: ContentReference, b: ContentReference) {
   return a.hash === b.hash && a.byteSize === b.byteSize && a.units === b.units;
@@ -245,6 +243,11 @@ export class OrderedContentMap {
   }
   /** Trace both index trees and validated entries; application values remain opaque.
    * Callbacks are provisional until success. Root pinning/collection belongs to the caller.
+   *
+   * Optional `reuse` is consulted before each index node and before each entry
+   * on each side ("byKey"/"byOrder" and "entry.byKey"/"entry.byOrder"). A true
+   * result skips that already-retained subtree: no load, pairing check or
+   * callback for it. Entry values are reported only from the byOrder side.
    */
   async trace(
     input: OrderedMapRoot | null,
@@ -254,6 +257,10 @@ export class OrderedContentMap {
         | { kind: "value"; key: OrderedMapKey; ref: ContentReference },
     ) => Promise<void>,
     signal?: AbortSignal,
+    reuse?: (
+      ref: ContentReference,
+      part: "byKey" | "byOrder" | "entry.byKey" | "entry.byOrder",
+    ) => boolean,
   ): Promise<void> {
     const root = copyOrderedMapRoot(input);
     for (const order of [false, true]) {
@@ -264,6 +271,8 @@ export class OrderedContentMap {
             await visit(item);
             return;
           }
+          if (reuse?.({ ...item.ref }, order ? "entry.byOrder" : "entry.byKey"))
+            return;
           const entry = await this.entry(item.ref, signal);
           const hash = await this.hash(entry.key, signal);
           if (
@@ -287,6 +296,7 @@ export class OrderedContentMap {
             });
         },
         signal,
+        reuse && ((ref) => reuse(ref, order ? "byOrder" : "byKey")),
       );
     }
     signal?.throwIfAborted();

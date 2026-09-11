@@ -3,9 +3,17 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { cpus, totalmem } from "node:os";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { BrowserPagedState } from "../apps/web/dist/paged-state.js";
 import { MemoryPagedStore } from "../apps/web/dist/memory-paged-store.js";
-import { tracePairedSnapshot } from "../packages/playback/dist/index.js";
+import {
+  ActivityIndex,
+  ContentIndex,
+  PagedReducer,
+  tracePairedSnapshot,
+} from "../packages/playback/dist/index.js";
+setFlagsFromString("--expose-gc");
 const auditHead = process.argv.includes("--audit-head");
 const storeOptions = {};
 for (const [flag, key] of [
@@ -119,6 +127,79 @@ const event = (seq) => ({
           },
         },
 });
+// Diagnostic only: attribute each distinct latest-head blob to the first
+// schema structure that reaches it. Codec manifests and pages are counted
+// separately. This read-only walk does not validate pairing or authorize
+// deletion; tracePairedSnapshot above remains the reference union.
+const auditStructures = async (head, signal) => {
+  const binding = {
+    serverOrigin: "http://synthetic.invalid",
+    streamId: "memory-measure",
+    revision: "revision",
+  };
+  const owner = new Map();
+  const structures = {};
+  const record = async (category, ref) => {
+    const found = (structures[category] ??= {
+      manifests: 0,
+      pages: 0,
+      bytes: 0,
+      references: 0,
+    });
+    found.references++;
+    for (const dependency of await store.trace(ref, signal)) {
+      if (owner.has(dependency.hash)) continue;
+      owner.set(dependency.hash, category);
+      found.bytes += dependency.byteSize;
+      if (dependency.hash === ref.hash) found.manifests++;
+      else found.pages++;
+    }
+  };
+  const json = async (ref) =>
+    JSON.parse(await store.read(ref, 0, ref.units, signal));
+  const index = new ContentIndex(store);
+  const reducer = new PagedReducer(store);
+  const state = await reducer.open(head.ref, binding, signal);
+  await record("reducer.root", head.ref);
+  for (const [name, map] of Object.entries(state.maps)) {
+    if (!map) continue;
+    for (const side of ["byKey", "byOrder"])
+      await index.trace(
+        map[side],
+        async (item) => {
+          if (item.kind === "node")
+            return record(`reducer.${name}.${side}.node`, item.ref);
+          await record(`reducer.${name}.entry`, item.ref);
+          if (side !== "byOrder") return;
+          const entry = await json(item.ref);
+          await record(`reducer.${name}.value`, entry.value);
+          if (name === "messages")
+            await record(
+              `reducer.messages.text`,
+              (await json(entry.value)).text,
+            );
+        },
+        signal,
+      );
+  }
+  const activity = await new ActivityIndex(store).open(
+    head.activity,
+    binding,
+    signal,
+  );
+  await record("activity.root", head.activity);
+  for (const side of ["seen", "visible"])
+    await index.trace(
+      activity[side],
+      (item) =>
+        record(
+          item.kind === "node" ? `activity.${side}.node` : "activity.row",
+          item.ref,
+        ),
+      signal,
+    );
+  return structures;
+};
 const history = async function* (after, through) {
   for (let seq = after + 1; seq <= through; seq++) yield event(seq);
 };
@@ -149,10 +230,30 @@ try {
     save();
   }
   report.receiptMs = performance.now() - started;
+  // Retained (post-collection) process memory after receipt, excluding the
+  // transient garbage included in the sampled peaks. Not counted in receiptMs.
+  const collectGarbage = runInNewContext("gc");
+  collectGarbage();
+  collectGarbage();
+  const retained = process.memoryUsage();
+  report.retainedAfterReceipt = {
+    heapUsed: retained.heapUsed,
+    external: retained.external,
+    arrayBuffers: retained.arrayBuffers,
+    rss: retained.rss,
+    store: store.usage,
+  };
   report.phase = "seek";
   save();
   report.seeks = [];
+  // Diagnostic: retained seek landmarks (a private catalog) before seeking.
+  report.landmarks = store.catalog?.map((entry) => entry.serverSeq);
   for (const through of [Math.floor(count / 2), 1, count]) {
+    const landmark = await store.loadCheckpointBefore(
+      timeline(through),
+      through,
+      stop.signal,
+    );
     const start = performance.now();
     const view = await state.select(
       timeline(through),
@@ -183,7 +284,11 @@ try {
         assert.equal(await text.read(0, text.units, stop.signal), expected);
       }
     }
-    report.seeks.push({ through, elapsedMs: performance.now() - start });
+    report.seeks.push({
+      through,
+      from: landmark?.serverSeq ?? 0,
+      elapsedMs: performance.now() - start,
+    });
     await view.close();
   }
   const rows = await pinned.rows(0, 1, stop.signal);
@@ -203,7 +308,12 @@ try {
     report.phase = "head-audit";
     save();
     try {
-      const auditSignal = AbortSignal.timeout(30000);
+      const auditSignal = AbortSignal.timeout(120000);
+      const binding = {
+        serverOrigin: "http://synthetic.invalid",
+        streamId: "memory-measure",
+        revision: "revision",
+      };
       const head = await store.loadCheckpoint(auditSignal);
       const dependencies = new Map();
       if (head) {
@@ -228,7 +338,44 @@ try {
             (sum, size) => sum + size,
             0,
           ),
+          structures: await auditStructures(head, auditSignal),
         };
+        // Incremental cost of each retained landmark beyond the head and newer
+        // landmarks: distinct blobs first reached from that root.
+        const walked = new Map();
+        const reuse = (ref, scope) => {
+          let hashes = walked.get(scope);
+          if (!hashes) walked.set(scope, (hashes = new Set()));
+          if (hashes.has(ref.hash)) return true;
+          hashes.add(ref.hash);
+          return false;
+        };
+        report.landmarkAudit = [];
+        const counted = new Set();
+        for (const root of [head, ...(store.catalog ?? []).toReversed()]) {
+          let entries = 0,
+            bytes = 0;
+          await tracePairedSnapshot(
+            store,
+            root,
+            binding,
+            async (ref) => {
+              for (const dependency of await store.trace(ref, auditSignal)) {
+                if (counted.has(dependency.hash)) continue;
+                counted.add(dependency.hash);
+                entries++;
+                bytes += dependency.byteSize;
+              }
+            },
+            auditSignal,
+            reuse,
+          );
+          report.landmarkAudit.push({
+            through: root.serverSeq,
+            entries,
+            bytes,
+          });
+        }
       }
     } catch (error) {
       report.headAuditFailure = error.stack;

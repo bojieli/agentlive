@@ -12,13 +12,17 @@ interface Manifest {
   units: number;
   pages: TextReference[];
 }
+const contentHash = /^[a-f0-9]{64}$/;
 export function validateTextReference(ref: TextReference, maximum: number) {
+  const keys = ref && typeof ref === "object" ? Object.keys(ref) : [];
   if (
-    !ref ||
-    typeof ref !== "object" ||
-    Object.keys(ref).sort().join(",") !== "byteSize,hash,units" ||
+    // Exactly the three descriptor keys (Object.keys yields unique names).
+    keys.length !== 3 ||
+    !keys.every(
+      (key) => key === "byteSize" || key === "hash" || key === "units",
+    ) ||
     typeof ref.hash !== "string" ||
-    !/^[a-f0-9]{64}$/.test(ref.hash)
+    !contentHash.test(ref.hash)
   )
     throw new ProtocolError("corrupt_storage", "Invalid content reference");
   if (

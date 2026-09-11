@@ -23,6 +23,43 @@ export const snapshotContentReferenceSchema = z.strictObject({
   byteSize: z.number().int().min(1).max(1048576),
   units: z.number().int().min(0).max(67108864),
 });
+const contentHash = /^[a-f0-9]{64}$/;
+/** Same accept/reject result and output as
+ * `snapshotContentReferenceSchema.safeParse(value)`. Exact plain descriptors,
+ * which traversal reads by the million, are copied without the generic schema
+ * machinery; every other input is decided by the schema itself. */
+export function parseContentReference(
+  value: unknown,
+): z.infer<typeof snapshotContentReferenceSchema> | undefined {
+  if (
+    value !== null &&
+    typeof value === "object" &&
+    Object.getPrototypeOf(value) === Object.prototype
+  ) {
+    const ref = value as Record<string, unknown>;
+    const keys = Object.keys(ref);
+    const { hash, byteSize, units } = ref;
+    if (
+      keys.length === 3 &&
+      keys.every(
+        (key) => key === "hash" || key === "byteSize" || key === "units",
+      ) &&
+      typeof hash === "string" &&
+      contentHash.test(hash) &&
+      typeof byteSize === "number" &&
+      Number.isSafeInteger(byteSize) &&
+      byteSize >= 1 &&
+      byteSize <= 1048576 &&
+      typeof units === "number" &&
+      Number.isSafeInteger(units) &&
+      units >= 0 &&
+      units <= 67108864
+    )
+      return { hash, byteSize, units };
+  }
+  const parsed = snapshotContentReferenceSchema.safeParse(value);
+  return parsed.success ? parsed.data : undefined;
+}
 export const snapshotDescriptorSchema = z.strictObject({
   format: z.literal("agentlive.paged-state").optional(),
   activity: snapshotContentReferenceSchema

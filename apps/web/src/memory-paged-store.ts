@@ -7,6 +7,7 @@ import {
 import {
   attachmentSchema,
   canonicalJson,
+  parseContentReference,
   ProtocolError,
   snapshotDescriptorSchema,
   type TextReference,
@@ -28,7 +29,10 @@ import {
   type TextPageChoice,
   type TextPosition,
 } from "./inspection-choices.js";
-import { retainSeekCheckpoint } from "./checkpoint-catalog.js";
+import {
+  retainSeekCheckpoint,
+  thinSeekCheckpoints,
+} from "./checkpoint-catalog.js";
 
 /** Paired checkpoint and inspection metadata scoped to a single in-memory visit. */
 export class MemoryPagedStore
@@ -36,9 +40,10 @@ export class MemoryPagedStore
   implements PagedContentStore
 {
   private head: BrowserCheckpoint | null = null;
-  private traceReferences: TextReference[] = [];
-  private traceReferenceIds = new Map<string, number>();
-  private tracedRoots = new Map<string, Uint32Array>();
+  private majorUsage = { bytes: 0, entries: 0 };
+  /** Storage each landmark retained beyond the head, pins and newer landmarks,
+   * as measured by the latest major pass. */
+  private landmarkCost = new Map<string, { bytes: number; entries: number }>();
   private catalog: BrowserCheckpoint[] = [];
   private pins = new Map<symbol, BrowserCheckpoint>();
   private activeWork = 0;
@@ -155,7 +160,9 @@ export class MemoryPagedStore
         this.completedWork < 256)
     )
       return Promise.resolve();
-    const task = this.collectRetained(AbortSignal.timeout(30000))
+    const task = this.collectRetained(AbortSignal.timeout(30000), {
+      policy: "generational",
+    })
       .then(() => {
         this.lastCollectionBytes = this.usage.bytes;
         this.lastCollectionEntries = this.usage.entries;
@@ -207,8 +214,22 @@ export class MemoryPagedStore
       this.pins.delete(token);
     });
   }
-  /** All root construction must use beginWork; existing readers must own a pin. */
-  collectRetained(signal: AbortSignal) {
+  /** All root construction must use beginWork; existing readers must own a pin.
+   *
+   * Collection is generational. A minor pass marks only content installed since
+   * the previous successful sweep: the typed walk stops at surviving blobs,
+   * whose complete closures an earlier sweep retained, and deletes only
+   * unreachable young blobs. A major pass re-walks and verifies every retained
+   * root and may thin optional seek landmarks under storage pressure. Within one
+   * frozen pass, a subtree already walked under the same schema scope is not
+   * walked again for another root. Explicit calls are major by default;
+   * automatic maintenance uses the generational policy, which runs a major only
+   * when surviving usage has grown substantially since the previous major.
+   */
+  collectRetained(
+    signal: AbortSignal,
+    options: { policy?: "major" | "generational" } = {},
+  ) {
     return this.metadata(signal, async (active) => {
       if (this.activeWork)
         throw new ProtocolError(
@@ -217,30 +238,102 @@ export class MemoryPagedStore
         );
       this.sweeping = true;
       try {
-        // Seek landmarks are reconstructible from history. Thin them under
-        // storage pressure, while independently retaining the head and every
-        // presentation pin. Publish the smaller catalog only after a safe sweep.
-        const pressure =
-          this.usage.bytes >= this.maxBytes * 0.6 ||
-          this.usage.entries >= this.maxEntries * 0.6;
-        const catalog = pressure
-          ? this.catalog.filter(
-              (_, index) =>
-                index % 2 === 0 || index === this.catalog.length - 1,
-            )
-          : this.catalog;
+        const usage = this.usage,
+          young = this.youngUsage;
+        const survived = {
+          bytes: usage.bytes - young.bytes,
+          entries: usage.entries - young.entries,
+        };
+        const entryInterval = Math.max(
+          1,
+          Math.min(2048, Math.floor(this.maxEntries / 10)),
+        );
+        const grown = (
+          current: number,
+          major: number,
+          interval: number,
+          quota: number,
+        ) =>
+          current - major >= Math.max(interval, major / 2) ||
+          (current >= quota * 0.75 && current - major >= interval);
+        const major =
+          options.policy !== "generational" ||
+          grown(
+            survived.bytes,
+            this.majorUsage.bytes,
+            this.collectionBytes,
+            this.maxBytes,
+          ) ||
+          grown(
+            survived.entries,
+            this.majorUsage.entries,
+            entryInterval,
+            this.maxEntries,
+          );
+        // Seek landmarks are reconstructible from history. When the content
+        // retained by the previous major exceeded 60% of either quota, drop
+        // landmarks until their measured cost covers that excess, keeping the
+        // most seek coverage per byte/entry. The head and every presentation
+        // pin are retained independently. Publish the smaller catalog only
+        // after a safe sweep. Only a major pass can reclaim landmark content.
+        const share = (value: { bytes: number; entries: number }) =>
+          Math.max(
+            value.bytes / this.maxBytes,
+            value.entries / this.maxEntries,
+          );
+        const excess = major ? share(this.majorUsage) - 0.6 : 0;
+        let cheapest: number | undefined;
+        for (const cost of this.landmarkCost.values()) {
+          const value = share(cost);
+          if (value > 0 && (cheapest === undefined || value < cheapest))
+            cheapest = value;
+        }
+        const catalog =
+          excess > 0
+            ? thinSeekCheckpoints(
+                this.catalog,
+                (entry) => {
+                  const cost = this.landmarkCost.get(canonicalJson(entry));
+                  // Landmarks added since the last major are near the head
+                  // and unmeasured; estimate them as the cheapest measured one
+                  // so they compete for removal instead of forcing it onto
+                  // older, more widely spaced landmarks.
+                  return cost ? share(cost) : cheapest;
+                },
+                excess,
+              )
+            : this.catalog;
+        // Walk the head and pins first, then landmarks from newest to oldest,
+        // so each landmark's measured cost is what it retains beyond them.
         const roots = new Map<string, BrowserCheckpoint>();
         for (const root of [
           ...(this.head ? [this.head] : []),
-          ...catalog,
           ...this.pins.values(),
+          ...catalog.toReversed(),
         ])
           roots.set(canonicalJson(root), root);
+        const landmarks = new Set(catalog.map((entry) => canonicalJson(entry)));
+        const fixed = new Set(
+          [...(this.head ? [this.head] : []), ...this.pins.values()].map(
+            (entry) => canonicalJson(entry),
+          ),
+        );
+        const costs = new Map<string, { bytes: number; entries: number }>();
         // Historical roots share most immutable metadata. Reuse bounded decoded
-        // ranges within this frozen scan without caching validation decisions.
+        // ranges within this frozen scan. Index nodes validated earlier in the
+        // same pass (keyed by their complete span) are reused rather than
+        // re-parsed on every pairing lookup; both caches die with the pass.
         const ranges = new Map<string, string>();
         let rangeBytes = 0;
+        const nodes = new Map<string, unknown>();
         const content = {
+          decodedNodes: {
+            get: (key: string) => nodes.get(key),
+            set: (key: string, value: unknown) => {
+              if (nodes.size >= 1024) nodes.delete(nodes.keys().next().value!);
+              nodes.set(key, value);
+            },
+          },
           put: this.put.bind(this),
           append: this.append.bind(this),
           read: async (
@@ -250,7 +343,10 @@ export class MemoryPagedStore
             signal?: AbortSignal,
           ) => {
             signal?.throwIfAborted();
-            const key = canonicalJson([ref, offset, length]);
+            // Only exact descriptors share cache identity; others fail in read.
+            const exact = parseContentReference(ref);
+            if (!exact) return this.read(ref, offset, length, signal);
+            const key = `${exact.hash}/${exact.byteSize}/${exact.units}/${offset}/${length}`;
             const cached = ranges.get(key);
             if (cached !== undefined) return cached;
             const text = await this.read(ref, offset, length, signal);
@@ -270,86 +366,51 @@ export class MemoryPagedStore
             return text;
           },
         };
-        const result = await super.collect(async (mark) => {
-          for (const key of this.tracedRoots.keys())
-            if (!roots.has(key)) this.tracedRoots.delete(key);
-          if (this.traceReferences.length >= 60000) {
-            // Reclaim IDs belonging only to retired roots. Preserve validated
-            // live closures instead of forcing a full multi-root retrace at the
-            // pool boundary. Both old and new pools are bounded to 65,536 IDs.
-            const references: TextReference[] = [];
-            const remap = new Int32Array(this.traceReferences.length).fill(-1);
-            for (const [key, old] of this.tracedRoots) {
-              const compact = new Uint32Array(2048);
-              for (let word = 0; word < old.length; word++) {
-                let bits = old[word]!;
-                while (bits) {
-                  const bit = 31 - Math.clz32(bits & -bits);
-                  const id = word * 32 + bit;
-                  if (remap[id] === -1) {
-                    remap[id] = references.length;
-                    references.push(this.traceReferences[id]!);
-                  }
-                  const next = remap[id]!;
-                  compact[next >>> 5]! |= 1 << (next & 31);
-                  bits = (bits & (bits - 1)) >>> 0;
-                }
-              }
-              this.tracedRoots.set(key, compact);
+        // Pass-local: a subtree entered earlier in this frozen pass either
+        // completed (and marked its closure) or failed the whole pass.
+        const walked = new Map<string, Set<string>>();
+        const reuse = (ref: TextReference, scope: string) => {
+          if (!major && this.survivor(ref.hash)) return true;
+          let hashes = walked.get(scope);
+          if (!hashes) walked.set(scope, (hashes = new Set()));
+          if (hashes.has(ref.hash)) return true;
+          hashes.add(ref.hash);
+          return false;
+        };
+        const result = await super.collect(
+          async (mark) => {
+            for (const [key, root] of roots) {
+              const spent = { bytes: 0, entries: 0 };
+              await tracePairedSnapshot(
+                content,
+                root,
+                this.binding,
+                async (ref) => {
+                  const added = await mark(ref);
+                  spent.bytes += added.bytes;
+                  spent.entries += added.entries;
+                },
+                active,
+                reuse,
+              );
+              // A landmark equal to the head or a pin frees nothing if dropped.
+              if (landmarks.has(key))
+                costs.set(
+                  key,
+                  fixed.has(key) ? { bytes: 0, entries: 0 } : spent,
+                );
             }
-            this.traceReferences = references;
-            this.traceReferenceIds.clear();
-            for (const [id, ref] of references.entries())
-              this.traceReferenceIds.set(canonicalJson(ref), id);
-          }
-          const cachedUnion = new Uint32Array(2048);
-          const untraced = new Map<string, BrowserCheckpoint>();
-          for (const [key, root] of roots) {
-            const cached = this.tracedRoots.get(key);
-            if (cached) {
-              for (let word = 0; word < cached.length; word++)
-                cachedUnion[word]! |= cached[word]!;
-            } else untraced.set(key, root);
-          }
-          for (let word = 0; word < cachedUnion.length; word++) {
-            let bits = cachedUnion[word]!;
-            while (bits) {
-              const bit = 31 - Math.clz32(bits & -bits);
-              await mark(this.traceReferences[word * 32 + bit]!);
-              bits = (bits & (bits - 1)) >>> 0;
-            }
-          }
-          for (const [key, root] of untraced) {
-            const closure = new Uint32Array(2048);
-            let complete = true;
-            await tracePairedSnapshot(
-              content,
-              root,
-              this.binding,
-              async (ref) => {
-                await mark(ref);
-                const identity = canonicalJson(ref);
-                let id = this.traceReferenceIds.get(identity);
-                if (id === undefined) {
-                  if (this.traceReferences.length >= 65536) {
-                    complete = false;
-                    return;
-                  }
-                  id = this.traceReferences.length;
-                  this.traceReferences.push({ ...ref });
-                  this.traceReferenceIds.set(identity, id);
-                }
-                closure[id >>> 5]! |= 1 << (id & 31);
-              },
-              active,
-            );
-            // Only a complete typed validation can authorize reuse. Codec
-            // dependencies are still verified on every collection pass.
-            if (complete) this.tracedRoots.set(key, closure);
-          }
-        }, active);
+          },
+          active,
+          { minor: !major },
+        );
+        const dropped = this.catalog.length - catalog.length;
         this.catalog = catalog;
-        return result;
+        if (major) {
+          this.majorUsage = this.usage;
+          this.landmarkCost = costs;
+        }
+        return { ...result, major, landmarks: catalog.length, dropped };
       } finally {
         this.sweeping = false;
       }
@@ -396,7 +457,16 @@ export class MemoryPagedStore
           "event_conflict",
           "Memory checkpoint cannot move backward",
         );
-      this.catalog = retainSeekCheckpoint(this.catalog, next);
+      // Space receipt landmarks by at least 1/64 of the receipt (no effect on
+      // short recordings). Otherwise time-based landmarks, re-added every batch
+      // of a long recording, crowd the head and, under storage pressure, force
+      // thinning onto older and more widely spaced landmarks.
+      const last = this.catalog.at(-1);
+      if (
+        !last ||
+        next.serverSeq - last.serverSeq >= Math.floor(next.serverSeq / 64)
+      )
+        this.catalog = retainSeekCheckpoint(this.catalog, next);
       this.head = next;
       return structuredClone(next);
     });
@@ -490,9 +560,8 @@ export class MemoryPagedStore
         this.head = null;
         this.catalog = [];
         this.pins.clear();
-        this.tracedRoots.clear();
-        this.traceReferences = [];
-        this.traceReferenceIds.clear();
+        this.majorUsage = { bytes: 0, entries: 0 };
+        this.landmarkCost.clear();
         this.view = undefined;
         this.attachment = undefined;
         this.pages = [];

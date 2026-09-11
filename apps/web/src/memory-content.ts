@@ -9,19 +9,70 @@ import {
 import type { SnapshotBlobLoader } from "./content-store.js";
 
 const encoder = new TextEncoder();
+const ascii = /^[\x00-\x7f]*$/;
+/** Hold blob bytes as a one-byte "binary" string: one UTF-16 unit per byte,
+ * each below 256. V8 stores these inline in the heap, avoiding a typed-array
+ * wrapper, ArrayBuffer and external backing store per small blob (measured at
+ * about 311 versus 127 bytes of overhead per entry on Node 26.8.1). */
+const utf8 = new TextDecoder();
+function pack(bytes: Uint8Array): string {
+  // ASCII bytes decode to the identical one-byte string natively. Any byte
+  // at or above 0x80 yields a non-ASCII character (or U+FFFD) and falls back.
+  const decoded = utf8.decode(bytes);
+  if (decoded.length === bytes.length && ascii.test(decoded)) return decoded;
+  const parts: string[] = [];
+  for (let offset = 0; offset < bytes.length; offset += 8192)
+    parts.push(
+      String.fromCharCode.apply(
+        null,
+        bytes.subarray(offset, offset + 8192) as unknown as number[],
+      ),
+    );
+  return parts.join("");
+}
+/** Fresh bytes for every reader; stored content is never exposed mutably. */
+function unpack(text: string): Uint8Array<ArrayBuffer> {
+  if (ascii.test(text)) return encoder.encode(text);
+  const bytes = new Uint8Array(text.length);
+  for (let index = 0; index < text.length; index++)
+    bytes[index] = text.charCodeAt(index);
+  return bytes;
+}
 /** Visit-local immutable codec storage. No filesystem or browser persistence. */
 export class MemoryContentStore {
-  private readonly blobs = new Map<string, Uint8Array<ArrayBuffer>>();
+  private readonly blobs = new Map<string, string>();
   private bytes = 0;
+  /** Blobs installed since the last successful sweep. Content is immutable and
+   * content-addressed, so a surviving (older) blob can only reference blobs that
+   * were already present when it was written; each sweep retained the complete
+   * closure of every blob it kept. Hence older blobs never depend on younger ones. */
+  private readonly young = new Set<string>();
+  private youngBytes = 0;
+  private readonly nodes = new Map<string, unknown>();
+  /** Bounded memo of validated immutable index nodes read from this store (see
+   * SnapshotContent.decodedNodes). Every successful sweep and close clears it,
+   * so a node is never served after its blob could have been reclaimed. */
+  readonly decodedNodes = {
+    get: (key: string) => this.nodes.get(key),
+    set: (key: string, value: unknown) => {
+      if (this.closing) return;
+      if (this.nodes.size >= 1024)
+        this.nodes.delete(this.nodes.keys().next().value!);
+      this.nodes.set(key, value);
+    },
+  };
   private tail: Promise<void> = Promise.resolve();
   private pending = 0;
   private revision = 0;
   private collecting = false;
   private readonly stop = new AbortController();
   private closing: Promise<void> | undefined;
+  /** The byte quota bounds retained payload. The entry quota bounds per-blob
+   * bookkeeping (about 150 bytes each with one-byte string storage; see pack),
+   * so 262,144 entries add at most about 40 MB beyond the payload. */
   constructor(
     protected readonly maxBytes = 64 * 1024 * 1024,
-    protected readonly maxEntries = 65536,
+    protected readonly maxEntries = 262144,
     private readonly loader?: SnapshotBlobLoader,
   ) {
     if (
@@ -36,6 +87,15 @@ export class MemoryContentStore {
   }
   get usage() {
     return { bytes: this.bytes, entries: this.blobs.size };
+  }
+  /** Usage installed since the last successful sweep. */
+  protected get youngUsage() {
+    return { bytes: this.youngBytes, entries: this.young.size };
+  }
+  /** Present and retained by an earlier successful sweep, together with its
+   * complete dependency closure (see `young`). */
+  protected survivor(hash: string) {
+    return this.blobs.has(hash) && !this.young.has(hash);
   }
   private async wait<T>(
     work: () => Promise<T>,
@@ -89,7 +149,7 @@ export class MemoryContentStore {
         signal.throwIfAborted();
         // An entire codec operation commits together; quota, corrupt input and
         // cancellation cannot retain its partial pages or downloaded dependencies.
-        const staged = new Map<string, Uint8Array<ArrayBuffer>>();
+        const staged = new Map<string, string>();
         let stagedBytes = 0;
         const install = (
           ref: TextReference,
@@ -105,15 +165,24 @@ export class MemoryContentStore {
               "retry_later",
               "Memory content quota exceeded",
             );
-          staged.set(ref.hash, bytes);
+          staged.set(ref.hash, pack(bytes));
           stagedBytes += bytes.length;
         };
         const load: SnapshotBlobLoader = async (input, active) => {
           const ref = { ...input };
           validateTextReference(ref, 67108864);
           active.throwIfAborted();
-          let bytes = staged.get(ref.hash) ?? this.blobs.get(ref.hash);
-          if (!bytes && this.loader) {
+          const stored = staged.get(ref.hash) ?? this.blobs.get(ref.hash);
+          if (stored !== undefined) {
+            if (stored.length !== ref.byteSize)
+              throw new ProtocolError(
+                "corrupt_storage",
+                "Missing memory content blob",
+              );
+            return unpack(stored);
+          }
+          let bytes: Uint8Array<ArrayBuffer> | undefined;
+          if (this.loader) {
             const remote = await this.wait(
               () => this.loader!({ ...ref }, active),
               active,
@@ -165,8 +234,12 @@ export class MemoryContentStore {
         const result = await operation(codec, load, signal);
         signal.throwIfAborted();
         if (staged.size) this.revision++;
-        for (const [hash, bytes] of staged) this.blobs.set(hash, bytes);
+        for (const [hash, bytes] of staged) {
+          this.blobs.set(hash, bytes);
+          this.young.add(hash);
+        }
         this.bytes += stagedBytes;
+        this.youngBytes += stagedBytes;
         return result;
       })
       .finally(() => {
@@ -220,14 +293,22 @@ export class MemoryContentStore {
   /** Caller freezes its complete root/pin set until this operation completes.
    * Mark codec manifests emitted by typed reducer/activity reachability walks.
    * Any intervening write (including deduplication) invalidates the sweep.
+   *
+   * A minor collection considers only blobs installed since the last successful
+   * sweep. Surviving blobs are kept without re-verification, so the walker need
+   * not descend into them; it must still mark every young blob reachable from
+   * its roots. A major collection verifies and considers every blob.
    */
   async collect(
     traceRoots: (
-      mark: (ref: TextReference) => Promise<void>,
+      /** Resolves with the usage this call newly marked (zero if repeated). */
+      mark: (ref: TextReference) => Promise<{ bytes: number; entries: number }>,
       signal: AbortSignal,
     ) => Promise<void>,
     parent: AbortSignal,
+    options: { minor?: boolean } = {},
   ) {
+    const minor = options.minor === true;
     if (this.collecting)
       throw new ProtocolError(
         "retry_later",
@@ -242,43 +323,57 @@ export class MemoryContentStore {
     try {
       const revision = await this.run(signal, async () => this.revision);
       const marked = new Set<string>();
-      const manifests = new Map<string, TextReference>();
+      // Validated descriptor packed as one exact number: byteSize ≤ 2^20 and
+      // units ≤ 2^26, so byteSize·2^27 + units stays below 2^47.
+      const manifests = new Map<string, number>();
       let accepting = true;
       let pendingMarks = 0;
       let failed: unknown;
+      const none = { bytes: 0, entries: 0 };
       const markOnce = async (input: TextReference) => {
         signal.throwIfAborted();
         if (!accepting) throw new Error("Memory collection marking is closed");
         const ref = { ...input };
         validateTextReference(ref, 67108864);
+        const descriptor = ref.byteSize * 134217728 + ref.units;
         const previous = manifests.get(ref.hash);
-        if (previous) {
-          if (
-            previous.byteSize !== ref.byteSize ||
-            previous.units !== ref.units
-          )
+        if (previous !== undefined) {
+          if (previous !== descriptor)
             throw new ProtocolError(
               "corrupt_storage",
               "Conflicting memory content references",
             );
-          return;
+          return none;
         }
         if (manifests.size >= this.maxEntries)
           throw new ProtocolError(
             "retry_later",
             "Memory collection mark limit exceeded",
           );
-        manifests.set(ref.hash, ref);
+        manifests.set(ref.hash, descriptor);
+        if (minor && this.survivor(ref.hash)) {
+          if (this.blobs.get(ref.hash)!.length !== ref.byteSize)
+            throw new ProtocolError(
+              "corrupt_storage",
+              "Conflicting memory content references",
+            );
+          return none;
+        }
         const references = await this.trace(ref, signal);
         signal.throwIfAborted();
+        const added = { bytes: 0, entries: 0 };
         for (const dependency of references) {
-          if (marked.size >= this.maxEntries && !marked.has(dependency.hash))
+          if (marked.has(dependency.hash)) continue;
+          if (marked.size >= this.maxEntries)
             throw new ProtocolError(
               "retry_later",
               "Memory collection mark limit exceeded",
             );
           marked.add(dependency.hash);
+          added.bytes += dependency.byteSize;
+          added.entries++;
         }
+        return added;
       };
       const mark = (input: TextReference) => {
         pendingMarks++;
@@ -313,13 +408,17 @@ export class MemoryContentStore {
           );
         let removedBytes = 0,
           removedEntries = 0;
-        for (const [hash, bytes] of this.blobs) {
+        for (const hash of minor ? this.young : this.blobs.keys()) {
           if (marked.has(hash)) continue;
-          removedBytes += bytes.length;
+          removedBytes += this.blobs.get(hash)!.length;
           removedEntries++;
           this.blobs.delete(hash);
         }
         this.bytes -= removedBytes;
+        this.nodes.clear();
+        // Every remaining blob now carries its complete marked closure.
+        this.young.clear();
+        this.youngBytes = 0;
         this.revision++;
         return { removedBytes, removedEntries, ...this.usage };
       });
@@ -332,7 +431,10 @@ export class MemoryContentStore {
       this.stop.abort(new Error("Memory content store is closing"));
       this.closing = this.tail.then(() => {
         this.blobs.clear();
+        this.nodes.clear();
+        this.young.clear();
         this.bytes = 0;
+        this.youngBytes = 0;
       });
     }
     return this.closing;

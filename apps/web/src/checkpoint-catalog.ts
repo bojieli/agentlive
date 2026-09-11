@@ -34,3 +34,38 @@ export function retainSeekCheckpoint(
   }
   return catalog;
 }
+/** Thin a catalog under storage pressure. A seek replays from the nearest
+ * earlier landmark, so for uniformly chosen targets the mean replay distance is
+ * proportional to the sum of squared gaps. Dropping a landmark between gaps a
+ * and b adds 2ab to that sum; repeatedly drop the interior landmark with the
+ * smallest a·b per unit of measured storage cost until the removed cost
+ * reaches `excess`. Endpoints and landmarks with no positive measured cost are
+ * kept. Costs share the unit of `excess`. */
+export function thinSeekCheckpoints(
+  current: readonly BrowserCheckpoint[],
+  cost: (checkpoint: BrowserCheckpoint) => number | undefined,
+  excess: number,
+): BrowserCheckpoint[] {
+  const catalog = [...current];
+  for (let removed = 0; removed < excess;) {
+    let remove = -1,
+      score = Infinity,
+      saved = 0;
+    for (let index = 1; index < catalog.length - 1; index++) {
+      const price = cost(catalog[index]!) ?? 0;
+      if (!(price > 0)) continue;
+      const loss =
+        (catalog[index]!.serverSeq - catalog[index - 1]!.serverSeq) *
+        (catalog[index + 1]!.serverSeq - catalog[index]!.serverSeq);
+      if (loss / price < score) {
+        score = loss / price;
+        remove = index;
+        saved = price;
+      }
+    }
+    if (remove < 0) break;
+    catalog.splice(remove, 1);
+    removed += saved;
+  }
+  return catalog;
+}

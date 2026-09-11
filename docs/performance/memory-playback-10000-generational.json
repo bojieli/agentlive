@@ -1,0 +1,260 @@
+{
+  "success": true,
+  "runtime": "v26.8.1",
+  "platform": "darwin/arm64",
+  "hardware": {
+    "cpu": "Apple M2 Max",
+    "logicalCpus": 12,
+    "memoryBytes": 103079215104
+  },
+  "count": 10000,
+  "durationMs": 100000,
+  "validation": "boundary-text-v1",
+  "storeOptions": {},
+  "completed": 10000,
+  "phase": "complete",
+  "collections": [
+    {
+      "through": 2048,
+      "elapsedMs": 14.119000000000028,
+      "removedBytes": 1608235,
+      "removedEntries": 1611,
+      "bytes": 180706,
+      "entries": 654,
+      "major": false,
+      "landmarks": 3,
+      "dropped": 0
+    },
+    {
+      "through": 3840,
+      "elapsedMs": 10.42408400000005,
+      "removedBytes": 1744574,
+      "removedEntries": 1541,
+      "bytes": 366658,
+      "entries": 1180,
+      "major": false,
+      "landmarks": 4,
+      "dropped": 0
+    },
+    {
+      "through": 5632,
+      "elapsedMs": 10.159874999999943,
+      "removedBytes": 1878076,
+      "removedEntries": 1505,
+      "bytes": 621561,
+      "entries": 1748,
+      "major": false,
+      "landmarks": 6,
+      "dropped": 0
+    },
+    {
+      "through": 7424,
+      "elapsedMs": 10.180207999999993,
+      "removedBytes": 2121512,
+      "removedEntries": 1501,
+      "bytes": 901911,
+      "entries": 2316,
+      "major": false,
+      "landmarks": 8,
+      "dropped": 0
+    },
+    {
+      "through": 9216,
+      "elapsedMs": 43.227207999999905,
+      "removedBytes": 2487355,
+      "removedEntries": 1607,
+      "bytes": 1019659,
+      "entries": 2780,
+      "major": true,
+      "landmarks": 10,
+      "dropped": 0
+    }
+  ],
+  "peakHeap": 79590728,
+  "peakRss": 172113920,
+  "peakBytes": 3507014,
+  "peakEntries": 4387,
+  "receiptMs": 757.428084,
+  "retainedAfterReceipt": {
+    "heapUsed": 15656000,
+    "external": 2420570,
+    "arrayBuffers": 143921,
+    "rss": 170721280,
+    "store": {
+      "bytes": 1869514,
+      "entries": 3415
+    }
+  },
+  "seeks": [
+    {
+      "through": 5000,
+      "from": 4352,
+      "elapsedMs": 51.117208000000005
+    },
+    {
+      "through": 1,
+      "from": 0,
+      "elapsedMs": 1.2170419999999922
+    },
+    {
+      "through": 10000,
+      "from": 9472,
+      "elapsedMs": 1.9365420000000313
+    }
+  ],
+  "landmarks": [
+    256,
+    1280,
+    2304,
+    3328,
+    4352,
+    5376,
+    6400,
+    7424,
+    8448,
+    9472
+  ],
+  "finalUsage": {
+    "bytes": 2628991,
+    "entries": 4037
+  },
+  "headAudit": {
+    "through": 10000,
+    "entries": 2658,
+    "bytes": 652949,
+    "structures": {
+      "reducer.root": {
+        "manifests": 1,
+        "pages": 1,
+        "bytes": 1172,
+        "references": 1
+      },
+      "reducer.messages.byKey.node": {
+        "manifests": 16,
+        "pages": 16,
+        "bytes": 64389,
+        "references": 16
+      },
+      "reducer.messages.entry": {
+        "manifests": 313,
+        "pages": 313,
+        "bytes": 96810,
+        "references": 626
+      },
+      "reducer.messages.byOrder.node": {
+        "manifests": 20,
+        "pages": 20,
+        "bytes": 49469,
+        "references": 20
+      },
+      "reducer.messages.value": {
+        "manifests": 313,
+        "pages": 313,
+        "bytes": 105684,
+        "references": 313
+      },
+      "reducer.messages.text": {
+        "manifests": 313,
+        "pages": 313,
+        "bytes": 158995,
+        "references": 313
+      },
+      "activity.root": {
+        "manifests": 1,
+        "pages": 1,
+        "bytes": 738,
+        "references": 1
+      },
+      "activity.seen.node": {
+        "manifests": 19,
+        "pages": 19,
+        "bytes": 47946,
+        "references": 19
+      },
+      "activity.row": {
+        "manifests": 313,
+        "pages": 313,
+        "bytes": 74853,
+        "references": 626
+      },
+      "activity.visible.node": {
+        "manifests": 20,
+        "pages": 20,
+        "bytes": 52893,
+        "references": 20
+      }
+    }
+  },
+  "landmarkAudit": [
+    {
+      "through": 10000,
+      "entries": 2658,
+      "bytes": 652949
+    },
+    {
+      "through": 9472,
+      "entries": 38,
+      "bytes": 73821
+    },
+    {
+      "through": 8448,
+      "entries": 40,
+      "bytes": 73414
+    },
+    {
+      "through": 7424,
+      "entries": 36,
+      "bytes": 68397
+    },
+    {
+      "through": 6400,
+      "entries": 36,
+      "bytes": 62304
+    },
+    {
+      "through": 5376,
+      "entries": 34,
+      "bytes": 52997
+    },
+    {
+      "through": 5000,
+      "entries": 38,
+      "bytes": 50199
+    },
+    {
+      "through": 4352,
+      "entries": 30,
+      "bytes": 41646
+    },
+    {
+      "through": 3328,
+      "entries": 28,
+      "bytes": 37451
+    },
+    {
+      "through": 2304,
+      "entries": 28,
+      "bytes": 32697
+    },
+    {
+      "through": 1280,
+      "entries": 22,
+      "bytes": 22431
+    },
+    {
+      "through": 256,
+      "entries": 12,
+      "bytes": 7342
+    },
+    {
+      "through": 1,
+      "entries": 17,
+      "bytes": 3887
+    }
+  ],
+  "afterClose": {
+    "bytes": 0,
+    "entries": 0
+  },
+  "elapsedMs": 929.938125
+}

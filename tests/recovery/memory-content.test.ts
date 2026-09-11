@@ -225,3 +225,43 @@ it("discards partial imports and ignores a loader result returned after cancella
     await source.close();
   }
 });
+
+it("stores arbitrary imported bytes exactly in compact form", async () => {
+  const cases = [
+    Uint8Array.from({ length: 256 }, (_, index) => index),
+    new TextEncoder().encode("plain ascii blob"),
+    new TextEncoder().encode('"🦊 é \ud800"'),
+    Uint8Array.from({ length: 20000 }, (_, index) => (index * 131) & 255),
+  ];
+  const refs = await Promise.all(
+    cases.map(async (bytes) => ({
+      hash: Array.from(
+        new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+        (byte) => byte.toString(16).padStart(2, "0"),
+      ).join(""),
+      byteSize: bytes.length,
+      units: 0,
+    })),
+  );
+  let loads = 0;
+  const memory = new MemoryContentStore(undefined, undefined, async (ref) => {
+    loads++;
+    return cases[refs.findIndex((item) => item.hash === ref.hash)]!;
+  });
+  try {
+    for (const [index, ref] of refs.entries()) {
+      expect(await memory.readBlob(ref, active())).toEqual(cases[index]);
+      const stored = await memory.readBlob(ref, active());
+      expect(stored).toEqual(cases[index]);
+      stored.fill(7);
+      expect(await memory.readBlob(ref, active())).toEqual(cases[index]);
+    }
+    expect(loads).toBe(cases.length);
+    expect(memory.usage).toEqual({
+      bytes: cases.reduce((sum, bytes) => sum + bytes.length, 0),
+      entries: cases.length,
+    });
+  } finally {
+    await memory.close();
+  }
+});

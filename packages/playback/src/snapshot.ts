@@ -14,6 +14,14 @@ export interface SnapshotContent {
     length: number,
     signal?: AbortSignal,
   ): Promise<string>;
+  /** Optional scope-local memo of fully validated immutable index nodes, keyed
+   * by their complete span (reference, count and key range). A provider must
+   * only supply it while every cached node's content remains retained, e.g.
+   * for one frozen collection pass. */
+  readonly decodedNodes?: {
+    get(key: string): unknown;
+    set(key: string, value: unknown): void;
+  };
 }
 export type SnapshotValue =
   | null

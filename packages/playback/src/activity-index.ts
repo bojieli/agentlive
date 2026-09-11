@@ -4,6 +4,7 @@ import {
   idSchema,
   storedEventSchema,
   type StoredEvent,
+  parseContentReference,
   snapshotContentReferenceSchema,
 } from "@agentlive/protocol";
 import {
@@ -85,6 +86,12 @@ export function activityMentions(event: StoredEvent): ActivityIdentity[] {
     );
   return [...rows.values()];
 }
+/** Fast exact descriptors; the schema still decides (and throws) otherwise. */
+function contentReference(value: unknown): ContentReference {
+  return (
+    parseContentReference(value) ?? snapshotContentReferenceSchema.parse(value)
+  );
+}
 function bad(): never {
   throw new ProtocolError("corrupt_storage", "Invalid activity index");
 }
@@ -126,7 +133,7 @@ export class ActivityIndex {
     this.index = new ContentIndex(content);
   }
   private async json(ref: ContentReference, signal?: AbortSignal) {
-    ref = snapshotContentReferenceSchema.parse(ref);
+    ref = contentReference(ref);
     if (ref.units > 32768) bad();
     const text = await this.content.read(ref, 0, ref.units, signal);
     signal?.throwIfAborted();
@@ -140,9 +147,7 @@ export class ActivityIndex {
   private async save(value: unknown, signal?: AbortSignal) {
     const text = canonicalJson(value);
     if (text.length > 32768) bad();
-    const ref = snapshotContentReferenceSchema.parse(
-      await this.content.put(text, signal),
-    );
+    const ref = contentReference(await this.content.put(text, signal));
     signal?.throwIfAborted();
     if (ref.units !== text.length) bad();
     return ref;
@@ -345,8 +350,11 @@ export class ActivityIndex {
     binding: SnapshotBinding,
     visit: (reference: ContentReference) => Promise<void>,
     signal?: AbortSignal,
+    /** Skip already-retained subtrees and rows; see ContentIndex.trace. The
+     * total gap-row check runs only when no part of the seen index is skipped. */
+    reuse?: (reference: ContentReference, scope: string) => boolean,
   ): Promise<void> {
-    reference = snapshotContentReferenceSchema.parse(reference);
+    reference = contentReference(reference);
     binding = { ...binding };
     const root = await this.open(reference, binding, signal);
     const emit = async (ref: ContentReference) => {
@@ -354,12 +362,20 @@ export class ActivityIndex {
       await visit({ ...ref });
       signal?.throwIfAborted();
     };
+    if (reuse?.({ ...reference }, "root")) return;
     await emit(reference);
-    let gaps = 0;
+    let gaps = 0,
+      partial = false;
+    const skip = (ref: ContentReference, scope: string) => {
+      const skipped = !!reuse?.({ ...ref }, scope);
+      if (skipped && scope.startsWith("seen")) partial = true;
+      return skipped;
+    };
     await this.index.trace(
       root.seen,
       async (entry) => {
         if (entry.kind === "value") {
+          if (skip(entry.ref, "seen/row")) return;
           const row = await this.row(entry.ref, root, signal);
           if (row.key !== entry.key) bad();
           const visible = await this.index.get(
@@ -374,12 +390,14 @@ export class ActivityIndex {
         await emit(entry.ref);
       },
       signal,
+      reuse && ((ref) => skip(ref, "seen")),
     );
-    if (gaps !== root.gaps) bad();
+    if (partial ? gaps > root.gaps : gaps !== root.gaps) bad();
     await this.index.trace(
       root.visible,
       async (entry) => {
         if (entry.kind === "value") {
+          if (skip(entry.ref, "visible/row")) return;
           const row = await this.row(entry.ref, root, signal);
           if (
             !row.visible ||
@@ -391,6 +409,7 @@ export class ActivityIndex {
         await emit(entry.ref);
       },
       signal,
+      reuse && ((ref) => skip(ref, "visible")),
     );
     signal?.throwIfAborted();
   }

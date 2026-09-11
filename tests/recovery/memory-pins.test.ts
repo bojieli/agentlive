@@ -390,13 +390,26 @@ it("automatically collects between receipt batches while preserving a paused pre
   }
 });
 
-it("thins seek landmarks under pressure only after a successful sweep and keeps pinned views", async () => {
+it("thins costly seek landmarks under measured pressure only after a successful sweep and keeps pinned views", async () => {
   const { BrowserPagedState } =
     await import("../../apps/web/src/paged-state.js");
-  const store = new MemoryPagedStore(binding, { maxEntries: 1024 });
+  const maxBytes = 150_000;
+  const store = new MemoryPagedStore(binding, { maxBytes });
   const session = await BrowserPagedState.openContent(store, binding, signal());
   let pinned: Awaited<ReturnType<typeof session.retainedView>> | undefined;
   const events: StoredEvent[] = [];
+  // Each landmark keeps its own partial text page, so older ones cost more.
+  const chunk = (seq: number) => String.fromCharCode(64 + seq).repeat(3000);
+  const landmarks = async () => {
+    const present: number[] = [];
+    for (let seq = 1; seq <= 9; seq++)
+      if (
+        (await store.loadCheckpointBefore(seq * 10000, seq, signal()))
+          ?.serverSeq === seq
+      )
+        present.push(seq);
+    return present;
+  };
   try {
     for (let seq = 1; seq <= 9; seq++) {
       const event: StoredEvent = {
@@ -413,19 +426,18 @@ it("thins seek landmarks under pressure only after a successful sweep and keeps 
               }
             : {
                 kind: "message.text.append",
-                payload: { messageId: "m", text: "." },
+                payload: { messageId: "m", text: chunk(seq) },
               },
       };
       events.push(event);
       await session.apply([event], signal());
       if (seq === 2) pinned = await session.retainedView(signal());
     }
-    expect(
-      (await store.loadCheckpointBefore(20000, 2, signal()))?.serverSeq,
-    ).toBe(2);
-    let garbage = 0;
-    while (store.usage.entries < 670)
-      await store.put(`pressure garbage ${garbage++}`);
+    // The first major measures landmark costs; nothing was measured before it.
+    const measured = await store.collectRetained(signal());
+    expect(measured.major).toBe(true);
+    expect(measured.bytes).toBeGreaterThan(maxBytes * 0.6);
+    expect(await landmarks()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     const usage = store.usage;
     const trace = store.trace.bind(store);
     store.trace = async () => {
@@ -435,38 +447,42 @@ it("thins seek landmarks under pressure only after a successful sweep and keeps 
       "failed pressure scan",
     );
     expect(store.usage).toEqual(usage);
-    expect(
-      (await store.loadCheckpointBefore(20000, 2, signal()))?.serverSeq,
-    ).toBe(2);
+    expect(await landmarks()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     store.trace = trace;
-    expect(
-      (await store.collectRetained(signal())).removedEntries,
-    ).toBeGreaterThan(0);
-    expect(
-      (await store.loadCheckpointBefore(20000, 2, signal()))?.serverSeq,
-    ).toBe(1);
+    const thinned = await store.collectRetained(signal());
+    expect(thinned.removedBytes).toBeGreaterThan(0);
+    // The excess over 60% was covered by dropping landmarks; endpoints stay.
+    expect(thinned.bytes).toBeLessThan(measured.bytes);
+    const kept = await landmarks();
+    expect(kept.length).toBeLessThan(9);
+    expect(kept[0]).toBe(1);
+    expect(kept.at(-1)).toBe(9);
     expect((await store.loadCheckpoint())?.serverSeq).toBe(9);
     const row = (await pinned!.rows(0, 1, signal()))[0]!;
     const text = (await pinned!.load(row, signal()))!.texts.text!;
-    expect(await text.read(0, text.units, signal())).toBe(".");
+    expect(await text.read(0, text.units, signal())).toBe(chunk(2));
     await pinned!.close();
-    expect(
-      (await store.collectRetained(signal())).removedEntries,
-    ).toBeGreaterThan(0);
+    // The released pin's landmark now has a measurable cost of its own.
+    expect((await store.collectRetained(signal())).major).toBe(true);
+    const dropped = [2, 3, 4, 5, 6, 7, 8].find((seq) => !kept.includes(seq))!;
     const reconstructed = await session.select(
-      20000,
+      dropped * 10000,
       async function* (after, through) {
         for (const event of events)
           if (event.serverSeq > after && event.serverSeq <= through)
             yield event;
       },
       signal(),
-      2,
+      dropped,
       true,
     );
-    expect(reconstructed.sequence).toBe(2);
+    expect(reconstructed.sequence).toBe(dropped);
     const restoredText = (await reconstructed.load(row, signal()))!.texts.text!;
-    expect(await restoredText.read(0, restoredText.units, signal())).toBe(".");
+    expect(await restoredText.read(0, restoredText.units, signal())).toBe(
+      Array.from({ length: dropped - 1 }, (_, index) => chunk(index + 2)).join(
+        "",
+      ),
+    );
     expect(session.state.appliedSeq).toBe(9);
     await reconstructed.close();
   } finally {
@@ -547,7 +563,7 @@ it("releases a temporary seek pin when cancellation arrives during batch mainten
   }
 });
 
-it("reuses validated root closures but verifies dependencies before every sweep", async () => {
+it("generational passes skip surviving structure, and majors verify and reclaim it", async () => {
   const { BrowserPagedState } =
     await import("../../apps/web/src/paged-state.js");
   const store = new MemoryPagedStore(binding);
@@ -558,63 +574,116 @@ it("reuses validated root closures but verifies dependencies before every sweep"
     reads++;
     return read(...args);
   };
+  const event = (
+    serverSeq: number,
+    content: StoredEvent["content"],
+  ): StoredEvent => ({
+    protocolVersion: 1,
+    serverSeq,
+    timelineMs: serverSeq,
+    receivedAt: "2026-09-10T00:00:00Z",
+    origin: { type: "server", operationId: `generation-${serverSeq}` },
+    content,
+  });
+  const generational = { policy: "generational" as const };
   try {
     await session.apply(
       [
-        {
-          protocolVersion: 1,
-          serverSeq: 1,
-          timelineMs: 1,
-          receivedAt: "2026-09-10T00:00:00Z",
-          origin: { type: "server", operationId: "root" },
-          content: {
-            kind: "message.started",
-            payload: { messageId: "m", role: "assistant" },
-          },
-        },
+        event(1, {
+          kind: "message.started",
+          payload: { messageId: "m", role: "assistant" },
+        }),
       ],
       signal(),
     );
-    reads = 0;
     const interrupted = new Error("interrupted typed validation");
     store.read = (...args) => {
       reads++;
       if (reads === 5) return Promise.reject(interrupted);
       return read(...args);
     };
+    reads = 0;
     const beforeFailure = store.usage;
-    await expect(store.collectRetained(signal())).rejects.toBe(interrupted);
+    await expect(store.collectRetained(signal(), generational)).rejects.toBe(
+      interrupted,
+    );
     expect(store.usage).toEqual(beforeFailure);
     store.read = (...args) => {
       reads++;
       return read(...args);
     };
     reads = 0;
-    await store.collectRetained(signal());
-    expect(reads).toBeGreaterThan(0);
+    expect((await store.collectRetained(signal())).major).toBe(true);
+    const majorReads = reads;
+    expect(majorReads).toBeGreaterThan(0);
+    // Everything retained by that sweep is a survivor with its full closure.
+    // An unchanged head is not walked again; young garbage is still removed.
+    const garbage = await store.put("young and unreachable");
     reads = 0;
-    // Reach the pool-compaction boundary without constructing 60k full roots.
-    // These unreachable slots model references left behind by retired roots.
-    const cache = store as unknown as {
-      traceReferences: Array<{ hash: string; byteSize: number; units: number }>;
-    };
-    const liveReferences = cache.traceReferences.length;
-    while (cache.traceReferences.length < 60000)
-      cache.traceReferences.push({ ...cache.traceReferences[0]! });
-    await store.put("unreachable");
+    const minor = await store.collectRetained(signal(), generational);
+    expect(minor).toMatchObject({ major: false, removedEntries: 2 });
+    // Only the two paired root envelopes are opened for boundary checks.
+    expect(reads).toBe(2);
+    await expect(store.read(garbage, 0, 1)).rejects.toMatchObject({
+      code: "corrupt_storage",
+    });
+    // A pinned presentation that has survived a sweep keeps its exclusive
+    // content until a major pass after release.
+    await session.apply(
+      [
+        event(2, {
+          kind: "message.text.append",
+          payload: { messageId: "m", text: "old" },
+        }),
+      ],
+      signal(),
+    );
+    const paused = await session.retainedView(signal());
+    const row = (await paused.rows(0, 1, signal()))[0]!;
+    const old = (await paused.load(row, signal()))!.texts.text!;
+    const oldRef = JSON.parse(old.key).ref;
+    await session.apply(
+      [
+        event(3, {
+          kind: "message.text.append",
+          payload: { messageId: "m", text: " new" },
+        }),
+      ],
+      signal(),
+    );
+    reads = 0;
+    expect((await store.collectRetained(signal(), generational)).major).toBe(
+      false,
+    );
+    // Only the young head and pinned root structure were walked.
+    expect(reads).toBeGreaterThan(0);
+    expect(reads).toBeLessThan(2 * majorReads + 64);
+    await paused.close();
+    const before = store.usage;
+    expect(
+      (await store.collectRetained(signal(), generational)).removedEntries,
+    ).toBe(0);
+    expect(store.usage).toEqual(before);
+    expect(await read(oldRef, 0, old.units)).toBe("old");
     expect(
       (await store.collectRetained(signal())).removedEntries,
     ).toBeGreaterThan(0);
-    expect(reads).toBe(0); // typed metadata already validated; codec trace still runs.
-    expect(cache.traceReferences.length).toBe(liveReferences);
-    // Deliberately violate the caller-owned root set to simulate a missing blob.
-    // A memoized closure must fail closed, never authorize sweeping on its own.
+    await expect(read(oldRef, 0, old.units)).rejects.toMatchObject({
+      code: "corrupt_storage",
+    });
+    const current = await session.retainedView(signal());
+    const text = (await current.load(row, signal()))!.texts.text!;
+    expect(await text.read(0, text.units, signal())).toBe("old new");
+    await current.close();
+    // Deliberately violate the caller-owned root set to simulate a missing
+    // blob. Neither policy may treat a missing root as a survivor or sweep.
     await store.collect(async () => {}, signal());
     const survivor = await store.put("must survive failed verification");
     const usage = store.usage;
-    await expect(store.collectRetained(signal())).rejects.toMatchObject({
-      code: "corrupt_storage",
-    });
+    for (const options of [generational, {}])
+      await expect(
+        store.collectRetained(signal(), options),
+      ).rejects.toMatchObject({ code: "corrupt_storage" });
     expect(store.usage).toEqual(usage);
     expect(await store.read(survivor, 0, survivor.units)).toBe(
       "must survive failed verification",
@@ -622,4 +691,156 @@ it("reuses validated root closures but verifies dependencies before every sweep"
   } finally {
     await session.close();
   }
+});
+
+it("automatic generational collection retains the complete reference union", async () => {
+  const { BrowserPagedState } =
+    await import("../../apps/web/src/paged-state.js");
+  const { tracePairedSnapshot } =
+    await import("../../packages/playback/src/index.js");
+  // Small quotas force frequent minor and major passes and landmark thinning.
+  const store = new MemoryPagedStore(binding, {
+    maxEntries: 2048,
+    collectionBytes: 4096,
+  });
+  const collect = store.collectRetained.bind(store);
+  const passes = { major: 0, minor: 0 };
+  store.collectRetained = async (...args) => {
+    const result = await collect(...args);
+    passes[result.major ? "major" : "minor"]++;
+    return result;
+  };
+  const session = await BrowserPagedState.openContent(store, binding, signal());
+  const views: Array<{
+    view: Awaited<ReturnType<typeof session.retainedView>>;
+    text: string;
+  }> = [];
+  let seq = 0;
+  try {
+    for (let batch = 0; batch < 40; batch++) {
+      const events: StoredEvent[] = [];
+      for (let i = 0; i < 12; i++) {
+        seq++;
+        const message = Math.floor((seq - 1) / 8);
+        events.push({
+          protocolVersion: 1,
+          serverSeq: seq,
+          timelineMs: seq * 2000,
+          receivedAt: "2026-09-10T00:00:00Z",
+          origin: { type: "server", operationId: `union-${seq}` },
+          content:
+            (seq - 1) % 8 === 0
+              ? {
+                  kind: "message.started",
+                  payload: { messageId: `m-${message}`, role: "assistant" },
+                }
+              : {
+                  kind: "message.text.append",
+                  payload: { messageId: `m-${message}`, text: `${seq};` },
+                },
+        });
+      }
+      await session.apply(events, signal());
+      if (batch % 9 === 3) {
+        const view = await session.retainedView(signal());
+        const row = (await view.rows(0, 1, signal()))[0]!;
+        const text = (await view.load(row, signal()))!.texts.text!;
+        views.push({ view, text: await text.read(0, text.units, signal()) });
+      }
+      if (batch % 13 === 12) await views.shift()?.view.close();
+      // Independently walk the head, catalog landmarks and pins: every
+      // reachable blob must still be present after automatic collection.
+      const roots = [
+        (await store.loadCheckpoint(signal()))!,
+        ...(await Promise.all(
+          [1, seq >> 1, seq].map((through) =>
+            store.loadCheckpointBefore(through * 2000, through, signal()),
+          ),
+        )),
+      ].filter((root) => root !== null);
+      for (const root of roots)
+        await tracePairedSnapshot(
+          store,
+          root,
+          binding,
+          async (ref) => {
+            for (const blob of await store.trace(ref, signal()))
+              expect((await store.readBlob(blob, signal())).length).toBe(
+                blob.byteSize,
+              );
+          },
+          signal(),
+        );
+    }
+    expect(views.length).toBeGreaterThan(0);
+    for (const { view, text: expected } of views) {
+      const row = (await view.rows(0, 1, signal()))[0]!;
+      const text = (await view.load(row, signal()))!.texts.text!;
+      expect(await text.read(0, text.units, signal())).toBe(expected);
+    }
+    expect(passes.minor).toBeGreaterThan(0);
+    expect(passes.major).toBeGreaterThan(0);
+  } finally {
+    await session.close();
+  }
+  expect(store.usage).toEqual({ bytes: 0, entries: 0 });
+});
+
+it("spaces receipt landmarks by a fraction of the receipt without affecting short recordings", async () => {
+  const { BrowserPagedState } =
+    await import("../../apps/web/src/paged-state.js");
+  const store = new MemoryPagedStore(binding);
+  const session = await BrowserPagedState.openContent(store, binding, signal());
+  try {
+    for (let seq = 1; seq <= 200; seq++)
+      await session.apply(
+        [
+          {
+            protocolVersion: 1,
+            serverSeq: seq,
+            // Ten timeline seconds apart: the time rule alone admits each one.
+            timelineMs: seq * 10000,
+            receivedAt: "2026-09-10T00:00:00Z",
+            origin: { type: "server", operationId: `spaced-${seq}` },
+            content:
+              seq === 1
+                ? {
+                    kind: "message.started",
+                    payload: { messageId: "m", role: "assistant" },
+                  }
+                : {
+                    kind: "message.text.append",
+                    payload: { messageId: "m", text: "." },
+                  },
+          },
+        ],
+        signal(),
+      );
+    const landmarks: number[] = [];
+    for (let seq = 1; seq <= 200; seq++)
+      if (
+        (await store.loadCheckpointBefore(seq * 10000, seq, signal()))
+          ?.serverSeq === seq
+      )
+        landmarks.push(seq);
+    // Before seq 128 every publication qualifies (the 128-entry compaction
+    // thins them later); from 128 on, spacing grows with the receipt.
+    expect(landmarks[0]).toBe(1);
+    const late = landmarks.filter((seq) => seq >= 128);
+    expect(late.length).toBeGreaterThan(10);
+    expect(late.length).toBeLessThan(40);
+    expect(landmarks.length).toBeLessThan(200);
+    for (let index = 1; index < landmarks.length; index++)
+      expect(landmarks[index]! - landmarks[index - 1]!).toBeGreaterThanOrEqual(
+        Math.floor(landmarks[index]! / 64),
+      );
+    const view = await session.retainedView(signal());
+    const row = (await view.rows(0, 1, signal()))[0]!;
+    const text = (await view.load(row, signal()))!.texts.text!;
+    expect(await text.read(0, text.units, signal())).toBe(".".repeat(199));
+    await view.close();
+  } finally {
+    await session.close();
+  }
+  expect(store.usage).toEqual({ bytes: 0, entries: 0 });
 });

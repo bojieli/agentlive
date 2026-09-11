@@ -8,7 +8,7 @@ import {
   storedEventSchema,
   idSchema,
   ProtocolError,
-  snapshotContentReferenceSchema,
+  parseContentReference,
   type StoredEvent,
   type EventContent,
 } from "@agentlive/protocol";
@@ -98,9 +98,7 @@ function integer(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;
 }
 function ref(value: unknown): ContentReference {
-  const result = snapshotContentReferenceSchema.safeParse(value);
-  if (!result.success) bad();
-  return result.data;
+  return parseContentReference(value) ?? bad();
 }
 function fields(
   value: Record<string, unknown>,
@@ -979,12 +977,19 @@ export class PagedReducer {
   /** Trace schema-defined content dependencies from a bound checkpoint.
    * Text and attachment bodies are opaque: attachment hashes are not content-store refs.
    * Callbacks are provisional until success. Caller owns pins and codec-page tracing.
+   *
+   * Optional `reuse(ref, scope)` lets a collector skip subtrees whose complete
+   * dependencies it already retains (see OrderedContentMap.trace). Scopes name
+   * the schema position, so equal bytes reached under different item types are
+   * traced independently. Aggregate replacement checks run only when no part of
+   * that replacement's chunk map was skipped.
    */
   async trace(
     reference: ContentReference,
     binding: SnapshotBinding,
     visit: (reference: ContentReference) => Promise<void>,
     signal?: AbortSignal,
+    reuse?: (reference: ContentReference, scope: string) => boolean,
   ): Promise<void> {
     reference = ref(reference);
     const state = await this.open(reference, binding, signal);
@@ -993,6 +998,7 @@ export class PagedReducer {
       await visit({ ...reference });
       signal?.throwIfAborted();
     };
+    if (reuse?.({ ...reference }, "root")) return;
     await emit(reference);
     for (const name of names) {
       await this.map.trace(
@@ -1031,17 +1037,27 @@ export class PagedReducer {
                 await emit(version.ref);
               },
               signal,
+              reuse &&
+                ((ref, part) =>
+                  reuse(ref, `artifacts/${canonicalJson(key)}/${part}`)),
             );
           } else if (name === "replacements") {
             const replacement = item as Items["replacements"];
             await emit(replacement.text);
             let chunks = 0,
-              units = 0;
+              units = 0,
+              partial = false;
             await this.map.trace(
               replacement.chunks,
               async (chunk) => {
                 if (chunk.kind === "value") {
-                  if (chunk.key !== chunks++) bad();
+                  // Skipped entries leave gaps, but visited keys stay ordered.
+                  if (
+                    typeof chunk.key !== "number" ||
+                    (partial ? chunk.key < chunks : chunk.key !== chunks)
+                  )
+                    bad();
+                  chunks = chunk.key + 1;
                   units += chunk.ref.units;
                   if (
                     !Number.isSafeInteger(units) ||
@@ -1052,11 +1068,21 @@ export class PagedReducer {
                 await emit(chunk.ref);
               },
               signal,
+              reuse &&
+                ((ref, part) => {
+                  const skipped = reuse(
+                    ref,
+                    `replacements/${canonicalJson(key)}/${part}`,
+                  );
+                  partial ||= skipped;
+                  return skipped;
+                }),
             );
-            if (units !== replacement.length) bad();
+            if (!partial && units !== replacement.length) bad();
           }
         },
         signal,
+        reuse && ((ref, part) => reuse(ref, `${name}/${part}`)),
       );
     }
     signal?.throwIfAborted();

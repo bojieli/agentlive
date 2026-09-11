@@ -1,0 +1,1372 @@
+{
+  "success": true,
+  "runtime": "v26.8.1",
+  "platform": "darwin/arm64",
+  "hardware": {
+    "cpu": "Apple M2 Max",
+    "logicalCpus": 12,
+    "memoryBytes": 103079215104
+  },
+  "count": 100000,
+  "durationMs": 1000000,
+  "validation": "boundary-text-v1",
+  "storeOptions": {},
+  "completed": 100000,
+  "phase": "complete",
+  "collections": [
+    {
+      "through": 2048,
+      "elapsedMs": 13.156542000000002,
+      "removedBytes": 1608235,
+      "removedEntries": 1611,
+      "bytes": 180706,
+      "entries": 654,
+      "major": false,
+      "landmarks": 3,
+      "dropped": 0
+    },
+    {
+      "through": 3840,
+      "elapsedMs": 9.361499999999978,
+      "removedBytes": 1744574,
+      "removedEntries": 1541,
+      "bytes": 366658,
+      "entries": 1180,
+      "major": false,
+      "landmarks": 4,
+      "dropped": 0
+    },
+    {
+      "through": 5632,
+      "elapsedMs": 10.267083000000014,
+      "removedBytes": 1878076,
+      "removedEntries": 1505,
+      "bytes": 621561,
+      "entries": 1748,
+      "major": false,
+      "landmarks": 6,
+      "dropped": 0
+    },
+    {
+      "through": 7424,
+      "elapsedMs": 10.157541999999921,
+      "removedBytes": 2121512,
+      "removedEntries": 1501,
+      "bytes": 901911,
+      "entries": 2316,
+      "major": false,
+      "landmarks": 8,
+      "dropped": 0
+    },
+    {
+      "through": 9216,
+      "elapsedMs": 42.53762500000005,
+      "removedBytes": 2487355,
+      "removedEntries": 1607,
+      "bytes": 1019659,
+      "entries": 2780,
+      "major": true,
+      "landmarks": 10,
+      "dropped": 0
+    },
+    {
+      "through": 11008,
+      "elapsedMs": 9.987457999999947,
+      "removedBytes": 2602757,
+      "removedEntries": 1519,
+      "bytes": 1286569,
+      "entries": 3330,
+      "major": false,
+      "landmarks": 11,
+      "dropped": 0
+    },
+    {
+      "through": 12800,
+      "elapsedMs": 11.273290999999972,
+      "removedBytes": 2712737,
+      "removedEntries": 1479,
+      "bytes": 1641452,
+      "entries": 3924,
+      "major": false,
+      "landmarks": 13,
+      "dropped": 0
+    },
+    {
+      "through": 14592,
+      "elapsedMs": 11.108665999999857,
+      "removedBytes": 2981320,
+      "removedEntries": 1477,
+      "bytes": 2000953,
+      "entries": 4514,
+      "major": false,
+      "landmarks": 15,
+      "dropped": 0
+    },
+    {
+      "through": 16384,
+      "elapsedMs": 10.690665999999965,
+      "removedBytes": 3207129,
+      "removedEntries": 1497,
+      "bytes": 2332084,
+      "entries": 5088,
+      "major": false,
+      "landmarks": 17,
+      "dropped": 0
+    },
+    {
+      "through": 18176,
+      "elapsedMs": 87.30291699999998,
+      "removedBytes": 3241216,
+      "removedEntries": 1905,
+      "bytes": 2491798,
+      "entries": 5586,
+      "major": true,
+      "landmarks": 18,
+      "dropped": 0
+    },
+    {
+      "through": 19712,
+      "elapsedMs": 10.757333000000017,
+      "removedBytes": 2606821,
+      "removedEntries": 1619,
+      "bytes": 2831398,
+      "entries": 6126,
+      "major": false,
+      "landmarks": 20,
+      "dropped": 0
+    },
+    {
+      "through": 21248,
+      "elapsedMs": 11.146208000000115,
+      "removedBytes": 2821224,
+      "removedEntries": 1637,
+      "bytes": 3150639,
+      "entries": 6648,
+      "major": false,
+      "landmarks": 21,
+      "dropped": 0
+    },
+    {
+      "through": 22784,
+      "elapsedMs": 12.012834000000112,
+      "removedBytes": 2879458,
+      "removedEntries": 1635,
+      "bytes": 3519225,
+      "entries": 7198,
+      "major": false,
+      "landmarks": 23,
+      "dropped": 0
+    },
+    {
+      "through": 24320,
+      "elapsedMs": 10.242666999999983,
+      "removedBytes": 2728921,
+      "removedEntries": 1817,
+      "bytes": 3857212,
+      "entries": 7728,
+      "major": false,
+      "landmarks": 24,
+      "dropped": 0
+    },
+    {
+      "through": 25856,
+      "elapsedMs": 10.915042000000085,
+      "removedBytes": 2526832,
+      "removedEntries": 1783,
+      "bytes": 4264220,
+      "entries": 8298,
+      "major": false,
+      "landmarks": 26,
+      "dropped": 0
+    },
+    {
+      "through": 27392,
+      "elapsedMs": 10.63570800000025,
+      "removedBytes": 2488205,
+      "removedEntries": 1813,
+      "bytes": 4616796,
+      "entries": 8840,
+      "major": false,
+      "landmarks": 27,
+      "dropped": 0
+    },
+    {
+      "through": 28928,
+      "elapsedMs": 146.01904100000002,
+      "removedBytes": 2975107,
+      "removedEntries": 2029,
+      "bytes": 4591971,
+      "entries": 9164,
+      "major": true,
+      "landmarks": 29,
+      "dropped": 0
+    },
+    {
+      "through": 30464,
+      "elapsedMs": 11.014666999999918,
+      "removedBytes": 2723637,
+      "removedEntries": 1819,
+      "bytes": 4937912,
+      "entries": 9694,
+      "major": false,
+      "landmarks": 30,
+      "dropped": 0
+    },
+    {
+      "through": 32000,
+      "elapsedMs": 12.277000000000044,
+      "removedBytes": 2800640,
+      "removedEntries": 1783,
+      "bytes": 5345217,
+      "entries": 10260,
+      "major": false,
+      "landmarks": 32,
+      "dropped": 0
+    },
+    {
+      "through": 33536,
+      "elapsedMs": 12.577291999999943,
+      "removedBytes": 2743372,
+      "removedEntries": 1813,
+      "bytes": 5713986,
+      "entries": 10800,
+      "major": false,
+      "landmarks": 33,
+      "dropped": 0
+    },
+    {
+      "through": 35072,
+      "elapsedMs": 12.374124999999822,
+      "removedBytes": 2560055,
+      "removedEntries": 1787,
+      "bytes": 6112811,
+      "entries": 11366,
+      "major": false,
+      "landmarks": 35,
+      "dropped": 0
+    },
+    {
+      "through": 36608,
+      "elapsedMs": 12.367125000000215,
+      "removedBytes": 2724995,
+      "removedEntries": 1809,
+      "bytes": 6482628,
+      "entries": 11912,
+      "major": false,
+      "landmarks": 36,
+      "dropped": 0
+    },
+    {
+      "through": 38144,
+      "elapsedMs": 12.491499999999633,
+      "removedBytes": 2860282,
+      "removedEntries": 1785,
+      "bytes": 6896719,
+      "entries": 12480,
+      "major": false,
+      "landmarks": 38,
+      "dropped": 0
+    },
+    {
+      "through": 39680,
+      "elapsedMs": 11.71337500000027,
+      "removedBytes": 3035539,
+      "removedEntries": 1807,
+      "bytes": 7272368,
+      "entries": 13026,
+      "major": false,
+      "landmarks": 39,
+      "dropped": 0
+    },
+    {
+      "through": 41216,
+      "elapsedMs": 11.952583000000232,
+      "removedBytes": 3122690,
+      "removedEntries": 1785,
+      "bytes": 7684045,
+      "entries": 13590,
+      "major": false,
+      "landmarks": 41,
+      "dropped": 0
+    },
+    {
+      "through": 42752,
+      "elapsedMs": 12.002667000000201,
+      "removedBytes": 2738789,
+      "removedEntries": 1805,
+      "bytes": 8070224,
+      "entries": 14140,
+      "major": false,
+      "landmarks": 42,
+      "dropped": 0
+    },
+    {
+      "through": 44288,
+      "elapsedMs": 238.5198749999995,
+      "removedBytes": 3317490,
+      "removedEntries": 2107,
+      "bytes": 7904861,
+      "entries": 14388,
+      "major": true,
+      "landmarks": 44,
+      "dropped": 0
+    },
+    {
+      "through": 45824,
+      "elapsedMs": 17.830291999999645,
+      "removedBytes": 2831266,
+      "removedEntries": 1807,
+      "bytes": 8282999,
+      "entries": 14930,
+      "major": false,
+      "landmarks": 45,
+      "dropped": 0
+    },
+    {
+      "through": 47360,
+      "elapsedMs": 13.886709000000337,
+      "removedBytes": 2857859,
+      "removedEntries": 1769,
+      "bytes": 8733841,
+      "entries": 15512,
+      "major": false,
+      "landmarks": 47,
+      "dropped": 0
+    },
+    {
+      "through": 48896,
+      "elapsedMs": 14.479667000000518,
+      "removedBytes": 3094257,
+      "removedEntries": 1805,
+      "bytes": 9128340,
+      "entries": 16056,
+      "major": false,
+      "landmarks": 48,
+      "dropped": 0
+    },
+    {
+      "through": 50432,
+      "elapsedMs": 19.851666999999907,
+      "removedBytes": 2876515,
+      "removedEntries": 1777,
+      "bytes": 9573802,
+      "entries": 16634,
+      "major": false,
+      "landmarks": 50,
+      "dropped": 0
+    },
+    {
+      "through": 51968,
+      "elapsedMs": 12.328417000000627,
+      "removedBytes": 2796989,
+      "removedEntries": 1811,
+      "bytes": 9945106,
+      "entries": 17174,
+      "major": false,
+      "landmarks": 51,
+      "dropped": 0
+    },
+    {
+      "through": 53504,
+      "elapsedMs": 17.91058299999986,
+      "removedBytes": 2709763,
+      "removedEntries": 1777,
+      "bytes": 10380267,
+      "entries": 17752,
+      "major": false,
+      "landmarks": 53,
+      "dropped": 0
+    },
+    {
+      "through": 55040,
+      "elapsedMs": 13.054958999999144,
+      "removedBytes": 2819695,
+      "removedEntries": 1797,
+      "bytes": 10780390,
+      "entries": 18304,
+      "major": false,
+      "landmarks": 54,
+      "dropped": 0
+    },
+    {
+      "through": 56576,
+      "elapsedMs": 12.941791999999623,
+      "removedBytes": 2868509,
+      "removedEntries": 1763,
+      "bytes": 11250601,
+      "entries": 18894,
+      "major": false,
+      "landmarks": 56,
+      "dropped": 0
+    },
+    {
+      "through": 58112,
+      "elapsedMs": 12.513957999999548,
+      "removedBytes": 2910537,
+      "removedEntries": 1791,
+      "bytes": 11678435,
+      "entries": 19460,
+      "major": false,
+      "landmarks": 57,
+      "dropped": 0
+    },
+    {
+      "through": 59648,
+      "elapsedMs": 13.577749999999469,
+      "removedBytes": 2592607,
+      "removedEntries": 1763,
+      "bytes": 12134540,
+      "entries": 20046,
+      "major": false,
+      "landmarks": 59,
+      "dropped": 0
+    },
+    {
+      "through": 61184,
+      "elapsedMs": 343.28629100000035,
+      "removedBytes": 3496215,
+      "removedEntries": 2187,
+      "bytes": 11798557,
+      "entries": 20212,
+      "major": true,
+      "landmarks": 60,
+      "dropped": 0
+    },
+    {
+      "through": 62720,
+      "elapsedMs": 13.86254099999951,
+      "removedBytes": 2840227,
+      "removedEntries": 1771,
+      "bytes": 12252103,
+      "entries": 20796,
+      "major": false,
+      "landmarks": 62,
+      "dropped": 0
+    },
+    {
+      "through": 64256,
+      "elapsedMs": 13.475166999999601,
+      "removedBytes": 3000425,
+      "removedEntries": 1789,
+      "bytes": 12676016,
+      "entries": 21358,
+      "major": false,
+      "landmarks": 63,
+      "dropped": 0
+    },
+    {
+      "through": 65792,
+      "elapsedMs": 13.217000000000553,
+      "removedBytes": 3167754,
+      "removedEntries": 1801,
+      "bytes": 13079256,
+      "entries": 21902,
+      "major": false,
+      "landmarks": 65,
+      "dropped": 0
+    },
+    {
+      "through": 67328,
+      "elapsedMs": 13.971292000000176,
+      "removedBytes": 2812749,
+      "removedEntries": 1799,
+      "bytes": 13495801,
+      "entries": 22466,
+      "major": false,
+      "landmarks": 66,
+      "dropped": 0
+    },
+    {
+      "through": 68864,
+      "elapsedMs": 13.120292000000518,
+      "removedBytes": 2850133,
+      "removedEntries": 1807,
+      "bytes": 13884536,
+      "entries": 23010,
+      "major": false,
+      "landmarks": 67,
+      "dropped": 0
+    },
+    {
+      "through": 70400,
+      "elapsedMs": 13.27954200000022,
+      "removedBytes": 2957297,
+      "removedEntries": 1797,
+      "bytes": 14296756,
+      "entries": 23564,
+      "major": false,
+      "landmarks": 68,
+      "dropped": 0
+    },
+    {
+      "through": 71936,
+      "elapsedMs": 13.566625000000386,
+      "removedBytes": 3093717,
+      "removedEntries": 1799,
+      "bytes": 14713276,
+      "entries": 24120,
+      "major": false,
+      "landmarks": 69,
+      "dropped": 0
+    },
+    {
+      "through": 73472,
+      "elapsedMs": 13.573584000000665,
+      "removedBytes": 3216202,
+      "removedEntries": 1799,
+      "bytes": 15118594,
+      "entries": 24670,
+      "major": false,
+      "landmarks": 71,
+      "dropped": 0
+    },
+    {
+      "through": 75008,
+      "elapsedMs": 15.375208000000384,
+      "removedBytes": 3065407,
+      "removedEntries": 1801,
+      "bytes": 15539206,
+      "entries": 25226,
+      "major": false,
+      "landmarks": 72,
+      "dropped": 0
+    },
+    {
+      "through": 76544,
+      "elapsedMs": 14.123666000000412,
+      "removedBytes": 2947572,
+      "removedEntries": 1795,
+      "bytes": 15959984,
+      "entries": 25782,
+      "major": false,
+      "landmarks": 73,
+      "dropped": 0
+    },
+    {
+      "through": 78080,
+      "elapsedMs": 14.253625000000284,
+      "removedBytes": 3008441,
+      "removedEntries": 1791,
+      "bytes": 16388765,
+      "entries": 26342,
+      "major": false,
+      "landmarks": 74,
+      "dropped": 0
+    },
+    {
+      "through": 79616,
+      "elapsedMs": 14.168999999999869,
+      "removedBytes": 3160032,
+      "removedEntries": 1799,
+      "bytes": 16806622,
+      "entries": 26892,
+      "major": false,
+      "landmarks": 75,
+      "dropped": 0
+    },
+    {
+      "through": 81152,
+      "elapsedMs": 20.215416999999434,
+      "removedBytes": 3279358,
+      "removedEntries": 1799,
+      "bytes": 17232824,
+      "entries": 27442,
+      "major": false,
+      "landmarks": 77,
+      "dropped": 0
+    },
+    {
+      "through": 82688,
+      "elapsedMs": 13.19604099999924,
+      "removedBytes": 3363520,
+      "removedEntries": 1843,
+      "bytes": 17569660,
+      "entries": 27962,
+      "major": false,
+      "landmarks": 78,
+      "dropped": 0
+    },
+    {
+      "through": 84224,
+      "elapsedMs": 12.81262500000048,
+      "removedBytes": 3023491,
+      "removedEntries": 1839,
+      "bytes": 17895260,
+      "entries": 28470,
+      "major": false,
+      "landmarks": 79,
+      "dropped": 0
+    },
+    {
+      "through": 85760,
+      "elapsedMs": 466.9030409999996,
+      "removedBytes": 3841066,
+      "removedEntries": 2235,
+      "bytes": 17399668,
+      "entries": 28590,
+      "major": true,
+      "landmarks": 80,
+      "dropped": 0
+    },
+    {
+      "through": 87296,
+      "elapsedMs": 12.378375000000233,
+      "removedBytes": 3066293,
+      "removedEntries": 1833,
+      "bytes": 17733047,
+      "entries": 29108,
+      "major": false,
+      "landmarks": 81,
+      "dropped": 0
+    },
+    {
+      "through": 88832,
+      "elapsedMs": 13.691417000000001,
+      "removedBytes": 3179392,
+      "removedEntries": 1825,
+      "bytes": 18091966,
+      "entries": 29632,
+      "major": false,
+      "landmarks": 82,
+      "dropped": 0
+    },
+    {
+      "through": 90368,
+      "elapsedMs": 13.667665999999372,
+      "removedBytes": 3322200,
+      "removedEntries": 1827,
+      "bytes": 18446762,
+      "entries": 30156,
+      "major": false,
+      "landmarks": 83,
+      "dropped": 0
+    },
+    {
+      "through": 91904,
+      "elapsedMs": 13.443124999999782,
+      "removedBytes": 3062388,
+      "removedEntries": 1835,
+      "bytes": 18791592,
+      "entries": 30672,
+      "major": false,
+      "landmarks": 84,
+      "dropped": 0
+    },
+    {
+      "through": 93440,
+      "elapsedMs": 14.027584000001298,
+      "removedBytes": 3108200,
+      "removedEntries": 1825,
+      "bytes": 19157730,
+      "entries": 31200,
+      "major": false,
+      "landmarks": 85,
+      "dropped": 0
+    },
+    {
+      "through": 94976,
+      "elapsedMs": 13.295125000000553,
+      "removedBytes": 3136186,
+      "removedEntries": 1831,
+      "bytes": 19513808,
+      "entries": 31718,
+      "major": false,
+      "landmarks": 86,
+      "dropped": 0
+    },
+    {
+      "through": 96512,
+      "elapsedMs": 14.472834000000148,
+      "removedBytes": 3234130,
+      "removedEntries": 1831,
+      "bytes": 19878794,
+      "entries": 32246,
+      "major": false,
+      "landmarks": 87,
+      "dropped": 0
+    },
+    {
+      "through": 98048,
+      "elapsedMs": 14.213832999999795,
+      "removedBytes": 3270222,
+      "removedEntries": 1825,
+      "bytes": 20239843,
+      "entries": 32766,
+      "major": false,
+      "landmarks": 88,
+      "dropped": 0
+    },
+    {
+      "through": 99584,
+      "elapsedMs": 14.024541999999201,
+      "removedBytes": 3101192,
+      "removedEntries": 1825,
+      "bytes": 20602737,
+      "entries": 33296,
+      "major": false,
+      "landmarks": 88,
+      "dropped": 0
+    }
+  ],
+  "peakHeap": 194444040,
+  "peakRss": 321437696,
+  "peakBytes": 23665881,
+  "peakEntries": 35093,
+  "receiptMs": 10339.335167,
+  "retainedAfterReceipt": {
+    "heapUsed": 38250104,
+    "external": 2417972,
+    "arrayBuffers": 143921,
+    "rss": 313753600,
+    "store": {
+      "bytes": 20967484,
+      "entries": 33547
+    }
+  },
+  "seeks": [
+    {
+      "through": 50000,
+      "from": 49408,
+      "elapsedMs": 66.89858300000014
+    },
+    {
+      "through": 1,
+      "from": 0,
+      "elapsedMs": 1.3279590000001917
+    },
+    {
+      "through": 100000,
+      "from": 100000,
+      "elapsedMs": 2.4879579999997077
+    }
+  ],
+  "landmarks": [
+    256,
+    1280,
+    2304,
+    3328,
+    4352,
+    5376,
+    6400,
+    7424,
+    8448,
+    9472,
+    10496,
+    11520,
+    12544,
+    13568,
+    14592,
+    15616,
+    16640,
+    17664,
+    18688,
+    19712,
+    20736,
+    21760,
+    22784,
+    23808,
+    24832,
+    25856,
+    26880,
+    27904,
+    28928,
+    29952,
+    30976,
+    32000,
+    33024,
+    34048,
+    35072,
+    36096,
+    37120,
+    38144,
+    39168,
+    40192,
+    41216,
+    42240,
+    43264,
+    44288,
+    45312,
+    46336,
+    47360,
+    48384,
+    49408,
+    50432,
+    51456,
+    52480,
+    53504,
+    54528,
+    55552,
+    56576,
+    57600,
+    58624,
+    59648,
+    60672,
+    61696,
+    62720,
+    63744,
+    64768,
+    66048,
+    67328,
+    68608,
+    69888,
+    71168,
+    72448,
+    73728,
+    75008,
+    76288,
+    77568,
+    78848,
+    80128,
+    81408,
+    82944,
+    84480,
+    86016,
+    87552,
+    89088,
+    90624,
+    92160,
+    93696,
+    95232,
+    96768,
+    98304,
+    100000
+  ],
+  "finalUsage": {
+    "bytes": 22209683,
+    "entries": 34317
+  },
+  "headAudit": {
+    "through": 100000,
+    "entries": 26518,
+    "bytes": 6636576,
+    "structures": {
+      "reducer.root": {
+        "manifests": 1,
+        "pages": 1,
+        "bytes": 1178,
+        "references": 1
+      },
+      "reducer.messages.byKey.node": {
+        "manifests": 146,
+        "pages": 146,
+        "bytes": 638861,
+        "references": 146
+      },
+      "reducer.messages.entry": {
+        "manifests": 3125,
+        "pages": 3125,
+        "bytes": 972780,
+        "references": 6250
+      },
+      "reducer.messages.byOrder.node": {
+        "manifests": 208,
+        "pages": 208,
+        "bytes": 498893,
+        "references": 208
+      },
+      "reducer.messages.value": {
+        "manifests": 3125,
+        "pages": 3125,
+        "bytes": 1058265,
+        "references": 3125
+      },
+      "reducer.messages.text": {
+        "manifests": 3125,
+        "pages": 3125,
+        "bytes": 1686120,
+        "references": 3125
+      },
+      "activity.root": {
+        "manifests": 1,
+        "pages": 1,
+        "bytes": 743,
+        "references": 1
+      },
+      "activity.seen.node": {
+        "manifests": 195,
+        "pages": 195,
+        "bytes": 485963,
+        "references": 195
+      },
+      "activity.row": {
+        "manifests": 3125,
+        "pages": 3125,
+        "bytes": 756795,
+        "references": 6250
+      },
+      "activity.visible.node": {
+        "manifests": 208,
+        "pages": 208,
+        "bytes": 536978,
+        "references": 208
+      }
+    }
+  },
+  "landmarkAudit": [
+    {
+      "through": 100000,
+      "entries": 26518,
+      "bytes": 6636576
+    },
+    {
+      "through": 100000,
+      "entries": 0,
+      "bytes": 0
+    },
+    {
+      "through": 98304,
+      "entries": 128,
+      "bytes": 280745
+    },
+    {
+      "through": 96768,
+      "entries": 120,
+      "bytes": 260453
+    },
+    {
+      "through": 95232,
+      "entries": 114,
+      "bytes": 261110
+    },
+    {
+      "through": 93696,
+      "entries": 114,
+      "bytes": 254617
+    },
+    {
+      "through": 92160,
+      "entries": 120,
+      "bytes": 263707
+    },
+    {
+      "through": 90624,
+      "entries": 110,
+      "bytes": 243046
+    },
+    {
+      "through": 89088,
+      "entries": 118,
+      "bytes": 252852
+    },
+    {
+      "through": 87552,
+      "entries": 120,
+      "bytes": 257457
+    },
+    {
+      "through": 86016,
+      "entries": 112,
+      "bytes": 231435
+    },
+    {
+      "through": 84480,
+      "entries": 120,
+      "bytes": 257690
+    },
+    {
+      "through": 82944,
+      "entries": 106,
+      "bytes": 224521
+    },
+    {
+      "through": 81408,
+      "entries": 102,
+      "bytes": 232152
+    },
+    {
+      "through": 80128,
+      "entries": 98,
+      "bytes": 217054
+    },
+    {
+      "through": 78848,
+      "entries": 98,
+      "bytes": 211848
+    },
+    {
+      "through": 77568,
+      "entries": 100,
+      "bytes": 209945
+    },
+    {
+      "through": 76288,
+      "entries": 100,
+      "bytes": 210194
+    },
+    {
+      "through": 75008,
+      "entries": 98,
+      "bytes": 207559
+    },
+    {
+      "through": 73728,
+      "entries": 96,
+      "bytes": 217487
+    },
+    {
+      "through": 72448,
+      "entries": 102,
+      "bytes": 212712
+    },
+    {
+      "through": 71168,
+      "entries": 100,
+      "bytes": 213477
+    },
+    {
+      "through": 69888,
+      "entries": 96,
+      "bytes": 205109
+    },
+    {
+      "through": 68608,
+      "entries": 88,
+      "bytes": 184234
+    },
+    {
+      "through": 67328,
+      "entries": 90,
+      "bytes": 187153
+    },
+    {
+      "through": 66048,
+      "entries": 98,
+      "bytes": 219438
+    },
+    {
+      "through": 64768,
+      "entries": 96,
+      "bytes": 201654
+    },
+    {
+      "through": 63744,
+      "entries": 86,
+      "bytes": 179422
+    },
+    {
+      "through": 62720,
+      "entries": 90,
+      "bytes": 185737
+    },
+    {
+      "through": 61696,
+      "entries": 80,
+      "bytes": 160113
+    },
+    {
+      "through": 60672,
+      "entries": 82,
+      "bytes": 173016
+    },
+    {
+      "through": 59648,
+      "entries": 88,
+      "bytes": 175530
+    },
+    {
+      "through": 58624,
+      "entries": 88,
+      "bytes": 174881
+    },
+    {
+      "through": 57600,
+      "entries": 84,
+      "bytes": 182829
+    },
+    {
+      "through": 56576,
+      "entries": 94,
+      "bytes": 194348
+    },
+    {
+      "through": 55552,
+      "entries": 86,
+      "bytes": 175875
+    },
+    {
+      "through": 54528,
+      "entries": 82,
+      "bytes": 163860
+    },
+    {
+      "through": 53504,
+      "entries": 88,
+      "bytes": 179103
+    },
+    {
+      "through": 52480,
+      "entries": 80,
+      "bytes": 164749
+    },
+    {
+      "through": 51456,
+      "entries": 72,
+      "bytes": 141652
+    },
+    {
+      "through": 50432,
+      "entries": 74,
+      "bytes": 152412
+    },
+    {
+      "through": 50000,
+      "entries": 62,
+      "bytes": 116994
+    },
+    {
+      "through": 49408,
+      "entries": 66,
+      "bytes": 137172
+    },
+    {
+      "through": 48384,
+      "entries": 78,
+      "bytes": 160363
+    },
+    {
+      "through": 47360,
+      "entries": 86,
+      "bytes": 182176
+    },
+    {
+      "through": 46336,
+      "entries": 86,
+      "bytes": 172107
+    },
+    {
+      "through": 45312,
+      "entries": 76,
+      "bytes": 152062
+    },
+    {
+      "through": 44288,
+      "entries": 82,
+      "bytes": 165995
+    },
+    {
+      "through": 43264,
+      "entries": 78,
+      "bytes": 158031
+    },
+    {
+      "through": 42240,
+      "entries": 78,
+      "bytes": 156952
+    },
+    {
+      "through": 41216,
+      "entries": 76,
+      "bytes": 159002
+    },
+    {
+      "through": 40192,
+      "entries": 76,
+      "bytes": 144568
+    },
+    {
+      "through": 39168,
+      "entries": 76,
+      "bytes": 147220
+    },
+    {
+      "through": 38144,
+      "entries": 80,
+      "bytes": 157003
+    },
+    {
+      "through": 37120,
+      "entries": 80,
+      "bytes": 161202
+    },
+    {
+      "through": 36096,
+      "entries": 76,
+      "bytes": 147512
+    },
+    {
+      "through": 35072,
+      "entries": 78,
+      "bytes": 156765
+    },
+    {
+      "through": 34048,
+      "entries": 72,
+      "bytes": 140283
+    },
+    {
+      "through": 33024,
+      "entries": 78,
+      "bytes": 161453
+    },
+    {
+      "through": 32000,
+      "entries": 76,
+      "bytes": 150810
+    },
+    {
+      "through": 30976,
+      "entries": 74,
+      "bytes": 144290
+    },
+    {
+      "through": 29952,
+      "entries": 72,
+      "bytes": 145213
+    },
+    {
+      "through": 28928,
+      "entries": 78,
+      "bytes": 152756
+    },
+    {
+      "through": 27904,
+      "entries": 66,
+      "bytes": 125247
+    },
+    {
+      "through": 26880,
+      "entries": 78,
+      "bytes": 148614
+    },
+    {
+      "through": 25856,
+      "entries": 68,
+      "bytes": 131944
+    },
+    {
+      "through": 24832,
+      "entries": 78,
+      "bytes": 154643
+    },
+    {
+      "through": 23808,
+      "entries": 74,
+      "bytes": 139529
+    },
+    {
+      "through": 22784,
+      "entries": 66,
+      "bytes": 131578
+    },
+    {
+      "through": 21760,
+      "entries": 64,
+      "bytes": 122782
+    },
+    {
+      "through": 20736,
+      "entries": 64,
+      "bytes": 119241
+    },
+    {
+      "through": 19712,
+      "entries": 62,
+      "bytes": 116264
+    },
+    {
+      "through": 18688,
+      "entries": 58,
+      "bytes": 108261
+    },
+    {
+      "through": 17664,
+      "entries": 54,
+      "bytes": 112295
+    },
+    {
+      "through": 16640,
+      "entries": 52,
+      "bytes": 118930
+    },
+    {
+      "through": 15616,
+      "entries": 50,
+      "bytes": 104615
+    },
+    {
+      "through": 14592,
+      "entries": 50,
+      "bytes": 103213
+    },
+    {
+      "through": 13568,
+      "entries": 50,
+      "bytes": 101342
+    },
+    {
+      "through": 12544,
+      "entries": 44,
+      "bytes": 88235
+    },
+    {
+      "through": 11520,
+      "entries": 50,
+      "bytes": 101716
+    },
+    {
+      "through": 10496,
+      "entries": 44,
+      "bytes": 84749
+    },
+    {
+      "through": 9472,
+      "entries": 38,
+      "bytes": 73821
+    },
+    {
+      "through": 8448,
+      "entries": 40,
+      "bytes": 73414
+    },
+    {
+      "through": 7424,
+      "entries": 36,
+      "bytes": 68397
+    },
+    {
+      "through": 6400,
+      "entries": 36,
+      "bytes": 62304
+    },
+    {
+      "through": 5376,
+      "entries": 34,
+      "bytes": 52997
+    },
+    {
+      "through": 4352,
+      "entries": 32,
+      "bytes": 45476
+    },
+    {
+      "through": 3328,
+      "entries": 28,
+      "bytes": 37451
+    },
+    {
+      "through": 2304,
+      "entries": 28,
+      "bytes": 32697
+    },
+    {
+      "through": 1280,
+      "entries": 22,
+      "bytes": 22431
+    },
+    {
+      "through": 256,
+      "entries": 12,
+      "bytes": 7342
+    },
+    {
+      "through": 1,
+      "entries": 17,
+      "bytes": 3887
+    }
+  ],
+  "afterClose": {
+    "bytes": 0,
+    "entries": 0
+  },
+  "elapsedMs": 11555.395875
+}

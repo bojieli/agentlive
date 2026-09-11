@@ -1,7 +1,7 @@
 import {
   canonicalJson,
   ProtocolError,
-  snapshotContentReferenceSchema,
+  parseContentReference,
 } from "@agentlive/protocol";
 import type { ContentReference, SnapshotContent } from "./snapshot.js";
 export interface IndexRoot {
@@ -23,9 +23,7 @@ function key(value: unknown): value is string {
   return typeof value === "string" && value.length <= 512;
 }
 function copyRef(value: unknown): ContentReference {
-  const result = snapshotContentReferenceSchema.safeParse(value);
-  if (!result.success) corrupt();
-  return result.data;
+  return parseContentReference(value) ?? corrupt();
 }
 export function copyIndexRoot(value: IndexRoot): IndexRoot {
   if (
@@ -50,6 +48,26 @@ export class ContentIndex {
   constructor(private readonly content: SnapshotContent) {}
   private async load(span: IndexRoot, signal?: AbortSignal): Promise<Node> {
     signal?.throwIfAborted();
+    const cache = this.content.decodedNodes;
+    if (!cache) return this.decode(span, signal);
+    const key = `content-index/${span.ref.hash}/${span.ref.byteSize}/${span.ref.units}/${span.count}/${span.first.length}:${span.first}/${span.last}`;
+    let node = cache.get(key) as Node | undefined;
+    if (!node) cache.set(key, (node = await this.decode(span, signal)));
+    // Fresh arrays and references: callers may edit a loaded node.
+    return node.kind === "leaf"
+      ? {
+          kind: "leaf",
+          entries: node.entries.map(([name, ref]) => [name, { ...ref }]),
+        }
+      : {
+          kind: "branch",
+          children: node.children.map((child) => ({
+            ...child,
+            ref: { ...child.ref },
+          })),
+        };
+  }
+  private async decode(span: IndexRoot, signal?: AbortSignal): Promise<Node> {
     const text = await this.content.read(span.ref, 0, span.ref.units, signal);
     signal?.throwIfAborted();
     if (text.length !== span.ref.units) corrupt();
@@ -340,6 +358,12 @@ export class ContentIndex {
   /** Visit validated index nodes and opaque leaf values with bounded traversal memory.
    * Callbacks are provisional until this resolves; failures/cancellation invalidate the trace.
    * Callers own root pins and must not reclaim content during traversal.
+   *
+   * `reuse` lets a collector skip a node whose complete subtree it already
+   * holds from an earlier successful trace of the same immutable content. A
+   * skipped subtree is neither loaded nor visited; its span count still
+   * contributes to the root count check. Returning true is the caller's
+   * assertion that every dependency below that node is already retained.
    */
   async trace(
     input: IndexRoot | null,
@@ -349,12 +373,17 @@ export class ContentIndex {
         | { kind: "value"; key: string; ref: ContentReference },
     ) => Promise<void>,
     signal?: AbortSignal,
+    reuse?: (ref: ContentReference) => boolean,
   ): Promise<{ nodes: number; values: number }> {
     const root = input === null ? null : copyIndexRoot(input);
     const counts = { nodes: 0, values: 0 };
     const walk = async (span: IndexRoot, depth: number): Promise<void> => {
       signal?.throwIfAborted();
       if (depth > 64) corrupt();
+      if (reuse?.({ ...span.ref })) {
+        counts.values += span.count;
+        return;
+      }
       const node = await this.load(span, signal);
       signal?.throwIfAborted();
       await visit({ kind: "node", ref: { ...span.ref } });
