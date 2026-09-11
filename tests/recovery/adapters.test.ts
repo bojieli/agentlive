@@ -7,6 +7,89 @@ import { PublisherJournal } from "../../packages/publisher/src/index.js";
 const roots: string[] = [];
 const journals: PublisherJournal[] = [];
 const transports: StdioRpc[] = [];
+it("isolates Codex child objects and clocks while retaining shared recording identity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-codex-child-"));
+  roots.push(root);
+  const journal = await PublisherJournal.open(root, {
+    serverOrigin: "http://localhost",
+    agent: "codex",
+    nativeSessionId: "root",
+  });
+  journals.push(journal);
+  await journal.bindRemote("stream", "revision");
+  const time = "2026-09-01T00:00:00Z";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    for (const thread of [undefined, "child1", "child2"]) {
+      const capture = new CodexCapture(journal, [], time, undefined, thread);
+      await capture.acceptHistorical(
+        { method: "session/begin", params: {} },
+        time,
+      );
+      await capture.acceptHistorical(
+        {
+          method: "agent/metadata",
+          params: {
+            threadId: "root",
+            nativeThreadId: thread ?? "root",
+            ...(thread ? { parentThreadId: "root" } : {}),
+          },
+        },
+        time,
+      );
+      await capture.acceptHistorical(
+        {
+          method: "item/completed",
+          params: {
+            threadId: "root",
+            item: {
+              id: "shared_item",
+              type: "agentMessage",
+              text: thread ?? "main",
+            },
+          },
+        },
+        time,
+      );
+      if (thread)
+        await expect(
+          capture.acceptHistorical(
+            {
+              method: "item/completed",
+              params: {
+                threadId: "root",
+                agentThreadId: "foreign",
+                item: {
+                  id: "shared_item",
+                  type: "agentMessage",
+                  text: "foreign",
+                },
+              },
+            },
+            time,
+          ),
+        ).rejects.toThrow("another thread");
+    }
+    const events = [];
+    for await (const event of journal.pending(0)) events.push(event);
+    expect(
+      events.filter((event) => event.content.kind === "session.started"),
+    ).toHaveLength(1);
+    const messages = events.filter(
+      (event) => event.content.kind === "message.started",
+    );
+    expect(messages).toHaveLength(3);
+    expect(
+      new Set(
+        messages.map(
+          (event) =>
+            event.content.kind === "message.started" &&
+            event.content.payload.messageId,
+        ),
+      ).size,
+    ).toBe(3);
+    expect(new Set(messages.map((event) => event.clockSegmentId)).size).toBe(3);
+  }
+});
 afterEach(async () => {
   for (const rpc of transports.splice(0)) await rpc.close();
   for (const journal of journals.splice(0)) await journal.close();

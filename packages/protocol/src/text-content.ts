@@ -60,7 +60,7 @@ async function next<T>(
   });
 }
 
-/** Backends verify bytes on load and return only durable saved references. */
+/** Backends verify bytes on load. Saved references become durable when flush completes; the codec flushes before returning them. */
 export interface TextContentBackend {
   load(ref: TextReference, signal?: AbortSignal): Promise<Uint8Array>;
   save(
@@ -164,6 +164,7 @@ export class TextContent {
         units,
         signal,
       );
+      await this.backend.flush(signal);
       signal?.throwIfAborted();
       return result;
     } finally {
@@ -206,6 +207,37 @@ export class TextContent {
     if (typeof text !== "string" || text.length !== ref.units)
       throw new ProtocolError("corrupt_storage", "Invalid text page");
     return text;
+  }
+  /** Verify all codec dependencies before returning a complete retention set.
+   * This does not trace references embedded in text or pin against collection.
+   */
+  async trace(
+    ref: TextReference,
+    signal?: AbortSignal,
+  ): Promise<TextReference[]> {
+    ref = { ...ref };
+    signal?.throwIfAborted();
+    const manifest = await this.manifest(ref, signal);
+    const references = new Map<string, TextReference>([[ref.hash, ref]]);
+    for (const page of manifest.pages) {
+      signal?.throwIfAborted();
+      const previous = references.get(page.hash);
+      if (previous) {
+        if (
+          previous.byteSize !== page.byteSize ||
+          previous.units !== page.units
+        )
+          throw new ProtocolError(
+            "corrupt_storage",
+            "Conflicting text blob references",
+          );
+        continue;
+      }
+      await this.page(page, signal);
+      references.set(page.hash, { ...page });
+    }
+    signal?.throwIfAborted();
+    return [...references.values()];
   }
   async read(
     ref: TextReference,

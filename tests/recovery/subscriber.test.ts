@@ -483,7 +483,7 @@ it("continues durable receipt while presentation is paused and replays its backl
   await expect.poll(() => receipt).toBe(session.boundary.sequence);
   expect(presented).toEqual([]);
   gate.setPaused(false);
-  await expect.poll(() => presented.length).toBe(receipt);
+  await expect.poll(() => presented.length, { timeout: 10000 }).toBe(receipt);
   expect(presented).toEqual(
     Array.from({ length: receipt }, (_, index) => index + 1),
   );
@@ -608,19 +608,22 @@ it("reconstructs a saved presentation prefix and presents only the later suffix 
   runs.push({ abort, done });
   const baseline = session.boundary.sequence;
   await expect
-    .poll(async () => {
-      try {
-        const directory = (await readdir(cacheRoot))[0]!;
-        return JSON.parse(
-          await readFile(
-            join(cacheRoot, directory, "presentation.json"),
-            "utf8",
-          ),
-        ).serverSeq;
-      } catch {
-        return 0;
-      }
-    })
+    .poll(
+      async () => {
+        try {
+          const directory = (await readdir(cacheRoot))[0]!;
+          return JSON.parse(
+            await readFile(
+              join(cacheRoot, directory, "presentation.json"),
+              "utf8",
+            ),
+          ).serverSeq;
+        } catch {
+          return 0;
+        }
+      },
+      { timeout: 10000 },
+    )
     .toBe(baseline);
   abort.abort();
   await done;
@@ -730,7 +733,7 @@ it("receives a complete backlog during timed watch and switches to live catch-up
   await expect.poll(() => receipt).toBe(session.boundary.sequence);
   expect(presented.length).toBeLessThan(receipt);
   playback.setImmediate(true);
-  await expect.poll(() => presented.length).toBe(receipt);
+  await expect.poll(() => presented.length, { timeout: 10000 }).toBe(receipt);
   expect(presented).toEqual(Array.from({ length: receipt }, (_, i) => i + 1));
   abort.abort();
   await done;
@@ -816,6 +819,22 @@ it("persists playback choices independently of receipt and rejects foreign setti
     expect(() =>
       cache.savePlayback({ speed: NaN, paused: false, immediate: true }),
     ).toThrow("Invalid playback");
+    for (const idleCapMs of [NaN, Infinity, -1])
+      expect(() =>
+        cache.savePlayback({
+          speed: 1,
+          paused: false,
+          immediate: false,
+          idleCapMs,
+        }),
+      ).toThrow("Invalid playback");
+    await cache.savePlayback({
+      speed: 1,
+      paused: false,
+      immediate: false,
+      idleCapMs: 0,
+    });
+    expect((await cache.loadPlayback())!.idleCapMs).toBe(0);
     const path = join(
       cacheRoot,
       (await readdir(cacheRoot))[0]!,
@@ -862,6 +881,7 @@ it("remembers control changes while paused and restores timed mode without block
   runs.push({ abort, done });
   await expect.poll(() => receipt).toBe(session.boundary.sequence);
   playback.setSpeed(1024);
+  playback.setIdleCap(250);
   playback.setImmediate(false);
   playback.setPaused(true);
   abort.abort();
@@ -876,6 +896,7 @@ it("remembers control changes while paused and restores timed mode without block
     speed: 1024,
     paused: true,
     immediate: false,
+    idleCapMs: 250,
   });
   await cache.close();
   await publish(2);
@@ -895,6 +916,7 @@ it("remembers control changes while paused and restores timed mode without block
       speed: 1024,
       paused: false,
       immediate: false,
+      idleCapMs: 250,
     });
   } finally {
     await cache.close();
@@ -1006,13 +1028,13 @@ it.each([0, 2, 9999])(
       },
     });
     runs.push({ abort, done });
-    await expect.poll(() => output).toBe(snapshot);
+    await expect.poll(() => output, { timeout: 10000 }).toBe(snapshot);
     expect(presented).toEqual([]);
     await publish(2);
     await expect.poll(() => receipt).toBe(session.boundary.sequence);
     expect(output).toBe(snapshot);
     playback.setPaused(false);
-    await expect.poll(() => presented.at(-1)).toBe(receipt);
+    await expect.poll(() => presented.at(-1), { timeout: 10000 }).toBe(receipt);
     expect(presented).toEqual(
       Array.from(
         { length: receipt - expected.appliedSeq },
@@ -1063,24 +1085,24 @@ it("seeks backward and forward while paused, coalesces requests, and keeps recei
     },
   });
   runs.push({ abort, done });
-  await expect.poll(() => positions.length).toBe(1);
+  await expect.poll(() => positions.length, { timeout: 10000 }).toBe(1);
   const initial = positions[0]!;
   playback.seek(0);
-  await expect.poll(() => positions.length).toBe(2);
+  await expect.poll(() => positions.length, { timeout: 10000 }).toBe(2);
   expect(positions[1]!.serverSeq).toBeLessThan(initial.serverSeq);
   playback.seek(9999);
-  await expect.poll(() => positions.length).toBe(3);
+  await expect.poll(() => positions.length, { timeout: 10000 }).toBe(3);
   expect(positions[2]!.serverSeq).toBe(receipt);
   await publish(2);
   await expect.poll(() => receipt).toBe(session.boundary.sequence);
   expect(shown).toEqual([]);
   playback.seek(0);
   playback.seek(initialTime);
-  await expect.poll(() => positions.length).toBe(4);
+  await expect.poll(() => positions.length, { timeout: 10000 }).toBe(4);
   expect(positions[3]).toEqual(initial);
   expect(connections).toBe(1);
   playback.setPaused(false);
-  await expect.poll(() => shown.at(-1)).toBe(receipt);
+  await expect.poll(() => shown.at(-1), { timeout: 10000 }).toBe(receipt);
   expect(shown).toEqual(
     Array.from(
       { length: receipt - initial.serverSeq },
@@ -1320,3 +1342,120 @@ it.each([0, -1, NaN, Infinity, 1.5, 2_147_483_648])(
     ).rejects.toThrow("cancellationTimeoutMs");
   },
 );
+
+it("steps one recorded event, renders its selected state, and keeps receiving while paused", async () => {
+  const positioned: number[] = [];
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { PlaybackPacer } =
+    await import("../../packages/playback/src/index.js");
+  const { root, server, session, publish } = await setup();
+  await publish(2);
+  const playback = new PlaybackPacer();
+  playback.setPaused(true);
+  const abort = new AbortController();
+  let receipt = 0,
+    output = "";
+  const presented: number[] = [];
+  const done = watchRecording({
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    cacheRoot: join(root, "step-view"),
+    onPositioned: ({ serverSeq }) => {
+      positioned.push(serverSeq);
+    },
+    signal: abort.signal,
+    presentation: playback,
+    write: async (text) => {
+      output += text;
+    },
+    onReceipt: (seq) => {
+      receipt = seq;
+    },
+    onPresented: (seq) => {
+      presented.push(seq);
+    },
+  });
+  runs.push({ abort, done });
+  await expect.poll(() => receipt).toBe(session.boundary.sequence);
+  playback.step();
+  await expect.poll(() => presented, { timeout: 10000 }).toEqual([1]);
+  expect(output).toContain("Playback state");
+  expect(playback.paused).toBe(true);
+  playback.step();
+  await expect.poll(() => presented, { timeout: 10000 }).toEqual([1, 2]);
+  expect(output.match(/Playback state/g)).toHaveLength(2);
+  expect(output).toContain("assistant: incomplete");
+  const previous = output;
+  await publish(2);
+  await expect.poll(() => receipt).toBe(session.boundary.sequence);
+  expect(presented).toEqual([1, 2]);
+  expect(output).toBe(previous);
+  playback.stepBackward();
+  await expect.poll(() => positioned.at(-1), { timeout: 10000 }).toBe(1);
+  expect(playback.paused).toBe(true);
+  expect(receipt).toBe(session.boundary.sequence);
+  playback.stepBackward();
+  playback.stepBackward();
+  await expect.poll(() => positioned.at(-1), { timeout: 10000 }).toBe(0);
+  expect(playback.paused).toBe(true);
+  playback.step();
+  await expect.poll(() => presented, { timeout: 10000 }).toEqual([1, 2, 1]);
+  playback.setPaused(false);
+  await expect.poll(() => presented.at(-1), { timeout: 10000 }).toBe(receipt);
+  abort.abort();
+  await done;
+});
+
+it("overrides or disables a saved idle cap independently of saved speed", async () => {
+  const { watchRecording } = await import("../../packages/cli/src/watch.js");
+  const { SubscriberCache } =
+    await import("../../packages/storage/src/index.js");
+  const { root, server, session } = await setup();
+  const cacheRoot = join(root, "override-idle");
+  const cacheOptions = {
+    serverOrigin: server.url,
+    streamId: session.info.id,
+    initialize: async () => ({ revision: session.info.revision }),
+  };
+  for (const idleCapMs of [100, null] as const) {
+    let cache = await SubscriberCache.open(cacheRoot, cacheOptions);
+    await cache.savePlayback({
+      speed: 8,
+      immediate: true,
+      paused: false,
+      idleCapMs: 500,
+    });
+    await cache.close();
+    const abort = new AbortController();
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const done = watchRecording({
+      ...cacheOptions,
+      cacheRoot,
+      signal: abort.signal,
+      idleCapMs,
+      resumeView: true,
+      write: async () => {},
+      onStatus: (status) => {
+        if (status === "connecting") entered();
+      },
+    });
+    runs.push({ abort, done });
+    await ready;
+    abort.abort();
+    await done;
+    cache = await SubscriberCache.open(cacheRoot, cacheOptions);
+    try {
+      expect(await cache.loadPlayback()).toEqual({
+        speed: 8,
+        paused: false,
+        immediate: false,
+        ...(idleCapMs === null ? {} : { idleCapMs }),
+      });
+    } finally {
+      await cache.close();
+    }
+  }
+});

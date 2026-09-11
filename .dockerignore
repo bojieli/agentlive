@@ -1,0 +1,9 @@
+**
+!Dockerfile
+!dist/
+!dist/package/
+!dist/package/package.json
+!dist/package/npm-shrinkwrap.json
+!dist/package/cli.mjs
+!dist/package/web/
+!dist/package/web/**

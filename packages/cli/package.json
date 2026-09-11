@@ -11,10 +11,12 @@
   },
   "dependencies": {
     "@agentlive/adapters": "workspace:*",
-    "@agentlive/server": "workspace:*",
-    "@agentlive/publisher": "workspace:*",
-    "@agentlive/storage": "workspace:*",
     "@agentlive/client": "workspace:*",
-    "@agentlive/playback": "workspace:*"
+    "@agentlive/playback": "workspace:*",
+    "@agentlive/protocol": "workspace:*",
+    "@agentlive/publisher": "workspace:*",
+    "@agentlive/server": "workspace:*",
+    "@agentlive/storage": "workspace:*",
+    "zod": "4.5.4"
   }
 }

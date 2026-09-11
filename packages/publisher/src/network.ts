@@ -253,6 +253,10 @@ export class PublisherNetwork {
   async ensureRemote(signal: AbortSignal): Promise<void> {
     const journal = this.options.journal,
       binding = journal.identity;
+    if (binding.pendingCredentialRotation)
+      throw new Error(
+        "Complete pending publisher credential rotation before publishing",
+      );
     if (binding.streamId) return;
     if (!this.options.ownerCredential)
       throw new ProtocolError(

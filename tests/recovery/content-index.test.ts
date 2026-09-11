@@ -183,3 +183,68 @@ it("does not return a changed root after cancellation following a durable write"
     await store.close();
   }
 });
+
+it("traces validated branches and opaque values with callback isolation and cancellation", async () => {
+  const { store } = await setup();
+  try {
+    const value = await store.put("opaque payload");
+    const writer = new ContentIndex(store);
+    const root = (await writer.build(
+      Array.from(
+        { length: 70 },
+        (_, index) =>
+          [String(index).padStart(3, "0"), value] as [string, typeof value],
+      ),
+    ))!;
+    const reads: string[] = [];
+    const index = new ContentIndex({
+      put: () => {
+        throw new Error("Trace must not write");
+      },
+      read: (ref, offset, length, signal) => {
+        reads.push(ref.hash);
+        return store.read(ref, offset, length, signal);
+      },
+    });
+    const keys: string[] = [];
+    const traced = await index.trace(root, async (item) => {
+      if (item.kind === "value") keys.push(item.key);
+      item.ref.hash = "0".repeat(64);
+    });
+    expect(traced.values).toBe(70);
+    expect(traced.nodes).toBeGreaterThan(1);
+    expect(keys).toEqual(
+      Array.from({ length: 70 }, (_, index) => String(index).padStart(3, "0")),
+    );
+    expect(reads).not.toContain(value.hash);
+    expect(reads).toHaveLength(traced.nodes);
+    const abort = new AbortController();
+    let calls = 0;
+    await expect(
+      index.trace(
+        root,
+        async () => {
+          calls++;
+          abort.abort(new Error("stop trace"));
+        },
+        abort.signal,
+      ),
+    ).rejects.toThrow("stop trace");
+    expect(calls).toBe(1);
+    await expect(
+      index.trace({ ...root, count: root.count + 1 }, async () => {}),
+    ).rejects.toMatchObject({ code: "corrupt_storage" });
+    await expect(
+      index.trace(root, async () => {
+        throw new Error("mark failed");
+      }),
+    ).rejects.toThrow("mark failed");
+    expect(
+      await index.trace(null, async () => {
+        throw new Error("unexpected");
+      }),
+    ).toEqual({ nodes: 0, values: 0 });
+  } finally {
+    await store.close();
+  }
+});

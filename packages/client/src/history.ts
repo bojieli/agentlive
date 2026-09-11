@@ -21,16 +21,16 @@ export async function openRecordingHistory(options: {
     ? { authorization: `Bearer ${options.credential}` }
     : {};
   const fetcher = options.fetch ?? fetch;
-  const get = async (url: string) => {
+  const get = async (url: string, signal = options.signal) => {
     let attempts = 0;
     while (true) {
       try {
-        return await request(fetcher, url, { headers }, options.signal);
+        return await request(fetcher, url, { headers }, signal);
       } catch (error) {
-        if (options.signal.aborted || !retryable(error)) throw error;
+        if (signal.aborted || !retryable(error)) throw error;
         await delay(
           Math.min(30000, 250 * 2 ** Math.min(attempts++, 7)),
-          options.signal,
+          signal,
         );
       }
     }
@@ -44,7 +44,11 @@ export async function openRecordingHistory(options: {
     })
     .parse(JSON.parse((await get(base)).text));
   async function* events(
-    range: { afterServerSeq?: number; throughServerSeq?: number } = {},
+    range: {
+      afterServerSeq?: number;
+      throughServerSeq?: number;
+      signal?: AbortSignal;
+    } = {},
   ): AsyncGenerator<StoredEvent> {
     let after = cursorSchema.parse(range.afterServerSeq ?? 0);
     const through = cursorSchema.parse(
@@ -52,14 +56,17 @@ export async function openRecordingHistory(options: {
     );
     if (after > through || through > metadata.serverSeq)
       throw new RangeError("History range exceeds its captured boundary");
-    options.signal.throwIfAborted();
+    const signal = range.signal
+      ? AbortSignal.any([options.signal, range.signal])
+      : options.signal;
+    signal.throwIfAborted();
     while (after < through) {
       const url = new URL(base + "/events");
       url.searchParams.set("revision", metadata.revision);
       url.searchParams.set("throughServerSeq", String(through));
       url.searchParams.set("afterServerSeq", String(after));
       url.searchParams.set("limit", "500");
-      const { response, text } = await get(url.toString());
+      const { response, text } = await get(url.toString(), signal);
       if (
         response.headers.get("x-agentlive-revision") !== metadata.revision ||
         response.headers.get("x-agentlive-through") !== String(through) ||
@@ -91,7 +98,10 @@ export async function openRecordingHistory(options: {
           "sequence_gap",
           "History page has an invalid receipt cursor",
         );
-      for (const event of page) yield event;
+      for (const event of page) {
+        signal.throwIfAborted();
+        yield event;
+      }
       after = cursor;
     }
   }

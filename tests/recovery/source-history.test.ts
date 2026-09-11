@@ -2,7 +2,13 @@ import { afterEach, expect, it } from "vitest";
 import { mkdtemp, writeFile, appendFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { readJsonlSource } from "../../packages/adapters/src/index.js";
+import { createCodexHistoryConsumer } from "../../packages/adapters/src/codex-history.js";
+import { CodexCapture } from "../../packages/adapters/src/codex.js";
+import { PublisherJournal } from "../../packages/publisher/src/index.js";
+import {
+  readJsonlSource,
+  inspectCodexHistory,
+} from "../../packages/adapters/src/index.js";
 const roots: string[] = [];
 afterEach(async () => {
   for (const root of roots.splice(0))
@@ -24,6 +30,74 @@ async function read(
     records.push(record);
   return records;
 }
+it("preserves Codex logical-session and parent-thread identity separately", async () => {
+  const row = (id: string, parent?: string) =>
+    JSON.stringify({
+      type: "session_meta",
+      timestamp: "2026-09-01T00:00:00Z",
+      payload: {
+        id,
+        session_id: "root",
+        ...(parent ? { parent_thread_id: parent } : {}),
+        timestamp: "2026-09-01T00:00:00Z",
+        cli_version: "test",
+      },
+    }) + "\n";
+  const path = await source(
+    row("root") + row("child", "root") + row("grandchild", "child"),
+  );
+  expect(await inspectCodexHistory(path)).toMatchObject({
+    nativeSessionId: "root",
+    nativeThreadIds: ["root", "child", "grandchild"],
+    nativeThreadParents: { child: "root", grandchild: "child" },
+  });
+  await appendFile(path, row("child", "other"));
+  await expect(inspectCodexHistory(path)).rejects.toThrow(
+    "parent identity changed",
+  );
+  await writeFile(path, row("child", "child"));
+  await expect(inspectCodexHistory(path)).rejects.toThrow("own parent");
+});
+
+it("accepts newly appended Codex threads but rejects later reparenting", async () => {
+  const row = (id: string, parent?: string) => ({
+    type: "session_meta",
+    timestamp: "2026-09-01T00:00:00Z",
+    payload: {
+      id,
+      session_id: "root",
+      parent_thread_id: parent,
+      timestamp: "2026-09-01T00:00:00Z",
+      cli_version: "test",
+    },
+  });
+  const path = await source(JSON.stringify(row("root")) + "\n");
+  const manifest = await inspectCodexHistory(path);
+  const journal = await PublisherJournal.open(path + ".publisher", {
+    serverOrigin: "http://localhost",
+    agent: "codex",
+    nativeSessionId: "root",
+  });
+  try {
+    await journal.bindRemote("stream", "revision");
+    const consumer = await createCodexHistoryConsumer(
+      manifest,
+      new CodexCapture(journal, [], manifest.createdAt),
+    );
+    await consumer.accept({
+      value: row("child", "root"),
+      cursor: { offset: 1, prefixHash: "a".repeat(64) },
+    });
+    await expect(
+      consumer.accept({
+        value: row("child", "other"),
+        cursor: { offset: 2, prefixHash: "b".repeat(64) },
+      }),
+    ).rejects.toThrow("lineage changed");
+  } finally {
+    await journal.close();
+  }
+});
 it("freezes history before concurrent appends and resumes the suffix by validated cursor", async () => {
   const path = await source('{"n":1}\n{"n":2}\n');
   const iterator = readJsonlSource(path);

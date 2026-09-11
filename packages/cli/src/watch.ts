@@ -1,14 +1,15 @@
+import { TerminalKeys } from "./terminal-keys.js";
+import { TerminalWatchState } from "./watch-state.js";
 import {
   openRecordingHistory,
   SubscriberClient,
+  RecordingSnapshotClient,
   type SubscriberStatus,
 } from "@agentlive/client";
 import { SubscriberCache } from "@agentlive/storage";
 import {
-  initialState,
-  apply,
-  renderTerminalEvent,
-  renderTerminalSnapshot,
+  initialPagedState,
+  PagedTerminalRenderer,
   PlaybackPacer,
 } from "@agentlive/playback";
 import { originOf } from "@agentlive/client/transport";
@@ -38,6 +39,7 @@ async function runWatchRecording(options: {
   onPositioned?: (position: { serverSeq: number; timelineMs: number }) => void;
   interactive?: boolean;
   speed?: number;
+  idleCapMs?: number | null;
   fromMs?: number;
   resumeView?: boolean;
   restartView?: boolean;
@@ -58,11 +60,17 @@ async function runWatchRecording(options: {
     throw new Error("Interactive watch requires a terminal");
   const presentation =
     options.presentation ??
-    (options.interactive || options.speed !== undefined || rememberPosition
+    (options.interactive ||
+    options.speed !== undefined ||
+    options.idleCapMs !== undefined ||
+    rememberPosition
       ? new PlaybackPacer(options.speed ?? 1)
       : undefined);
   if (options.speed !== undefined) presentation!.setSpeed(options.speed);
-  presentation?.setImmediate(options.speed === undefined);
+  presentation?.setIdleCap(options.idleCapMs ?? undefined);
+  presentation?.setImmediate(
+    options.speed === undefined && options.idleCapMs === undefined,
+  );
   const origin = originOf(options.serverOrigin);
   let seekMetadata:
     Awaited<ReturnType<typeof openRecordingHistory>>["metadata"] | undefined;
@@ -77,26 +85,42 @@ async function runWatchRecording(options: {
           error ? reject(error) : resolve(),
         ),
       ));
-  let state = initialState();
+  let state = initialPagedState();
+  let paged: TerminalWatchState | undefined;
+  let snapshots: RecordingSnapshotClient | undefined;
   let viewedTime = 0;
   let pendingSeek:
-    { timelineMs: number; through: number | undefined } | undefined;
+    | { timelineMs: number; through: number | undefined; sequence?: number }
+    | undefined;
   let seekWake = new AbortController();
   const unsubscribeSeek = presentation?.onSeek((timelineMs) => {
     pendingSeek = { timelineMs, through: openedCache?.cursor.serverSeq };
     seekWake.abort(new Error("Viewer position changed"));
   });
-  let bytes = 0;
+  const unsubscribeBackward = presentation?.onStepBackward(() => {
+    pendingSeek = {
+      timelineMs: 0,
+      through: openedCache?.cursor.serverSeq,
+      sequence: Math.max(0, (pendingSeek?.sequence ?? state.appliedSeq) - 1),
+    };
+    seekWake.abort(new Error("Viewer position changed"));
+  });
   let failure: unknown;
   let failed = false;
-  const count = (event: unknown) => {
-    bytes += Buffer.byteLength(JSON.stringify(event));
-    if (bytes > 64 * 1024 * 1024)
-      throw new Error(
-        "Terminal reference watch exceeds its 64 MiB event budget; paged state is not yet available",
-      );
-  };
   const present = async (cache: SubscriberCache) => {
+    snapshots = new RecordingSnapshotClient({
+      serverOrigin: origin,
+      streamId: cache.binding.streamId,
+      revision: cache.binding.revision,
+      ...(options.credential ? { credential: options.credential } : {}),
+    });
+    paged = await TerminalWatchState.open(cache, signal, snapshots);
+    const renderer = new PagedTerminalRenderer(
+      paged.reducer,
+      paged.content,
+      origin,
+      options.streamId,
+    );
     if (options.restartView) await cache.savePresentation(0);
     const resumed =
       options.fromMs === undefined && rememberPosition
@@ -120,22 +144,22 @@ async function runWatchRecording(options: {
     }
     const showPosition = async (saved: number, positionedAt?: number) => {
       if (positionedAt !== undefined) viewedTime = positionedAt;
-      state = initialState();
-      bytes = 0;
-      for await (const event of cache.events(0, saved)) {
-        signal.throwIfAborted();
-        count(event);
-        state = apply(state, event);
-      }
-      for (const text of renderTerminalSnapshot(
+      state = await paged!.select(saved, signal);
+      const renderPosition = (root: typeof state) =>
+        renderer.snapshot(root, signal, positionedAt ?? root.timelineMs);
+      for await (const text of paged!.render(
+        renderPosition(state),
         state,
-        origin,
-        options.streamId,
-        positionedAt ?? state.timelineMs,
+        renderPosition,
+        (rebuilt) => {
+          state = rebuilt;
+        },
+        signal,
       )) {
         signal.throwIfAborted();
         await interruptible(write(text, signal), signal);
       }
+      await paged!.save(state, signal);
       if (rememberPosition)
         await cache.savePresentation(saved, positionedAt ?? state.timelineMs);
       viewedTime = positionedAt ?? state.timelineMs;
@@ -152,6 +176,11 @@ async function runWatchRecording(options: {
         const requested = pendingSeek;
         pendingSeek = undefined;
         seekWake = new AbortController();
+        if (requested.sequence !== undefined) {
+          await showPosition(requested.sequence);
+          anchored = true;
+          continue;
+        }
         const through = requested.through ?? cache.cursor.serverSeq;
         let lastTime = 0;
         if (through)
@@ -172,27 +201,39 @@ async function runWatchRecording(options: {
             presentation?.reset(event.timelineMs);
             anchored = true;
           }
-          await presentation?.waitUntil(event.timelineMs, navigation);
-          navigation.throwIfAborted();
-          count(event);
-          const previous = state;
-          state = apply(state, event);
-          const text = renderTerminalEvent(
-            event,
-            state,
-            origin,
-            options.streamId,
-            previous,
+          const admission = await presentation?.waitUntil(
+            event.timelineMs,
+            navigation,
           );
-          if (text) {
-            // Finish an accepted output write before showing a replacement snapshot.
+          navigation.throwIfAborted();
+          const previous = state;
+          const advanced = await paged!.advance(state, event, navigation);
+          state = advanced.state;
+          let wrote = false;
+          const output =
+            admission === "step" || advanced.recovered
+              ? renderer.snapshot(state, signal)
+              : renderer.event(event, state, signal, previous);
+          for await (const text of paged!.render(
+            output,
+            state,
+            (root) => renderer.snapshot(root, signal),
+            (rebuilt) => {
+              state = rebuilt;
+            },
+            signal,
+          )) {
+            // Finish the accepted event output before showing a replacement snapshot.
             await interruptible(write(text, signal), signal);
-            if (rememberPosition)
-              await cache.savePresentation(state.appliedSeq);
+            wrote = true;
           }
+          if (state.appliedSeq % 256 === 0) await paged!.save(state, signal);
+          if (rememberPosition && wrote)
+            await cache.savePresentation(state.appliedSeq);
           viewedTime = state.timelineMs;
           options.onPresented?.(state.appliedSeq);
         }
+        if (state.appliedSeq) await paged!.save(state, signal);
         if (rememberPosition)
           await cache.savePresentation(state.appliedSeq, viewedTime);
         if (pendingSeek) continue;
@@ -230,11 +271,33 @@ async function runWatchRecording(options: {
   const wasFlowing = process.stdin.readableFlowing === true;
   let controlsChanged = false;
   let unsubscribePlayback: (() => void) | undefined;
+  const terminalKeys = new TerminalKeys();
   const onInput = (input: Buffer) => {
-    controlsChanged = true;
-    for (const key of input.toString("utf8")) {
+    for (const key of terminalKeys.feed(input.toString("utf8"))) {
+      if (
+        ![
+          "q",
+          "\u0003",
+          " ",
+          ".",
+          "right",
+          ",",
+          "left",
+          "[",
+          "]",
+          "0",
+          "l",
+          "+",
+          "=",
+          "-",
+        ].includes(key)
+      )
+        continue;
+      controlsChanged = true;
       if (key === "q" || key === "\u0003") stop.abort();
       else if (key === " ") presentation!.setPaused(!presentation!.paused);
+      else if (key === "." || key === "right") presentation!.step();
+      else if (key === "," || key === "left") presentation!.stepBackward();
       else if (key === "[" || key === "]" || key === "0") {
         presentation!.setPaused(true);
         presentation!.seek(
@@ -274,7 +337,7 @@ async function runWatchRecording(options: {
     signal.throwIfAborted();
     if (options.interactive) {
       process.stderr.write(
-        "Watch controls: space pause/resume, +/- speed, [/] seek 30s, 0 beginning, l live catch-up, q quit (receipt continues independently)\n",
+        "Watch controls: space pause/resume, ./Right Arrow next event, ,/Left Arrow previous event, +/- speed, [/] seek 30s, 0 beginning, l live catch-up, q quit (receipt continues independently)\n",
       );
       terminalInstalled = true;
       process.stdin.setRawMode(true);
@@ -313,9 +376,13 @@ async function runWatchRecording(options: {
         ? undefined
         : await cache.loadPlayback();
       if (saved && !options.presentation && !controlsChanged) {
+        if (options.idleCapMs === undefined)
+          presentation.setIdleCap(saved.idleCapMs);
         if (options.speed === undefined) {
           presentation.setSpeed(saved.speed);
-          presentation.setImmediate(saved.immediate);
+          presentation.setImmediate(
+            options.idleCapMs === undefined ? saved.immediate : false,
+          );
         }
         presentation.setPaused(options.interactive ? saved.paused : false);
       }
@@ -324,6 +391,9 @@ async function runWatchRecording(options: {
           speed: presentation.speed,
           paused: presentation.paused,
           immediate: presentation.immediate,
+          ...(presentation.idleCapMs === undefined
+            ? {}
+            : { idleCapMs: presentation.idleCapMs }),
         });
       unsubscribePlayback = presentation.onChange(() => {
         void run(persist);
@@ -342,9 +412,15 @@ async function runWatchRecording(options: {
     stop.abort();
     unsubscribePlayback?.();
     unsubscribeSeek?.();
+    unsubscribeBackward?.();
     signal.removeEventListener("abort", restoreTerminal);
     restoreTerminal();
-    await openedCache?.close();
+    try {
+      await paged?.close();
+    } finally {
+      snapshots?.close();
+      await openedCache?.close();
+    }
   }
 }
 

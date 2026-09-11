@@ -1,0 +1,27 @@
+{
+  "success": true,
+  "checks": [
+    "attachment-dialog-authorized-download",
+    "dialog-close-reopen-escape",
+    "corrupt-download-rejected-and-retry",
+    "standalone-html-attachment",
+    "explicit-interactive-counter-and-stop",
+    "interactive-opaque-origin-and-navigation-isolation",
+    "rendered-html",
+    "stylesheet-import",
+    "png-preview",
+    "jpeg-preview",
+    "webp-preview",
+    "responsive-picture-preview",
+    "script-form-navigation-isolation",
+    "no-external-or-service-requests",
+    "missing-references",
+    "verified-source-download",
+    "selection-and-mobile-viewport"
+  ],
+  "screenshots": [
+    "desktop.png",
+    "mobile.png",
+    "interactive-mobile.png"
+  ]
+}

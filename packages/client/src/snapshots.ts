@@ -5,6 +5,10 @@ import {
   idSchema,
   cursorSchema,
   snapshotSelectionSchema,
+  snapshotLeaseSelectionSchema,
+  snapshotLeaseSchema,
+  snapshotLeaseTokenSchema,
+  type SnapshotLease,
   snapshotContentReferenceSchema,
   type SnapshotDescriptor,
 } from "@agentlive/protocol";
@@ -31,6 +35,7 @@ export class RecordingSnapshotClient {
   private readonly fetcher: typeof fetch;
   private readonly stop = new AbortController();
   private pending = 0;
+  private blobPending = 0;
   private cache: SnapshotReadCache | undefined;
   constructor(options: {
     serverOrigin: string;
@@ -57,6 +62,7 @@ export class RecordingSnapshotClient {
     signal: AbortSignal,
     maximum: number,
     body?: unknown,
+    method?: "DELETE",
   ): Promise<unknown> {
     signal.throwIfAborted();
     if (this.pending >= 16)
@@ -79,11 +85,20 @@ export class RecordingSnapshotClient {
           ...(body === undefined
             ? {}
             : { method: "POST", body: JSON.stringify(body) }),
+          ...(method ? { method } : {}),
         },
         signal,
         maximum,
       );
       signal.throwIfAborted();
+      if (method === "DELETE") {
+        if (response.text !== "")
+          throw new ProtocolError(
+            "invalid_request",
+            "Invalid snapshot release response",
+          );
+        return null;
+      }
       try {
         return JSON.parse(response.text);
       } catch {
@@ -101,6 +116,8 @@ export class RecordingSnapshotClient {
     through: number,
     exact: boolean,
     signal: AbortSignal,
+    timelineMs?: number,
+    leaseToken?: string,
   ): Promise<OpenedSnapshot | null> {
     const result = snapshotSelectionSchema.safeParse(raw);
     if (!result.success)
@@ -127,6 +144,7 @@ export class RecordingSnapshotClient {
       return null;
     }
     if (
+      (timelineMs !== undefined && descriptor.timelineMs > timelineMs) ||
       descriptor.serverSeq > through ||
       (exact && descriptor.serverSeq !== through)
     )
@@ -147,6 +165,7 @@ export class RecordingSnapshotClient {
             offset,
             length,
             readSignal ? AbortSignal.any([signal, readSignal]) : signal,
+            leaseToken,
           ),
       },
       signal,
@@ -188,6 +207,7 @@ export class RecordingSnapshotClient {
     offset: number,
     length: number,
     signal: AbortSignal,
+    leaseToken?: string,
   ): Promise<string> {
     ref = snapshotContentReferenceSchema.parse(ref);
     if (
@@ -228,6 +248,7 @@ export class RecordingSnapshotClient {
       offset: String(offset),
       length: String(length),
     });
+    if (leaseToken !== undefined) query.set("lease", leaseToken);
     const raw = await this.json(
       `/snapshot-content/${ref.hash}?${query}`,
       signal,
@@ -254,22 +275,211 @@ export class RecordingSnapshotClient {
     signal.throwIfAborted();
     return result.data.text;
   }
+  /** Exact codec bytes, bounded to one blob and verified before use by a local content backend. */
+  async readBlob(
+    reference: ContentReference,
+    parent: AbortSignal,
+    leaseToken?: string,
+  ): Promise<Uint8Array> {
+    const ref = snapshotContentReferenceSchema.parse(reference),
+      signal = this.signal(parent);
+    if (leaseToken !== undefined) snapshotLeaseTokenSchema.parse(leaseToken);
+    signal.throwIfAborted();
+    if (this.blobPending >= 16)
+      throw new ProtocolError(
+        "retry_later",
+        "Snapshot blob requests are at capacity",
+      );
+    this.blobPending++;
+    try {
+      const encodedLength = 4 * Math.ceil(ref.byteSize / 3);
+      const query = new URLSearchParams({
+        revision: this.revision,
+        byteSize: String(ref.byteSize),
+        units: String(ref.units),
+      });
+      if (leaseToken !== undefined) query.set("lease", leaseToken);
+      const raw = await this.json(
+        `/snapshot-blobs/${ref.hash}?${query}`,
+        signal,
+        encodedLength + 4096,
+      );
+      const parsed = z.strictObject({ base64: z.string() }).safeParse(raw);
+      if (!parsed.success || parsed.data.base64.length !== encodedLength)
+        throw new ProtocolError(
+          "corrupt_storage",
+          "Invalid snapshot blob response",
+        );
+      let bytes: Uint8Array;
+      try {
+        const decoded = atob(parsed.data.base64);
+        if (decoded.length !== ref.byteSize) throw new Error("length");
+        bytes = new Uint8Array(decoded.length);
+        for (let index = 0; index < decoded.length; index++)
+          bytes[index] = decoded.charCodeAt(index);
+      } catch {
+        throw new ProtocolError(
+          "corrupt_storage",
+          "Invalid snapshot blob encoding",
+        );
+      }
+      signal.throwIfAborted();
+      const hash = Array.from(
+        new Uint8Array(
+          await crypto.subtle.digest(
+            "SHA-256",
+            bytes as Uint8Array<ArrayBuffer>,
+          ),
+        ),
+        (byte) => byte.toString(16).padStart(2, "0"),
+      ).join("");
+      signal.throwIfAborted();
+      if (hash !== ref.hash)
+        throw new ProtocolError(
+          "corrupt_storage",
+          "Snapshot blob checksum differs",
+        );
+      return bytes;
+    } finally {
+      this.blobPending--;
+    }
+  }
+  private leaseResponse(raw: unknown): SnapshotLease | null {
+    const parsed = snapshotLeaseSelectionSchema.safeParse(raw);
+    if (!parsed.success)
+      throw new ProtocolError(
+        "invalid_request",
+        "Invalid snapshot lease response",
+      );
+    if (
+      parsed.data.streamId !== this.streamId ||
+      parsed.data.revision !== this.revision
+    )
+      throw new ProtocolError(
+        "revision_changed",
+        "Snapshot lease binding changed",
+      );
+    const lease = parsed.data.lease;
+    if (lease) {
+      Object.freeze(lease.snapshot.ref);
+      Object.freeze(lease.snapshot.activity);
+      Object.freeze(lease.snapshot);
+      Object.freeze(lease);
+    }
+    return lease;
+  }
+  /** Acquire durable retention before adopting a remote descriptor. Caller persists
+   * provenance and renews/releases the lease for the lifetime of its lazy readers.
+   */
+  async acquireLease(
+    throughServerSeq: number,
+    parent: AbortSignal,
+    timelineMs?: number,
+  ): Promise<SnapshotLease | null> {
+    const through = cursorSchema.parse(throughServerSeq);
+    if (timelineMs !== undefined)
+      z.number().finite().nonnegative().parse(timelineMs);
+    const signal = this.signal(parent);
+    const lease = this.leaseResponse(
+      await this.json("/snapshot-leases", signal, 4096, {
+        revision: this.revision,
+        throughServerSeq: through,
+        ...(timelineMs === undefined ? {} : { timelineMs }),
+      }),
+    );
+    if (
+      lease &&
+      (lease.snapshot.serverSeq > through ||
+        (timelineMs !== undefined && lease.snapshot.timelineMs > timelineMs))
+    )
+      throw new ProtocolError(
+        "sequence_gap",
+        "Snapshot lease is outside the requested boundary",
+      );
+    return lease;
+  }
+  /** Open retained roots with the lease carried by every uncached range request.
+   * The caller owns renewal and release; local cached ranges remain usable offline.
+   */
+  async openLease(
+    previous: SnapshotLease,
+    parent: AbortSignal,
+  ): Promise<OpenedSnapshot> {
+    const lease = snapshotLeaseSchema.parse(previous),
+      signal = this.signal(parent);
+    return (await this.open(
+      {
+        streamId: this.streamId,
+        revision: this.revision,
+        snapshot: lease.snapshot,
+      },
+      lease.snapshot.serverSeq,
+      true,
+      signal,
+      lease.snapshot.timelineMs,
+      lease.token,
+    ))!;
+  }
+  async renewLease(
+    previous: SnapshotLease,
+    parent: AbortSignal,
+  ): Promise<SnapshotLease> {
+    const saved = snapshotLeaseSchema.parse(previous),
+      signal = this.signal(parent);
+    const lease = this.leaseResponse(
+      await this.json(`/snapshot-leases/${saved.token}/renew`, signal, 4096, {
+        revision: this.revision,
+      }),
+    );
+    if (
+      !lease ||
+      lease.token !== saved.token ||
+      canonicalJson(lease.snapshot) !== canonicalJson(saved.snapshot) ||
+      lease.expiresAt < saved.expiresAt
+    )
+      throw new ProtocolError(
+        "invalid_request",
+        "Snapshot lease renewal changed retained roots or lifetime",
+      );
+    return lease;
+  }
+  async releaseLease(
+    previous: SnapshotLease,
+    parent: AbortSignal,
+  ): Promise<void> {
+    const saved = snapshotLeaseSchema.parse(previous),
+      signal = this.signal(parent);
+    const query = new URLSearchParams({ revision: this.revision });
+    await this.json(
+      `/snapshot-leases/${saved.token}?${query}`,
+      signal,
+      4096,
+      undefined,
+      "DELETE",
+    );
+  }
   async select(
     throughServerSeq: number,
     signal: AbortSignal,
+    timelineMs?: number,
   ): Promise<OpenedSnapshot | null> {
+    if (timelineMs !== undefined)
+      z.number().finite().nonnegative().parse(timelineMs);
     const through = cursorSchema.parse(throughServerSeq),
       combined = this.signal(signal);
     const query = new URLSearchParams({
       revision: this.revision,
       throughServerSeq: String(through),
     });
-    return this.open(
+    if (timelineMs !== undefined) query.set("timelineMs", String(timelineMs));
+    const selected = await this.open(
       await this.json(`/snapshots?${query}`, combined, 4096),
       through,
       false,
       combined,
+      timelineMs,
     );
+    return selected;
   }
   async publish(
     throughServerSeq: number,

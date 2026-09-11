@@ -8,4 +8,20 @@ export { SubscriberCache } from "./subscriber-cache.js";
 
 export type { PlaybackPreferences } from "./subscriber-cache.js";
 export { TextStore, CONTENT_PAGE_UNITS } from "./text-store.js";
-export type { TextReference } from "./text-store.js";
+export type {
+  TextReference,
+  TextBlobLoader,
+  ContentCollectionTrace,
+} from "./text-store.js";
+export {
+  ContentPins,
+  type ContentPin,
+  type ContentPinRoot,
+} from "./content-pins.js";
+export { ContentMarks } from "./content-marks.js";
+export {
+  writeArchive,
+  openArchive,
+  type ArchiveMetadata,
+  type OpenArchive,
+} from "./archive.js";

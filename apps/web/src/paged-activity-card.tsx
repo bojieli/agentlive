@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useInspectionOffset } from "./paged-text.js";
 import { ActivityCard, type ActivityRow } from "./activity.js";
 import type { Attachment } from "./attachments.js";
 import type { PagedActivityView, LoadedActivity } from "./paged-activity.js";
@@ -11,7 +12,7 @@ export function PagedActivityCard({
   row: ActivityRow;
   onAttachment: (attachment: Attachment) => void;
 }) {
-  const [offset, setOffset] = useState(0);
+  const [offset, setOffset] = useInspectionOffset(`${row.key}/versions`);
   const [attempt, setAttempt] = useState(0);
   const [saved, setSaved] = useState<{
     view: PagedActivityView;

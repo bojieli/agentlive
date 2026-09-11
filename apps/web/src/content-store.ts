@@ -1,19 +1,38 @@
 import {
+  textPageChoices,
+  changeTextPage,
+  textPosition,
+  type TextPageChoice,
+  type TextPosition,
+} from "./inspection-choices.js";
+import {
+  expansionChoices,
+  expansionKey,
+  changeExpansion,
+} from "./inspection-choices.js";
+import {
   MAX_SEEK_CHECKPOINTS,
   retainSeekCheckpoint,
 } from "./checkpoint-catalog.js";
 import { PagedReducer, ActivityIndex } from "@agentlive/playback";
 import {
   TextContent,
+  attachmentSchema,
   canonicalJson,
   validateTextReference,
   idSchema,
   ProtocolError,
   type TextReference,
   snapshotDescriptorSchema,
+  snapshotLeaseSchema,
+  type SnapshotLease,
   type SnapshotDescriptor,
 } from "@agentlive/protocol";
 import type { BrowserView, CacheBinding } from "./history-cache.js";
+export type SnapshotBlobLoader = (
+  ref: TextReference,
+  signal: AbortSignal,
+) => Promise<Uint8Array>;
 export type BrowserCheckpoint = SnapshotDescriptor & {
   activity?: TextReference;
 };
@@ -36,6 +55,9 @@ export class BrowserContentStore {
   private readonly stop = new AbortController();
   private tail: Promise<void> = Promise.resolve();
   private pending = 0;
+  private generation = 0;
+  private leaseTail: Promise<void> = Promise.resolve();
+  private leasePending = 0;
   private closing: Promise<void> | undefined;
   private readonly codec: TextContent;
   private constructor(
@@ -43,6 +65,7 @@ export class BrowserContentStore {
     private readonly scope: string,
     private readonly maxBytes: number,
     private readonly binding: { streamId: string; revision: string },
+    private readonly loader?: SnapshotBlobLoader,
   ) {
     this.codec = new TextContent({
       load: (ref, signal) => this.load(ref, signal!),
@@ -60,6 +83,7 @@ export class BrowserContentStore {
     binding: CacheBinding,
     parent: AbortSignal,
     maxBytes = MAX_TOTAL,
+    loader?: SnapshotBlobLoader,
   ) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > MAX_TOTAL)
       throw new RangeError("Invalid browser content quota");
@@ -80,7 +104,7 @@ export class BrowserContentStore {
       ),
     );
     signal.throwIfAborted();
-    return new Promise<BrowserContentStore>((resolve, reject) => {
+    const store = await new Promise<BrowserContentStore>((resolve, reject) => {
       const request = factory.open(DATABASE, 1),
         abort = () => reject(signal.reason);
       signal.addEventListener("abort", abort, { once: true });
@@ -103,14 +127,75 @@ export class BrowserContentStore {
           reject(signal.reason);
         } else
           resolve(
-            new BrowserContentStore(request.result, scope, maxBytes, {
-              streamId: binding.streamId,
-              revision: binding.revision,
-            }),
+            new BrowserContentStore(
+              request.result,
+              scope,
+              maxBytes,
+              {
+                streamId: binding.streamId,
+                revision: binding.revision,
+              },
+              loader,
+            ),
           );
       };
       if (signal.aborted) abort();
     });
+    try {
+      store.generation = await store.transaction(
+        "readonly",
+        signal,
+        (tx, read, result) => {
+          read(tx.objectStore("meta").get(`generation:${scope}`), (value) =>
+            result(store.parseGeneration(value)),
+          );
+        },
+      );
+      return store;
+    } catch (error) {
+      await store.close();
+      throw error;
+    }
+  }
+  private parseGeneration(value: unknown): number {
+    if (value === undefined) return 0;
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0)
+      bad();
+    return value;
+  }
+  private async rootTransaction<T>(
+    signal: AbortSignal,
+    work: (
+      tx: IDBTransaction,
+      read: <V>(request: IDBRequest<V>, next: (value: V) => void) => void,
+      result: (value: T) => void,
+      invalidate: () => void,
+    ) => void,
+  ): Promise<T> {
+    let committedGeneration = this.generation;
+    const value = await this.transaction<T>(
+      "readwrite",
+      signal,
+      (tx, read, result) => {
+        const meta = tx.objectStore("meta");
+        read(meta.get(`generation:${this.scope}`), (raw) => {
+          const current = this.parseGeneration(raw);
+          if (current !== this.generation)
+            throw new ProtocolError(
+              "stale_lease",
+              "Browser roots were invalidated; reopen before publishing",
+            );
+          committedGeneration = current;
+          work(tx, read, result, () => {
+            if (current === Number.MAX_SAFE_INTEGER) bad();
+            committedGeneration = current + 1;
+            meta.put(committedGeneration, `generation:${this.scope}`);
+          });
+        });
+      },
+    );
+    this.generation = committedGeneration;
+    return value;
   }
   private transaction<T>(
     mode: IDBTransactionMode,
@@ -125,8 +210,12 @@ export class BrowserContentStore {
     return new Promise((resolve, reject) => {
       const tx = this.db.transaction(["blobs", "meta"], mode);
       let value: T, failure: unknown;
+      let failed = false;
       const fail = (error: unknown) => {
-        failure = error;
+        if (!failed) {
+          failed = true;
+          failure = error;
+        }
         try {
           tx.abort();
         } catch {}
@@ -168,12 +257,37 @@ export class BrowserContentStore {
     signal: AbortSignal,
   ): Promise<Uint8Array> {
     validateTextReference(ref, 67108864);
-    const bytes = await this.transaction<unknown>(
+    let bytes = await this.transaction<unknown>(
       "readonly",
       signal,
       (tx, read, result) =>
         read(tx.objectStore("blobs").get(`${this.scope}:${ref.hash}`), result),
     );
+    if (bytes === undefined && this.loader) {
+      signal.throwIfAborted();
+      const remote = await new Promise<Uint8Array>((resolve, reject) => {
+        const cleanup = () => signal.removeEventListener("abort", abort);
+        const abort = () => {
+          cleanup();
+          reject(signal.reason);
+        };
+        signal.addEventListener("abort", abort, { once: true });
+        Promise.resolve()
+          .then(() => {
+            signal.throwIfAborted();
+            return this.loader!({ ...ref }, signal);
+          })
+          .then(resolve, reject)
+          .finally(cleanup);
+      });
+      signal.throwIfAborted();
+      if (!(remote instanceof Uint8Array) || remote.length !== ref.byteSize)
+        bad();
+      const downloaded = new Uint8Array(remote);
+      if ((await hash(downloaded)) !== ref.hash) bad();
+      await this.install(ref, downloaded, signal);
+      bytes = downloaded;
+    }
     if (!(bytes instanceof Uint8Array) || bytes.length !== ref.byteSize) bad();
     if ((await hash(bytes)) !== ref.hash) bad();
     signal.throwIfAborted();
@@ -191,6 +305,14 @@ export class BrowserContentStore {
     const ref = { hash: await hash(bytes), byteSize: bytes.length, units };
     validateTextReference(ref, 67108864);
     signal.throwIfAborted();
+    await this.install(ref, bytes, signal);
+    return ref;
+  }
+  private async install(
+    ref: TextReference,
+    bytes: Uint8Array,
+    signal: AbortSignal,
+  ): Promise<void> {
     await this.transaction<void>("readwrite", signal, (tx, read, result) => {
       const blobs = tx.objectStore("blobs"),
         meta = tx.objectStore("meta"),
@@ -222,7 +344,6 @@ export class BrowserContentStore {
       });
     });
     signal.throwIfAborted();
-    return ref;
   }
   private run<T>(
     parent: AbortSignal | undefined,
@@ -276,6 +397,271 @@ export class BrowserContentStore {
     ref = { ...ref };
     return this.run(signal, (active) =>
       this.codec.read(ref, offset, length, active),
+    );
+  }
+  /** Complete verified codec dependency set, without checkpoint publication or collection. */
+  trace(ref: TextReference, signal?: AbortSignal) {
+    ref = { ...ref };
+    return this.run(signal, (active) => this.codec.trace(ref, active));
+  }
+  /** Lease metadata must progress while a content loader waits for renewal. */
+  private runLease<T>(
+    parent: AbortSignal | undefined,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (this.closing)
+      return Promise.reject(new Error("Browser content store is closing"));
+    if (this.leasePending >= 16)
+      return Promise.reject(
+        new ProtocolError("retry_later", "Browser lease queue is full"),
+      );
+    const signal = AbortSignal.any([
+      this.stop.signal,
+      AbortSignal.timeout(10000),
+      ...(parent ? [parent] : []),
+    ]);
+    this.leasePending++;
+    const task = this.leaseTail
+      .then(async () => {
+        signal.throwIfAborted();
+        const result = await operation(signal);
+        signal.throwIfAborted();
+        return result;
+      })
+      .finally(() => {
+        this.leasePending--;
+      });
+    this.leaseTail = task.then(
+      () => {},
+      () => {},
+    );
+    return task;
+  }
+  private leases(value: unknown): SnapshotLease[] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || value.length > 128) bad();
+    const leases = value.map((item) => snapshotLeaseSchema.parse(item));
+    if (new Set(leases.map((item) => item.token)).size !== leases.length) bad();
+    return leases;
+  }
+  loadSnapshotLeases(signal?: AbortSignal): Promise<SnapshotLease[]> {
+    return this.runLease(signal, (active) =>
+      this.transaction("readonly", active, (tx, read, result) => {
+        read(tx.objectStore("meta").get(`leases:${this.scope}`), (raw) =>
+          result(this.leases(raw)),
+        );
+      }),
+    );
+  }
+  /** Compare-and-set provenance. Never evict another reader's roots to admit a lease.
+   * The expected record fences a late renewal after release or another tab's update.
+   */
+  saveSnapshotLease(
+    expected: SnapshotLease | null,
+    next: SnapshotLease | null,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const previous =
+      expected === null ? null : snapshotLeaseSchema.parse(expected);
+    const saved = next === null ? null : snapshotLeaseSchema.parse(next);
+    if (!previous && !saved)
+      return Promise.reject(new RangeError("Missing snapshot lease"));
+    if (
+      previous &&
+      saved &&
+      (previous.token !== saved.token ||
+        canonicalJson(previous.snapshot) !== canonicalJson(saved.snapshot) ||
+        saved.expiresAt < previous.expiresAt)
+    )
+      return Promise.reject(
+        new ProtocolError(
+          "precondition_failed",
+          "Snapshot lease renewal changed provenance",
+        ),
+      );
+    const token = (saved ?? previous)!.token;
+    return this.runLease(signal, (active) =>
+      this.rootTransaction(active, (tx, read, result) => {
+        const meta = tx.objectStore("meta"),
+          key = `leases:${this.scope}`;
+        read(meta.get(key), (raw) => {
+          active.throwIfAborted();
+          const leases = this.leases(raw),
+            current = leases.find((item) => item.token === token) ?? null;
+          if (canonicalJson(current) !== canonicalJson(previous))
+            throw new ProtocolError(
+              "precondition_failed",
+              "Snapshot lease provenance changed",
+            );
+          const retained = leases.filter((item) => item.token !== token);
+          if (saved) retained.push(saved);
+          if (retained.length > 128)
+            throw new ProtocolError(
+              "retry_later",
+              "Snapshot lease cache is at capacity",
+            );
+          meta.put(retained, key);
+          result(undefined);
+        });
+      }),
+    );
+  }
+  /** Merge concurrent renewals of the same retained snapshot without resurrecting
+   * a released token or replacing its roots. Expiry may only move forward.
+   */
+  renewSnapshotLease(
+    input: SnapshotLease,
+    signal: AbortSignal,
+  ): Promise<SnapshotLease> {
+    const next = snapshotLeaseSchema.parse(input);
+    return this.runLease(signal, (active) =>
+      this.transaction("readwrite", active, (tx, read, result) => {
+        const meta = tx.objectStore("meta"),
+          key = `leases:${this.scope}`;
+        read(meta.get(key), (raw) => {
+          const leases = this.leases(raw),
+            index = leases.findIndex((item) => item.token === next.token);
+          const current = leases[index];
+          if (!current)
+            throw new ProtocolError(
+              "stale_lease",
+              "Cached snapshot lease was removed",
+            );
+          if (canonicalJson(current.snapshot) !== canonicalJson(next.snapshot))
+            throw new ProtocolError(
+              "event_conflict",
+              "Snapshot lease roots changed",
+            );
+          active.throwIfAborted();
+          const saved = current.expiresAt >= next.expiresAt ? current : next;
+          leases[index] = saved;
+          meta.put(leases, key);
+          result(saved);
+        });
+      }),
+    );
+  }
+  /** Discard derivative roots after lease recovery fails. History and saved view
+   * are retained for reconstruction. Caller closes active paged readers first.
+   */
+  invalidateSnapshotRoots(
+    expectedHead: BrowserCheckpoint | null,
+    expectedLeases: readonly SnapshotLease[],
+    signal: AbortSignal,
+  ): Promise<void> {
+    const head = expectedHead === null ? null : this.checkpoint(expectedHead);
+    const leases = this.leases(expectedLeases);
+    return this.run(signal, (active) =>
+      this.rootTransaction(active, (tx, read, result, invalidate) => {
+        const meta = tx.objectStore("meta");
+        read(meta.get(`root:${this.scope}`), (raw) => {
+          const current = raw === undefined ? null : this.checkpoint(raw);
+          if (canonicalJson(current) !== canonicalJson(head))
+            throw new ProtocolError(
+              "event_conflict",
+              "Browser checkpoint changed during recovery",
+            );
+          read(meta.get(`leases:${this.scope}`), (rawLeases) => {
+            if (canonicalJson(this.leases(rawLeases)) !== canonicalJson(leases))
+              throw new ProtocolError(
+                "event_conflict",
+                "Snapshot leases changed during recovery",
+              );
+            read(meta.get(`recovery:${this.scope}`), (through) => {
+              if (
+                through !== undefined &&
+                (!Number.isSafeInteger(through) || through < 0)
+              )
+                bad();
+              active.throwIfAborted();
+              meta.put(
+                Math.max(through ?? 0, head?.serverSeq ?? 0),
+                `recovery:${this.scope}`,
+              );
+              invalidate();
+              meta.delete(`root:${this.scope}`);
+              meta.delete(`seek:${this.scope}`);
+              meta.delete(`leases:${this.scope}`);
+              result(undefined);
+            });
+          });
+        });
+      }),
+    );
+  }
+  /** One-time migration for caches whose derivative roots may contain imports
+   * created before lease provenance existed. Preserve authoritative history/view.
+   */
+  prepareSnapshotRetention(signal: AbortSignal): Promise<void> {
+    return this.run(signal, (active) =>
+      this.rootTransaction(active, (tx, read, result, invalidate) => {
+        const meta = tx.objectStore("meta");
+        read(meta.get(`retention-format:${this.scope}`), (version) => {
+          if (version === 1) {
+            result(undefined);
+            return;
+          }
+          if (version !== undefined) bad();
+          read(meta.get(`root:${this.scope}`), (raw) => {
+            const head = raw === undefined ? null : this.checkpoint(raw);
+            read(meta.get(`recovery:${this.scope}`), (through) => {
+              if (
+                through !== undefined &&
+                (!Number.isSafeInteger(through) || through < 0)
+              )
+                bad();
+              active.throwIfAborted();
+              meta.put(
+                Math.max(through ?? 0, head?.serverSeq ?? 0),
+                `recovery:${this.scope}`,
+              );
+              invalidate();
+              meta.delete(`root:${this.scope}`);
+              meta.delete(`seek:${this.scope}`);
+              meta.delete(`leases:${this.scope}`);
+              meta.put(1, `retention-format:${this.scope}`);
+              result(undefined);
+            });
+          });
+        });
+      }),
+    );
+  }
+  loadRecoveryThrough(signal: AbortSignal): Promise<number> {
+    return this.runLease(signal, (active) =>
+      this.transaction("readonly", active, (tx, read, result) => {
+        read(tx.objectStore("meta").get(`recovery:${this.scope}`), (value) => {
+          if (
+            value !== undefined &&
+            (!Number.isSafeInteger(value) || value < 0)
+          )
+            bad();
+          result(value ?? 0);
+        });
+      }),
+    );
+  }
+  finishRecovery(signal: AbortSignal): Promise<void> {
+    return this.runLease(signal, (active) =>
+      this.rootTransaction(active, (tx, read, result) => {
+        const meta = tx.objectStore("meta");
+        read(meta.get(`recovery:${this.scope}`), (through) => {
+          if (through === undefined) {
+            result(undefined);
+            return;
+          }
+          if (!Number.isSafeInteger(through) || through < 0) bad();
+          read(meta.get(`root:${this.scope}`), (raw) => {
+            if (!raw || this.checkpoint(raw).serverSeq < through)
+              throw new ProtocolError(
+                "precondition_failed",
+                "Snapshot recovery is incomplete",
+              );
+            meta.delete(`recovery:${this.scope}`);
+            result(undefined);
+          });
+        });
+      }),
     );
   }
   private checkpoint(value: unknown): BrowserCheckpoint {
@@ -399,7 +785,7 @@ export class BrowserContentStore {
       );
     return this.run(signal, async (active) => {
       await this.validateCheckpoint(next, active);
-      return this.transaction("readwrite", active, (tx, read, result) => {
+      return this.rootTransaction(active, (tx, read, result) => {
         const meta = tx.objectStore("meta");
         read(meta.get(`root:${this.scope}`), (raw) => {
           const head = raw === undefined ? null : this.checkpoint(raw);
@@ -457,7 +843,7 @@ export class BrowserContentStore {
     next = this.checkpoint(next);
     return this.run(signal, async (active) => {
       await this.validateCheckpoint(next, active);
-      return this.transaction("readwrite", active, (tx, read, result) => {
+      return this.rootTransaction(active, (tx, read, result) => {
         const meta = tx.objectStore("meta"),
           key = `root:${this.scope}`;
         read(meta.get(key), (raw) => {
@@ -515,37 +901,19 @@ export class BrowserContentStore {
       });
     });
   }
-  private presentation(value: unknown): BrowserView {
-    const v = value as BrowserView;
-    if (
-      !v ||
-      typeof v !== "object" ||
-      Object.keys(v).sort().join(",") !== "mode,serverSeq,speed,timelineMs" ||
-      !Number.isSafeInteger(v.serverSeq) ||
-      v.serverSeq < 0 ||
-      !Number.isFinite(v.timelineMs) ||
-      v.timelineMs < 0 ||
-      !Number.isFinite(v.speed) ||
-      v.speed < 1 / 1024 ||
-      v.speed > 1024 ||
-      !["follow", "paused", "playing"].includes(v.mode)
-    )
-      bad();
-    return { ...v };
-  }
   loadView(signal: AbortSignal): Promise<BrowserView | undefined> {
     return this.run(signal, (active) =>
       this.transaction("readonly", active, (tx, read, result) => {
         read(tx.objectStore("meta").get(`view:${this.scope}`), (raw) =>
-          result(raw === undefined ? undefined : this.presentation(raw)),
+          result(raw === undefined ? undefined : browserPresentation(raw)),
         );
       }),
     );
   }
   saveView(input: BrowserView, signal: AbortSignal): Promise<void> {
-    const view = this.presentation(input);
+    const view = browserPresentation(input);
     return this.run(signal, (active) =>
-      this.transaction("readwrite", active, (tx, read, result) => {
+      this.rootTransaction(active, (tx, read, result) => {
         const meta = tx.objectStore("meta");
         read(meta.get(`root:${this.scope}`), (raw) => {
           const head = raw === undefined ? null : this.checkpoint(raw);
@@ -558,6 +926,96 @@ export class BrowserContentStore {
               "Playback preference exceeds saved receipt",
             );
           meta.put(view, `view:${this.scope}`);
+          result(undefined);
+        });
+      }),
+    );
+  }
+  loadAttachmentChoice(signal: AbortSignal) {
+    return this.runLease(signal, (active) =>
+      this.transaction<import("./attachments.js").Attachment | undefined>(
+        "readonly",
+        active,
+        (tx, read, result) => {
+          read(
+            tx.objectStore("meta").get(`attachment-choice:${this.scope}`),
+            (value) =>
+              result(
+                value === undefined ? undefined : attachmentSchema.parse(value),
+              ),
+          );
+        },
+      ),
+    );
+  }
+  setAttachmentChoice(
+    value: import("./attachments.js").Attachment | undefined,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const choice =
+      value === undefined ? undefined : attachmentSchema.parse(value);
+    return this.runLease(signal, (active) =>
+      this.rootTransaction(active, (tx, _read, result) => {
+        const meta = tx.objectStore("meta"),
+          key = `attachment-choice:${this.scope}`;
+        if (choice === undefined) meta.delete(key);
+        else meta.put(choice, key);
+        result(undefined);
+      }),
+    );
+  }
+  loadTextPages(signal: AbortSignal): Promise<TextPageChoice[]> {
+    return this.runLease(signal, (active) =>
+      this.transaction("readonly", active, (tx, read, result) => {
+        read(tx.objectStore("meta").get(`text-pages:${this.scope}`), (value) =>
+          result(textPageChoices(value)),
+        );
+      }),
+    );
+  }
+  setTextPage(
+    key: string,
+    page: TextPosition,
+    signal: AbortSignal,
+  ): Promise<void> {
+    key = expansionKey(key);
+    page = textPosition(page);
+    return this.runLease(signal, (active) =>
+      this.rootTransaction(active, (tx, read, result) => {
+        const meta = tx.objectStore("meta");
+        read(meta.get(`text-pages:${this.scope}`), (value) => {
+          meta.put(
+            changeTextPage(textPageChoices(value), key, page),
+            `text-pages:${this.scope}`,
+          );
+          result(undefined);
+        });
+      }),
+    );
+  }
+  loadExpansions(signal: AbortSignal): Promise<string[]> {
+    return this.runLease(signal, (active) =>
+      this.transaction("readonly", active, (tx, read, result) => {
+        read(tx.objectStore("meta").get(`expansions:${this.scope}`), (value) =>
+          result(expansionChoices(value)),
+        );
+      }),
+    );
+  }
+  setExpansion(
+    key: string,
+    expanded: boolean,
+    signal: AbortSignal,
+  ): Promise<void> {
+    key = expansionKey(key);
+    return this.runLease(signal, (active) =>
+      this.rootTransaction(active, (tx, read, result) => {
+        const meta = tx.objectStore("meta");
+        read(meta.get(`expansions:${this.scope}`), (value) => {
+          meta.put(
+            changeExpansion(expansionChoices(value), key, expanded),
+            `expansions:${this.scope}`,
+          );
           result(undefined);
         });
       }),
@@ -584,8 +1042,43 @@ export class BrowserContentStore {
   close() {
     if (!this.closing) {
       this.stop.abort(new Error("Browser content store is closing"));
-      this.closing = this.tail.then(() => this.db.close());
+      this.closing = Promise.all([this.tail, this.leaseTail]).then(() =>
+        this.db.close(),
+      );
     }
     return this.closing;
   }
+}
+
+export function browserPresentation(value: unknown): BrowserView {
+  const v = value as BrowserView;
+  if (
+    !v ||
+    typeof v !== "object" ||
+    ![
+      "mode,serverSeq,speed,timelineMs",
+      "idleCapMs,mode,serverSeq,speed,timelineMs",
+      "gapAnchorMs,mode,serverSeq,speed,timelineMs",
+      "gapAnchorMs,idleCapMs,mode,serverSeq,speed,timelineMs",
+    ].includes(Object.keys(v).sort().join(",")) ||
+    ("idleCapMs" in v &&
+      (typeof v.idleCapMs !== "number" ||
+        !Number.isFinite(v.idleCapMs) ||
+        v.idleCapMs < 0)) ||
+    ("gapAnchorMs" in v &&
+      (typeof v.gapAnchorMs !== "number" ||
+        !Number.isFinite(v.gapAnchorMs) ||
+        v.gapAnchorMs < 0 ||
+        v.gapAnchorMs > v.timelineMs)) ||
+    !Number.isSafeInteger(v.serverSeq) ||
+    v.serverSeq < 0 ||
+    !Number.isFinite(v.timelineMs) ||
+    v.timelineMs < 0 ||
+    !Number.isFinite(v.speed) ||
+    v.speed < 1 / 1024 ||
+    v.speed > 1024 ||
+    !["follow", "paused", "playing"].includes(v.mode)
+  )
+    bad();
+  return { ...v };
 }

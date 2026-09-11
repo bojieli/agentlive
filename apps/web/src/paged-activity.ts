@@ -1,7 +1,9 @@
 import { ProtocolError } from "@agentlive/protocol";
 import { objectAnchor } from "./workflow-card.js";
 import {
+  completenessSummary,
   initialState,
+  type CompletenessSummary,
   type RecordingState,
   type PagedReducer,
   type PagedRecordingState,
@@ -29,7 +31,18 @@ export class PagedActivityView {
       index: ActivityIndex;
       root: ActivityIndexRoot;
     },
+    private readonly recover?: (signal: AbortSignal) => Promise<void>,
+    private readonly release?: () => Promise<void>,
   ) {
+    const originalSource = source;
+    this.source = (ref) => {
+      const text = originalSource(ref);
+      return Object.freeze<TextSource>({
+        ...text,
+        read: (offset, length, signal) =>
+          this.readRecovery(() => text.read(offset, length, signal), signal),
+      });
+    };
     this.root = structuredClone(root);
     if (activity) {
       this.activity = {
@@ -43,6 +56,53 @@ export class PagedActivityView {
         );
     }
   }
+  private recovery: Promise<void> | undefined;
+  private reads = new Set<Promise<unknown>>();
+  private closing: Promise<void> | undefined;
+  /** Reject new reads, drain admitted reads, then release the presentation pin. */
+  close(): Promise<void> {
+    if (!this.closing)
+      this.closing = Promise.allSettled([...this.reads]).then(() =>
+        this.release?.(),
+      );
+    return this.closing;
+  }
+  private async readRecovery<T>(
+    operation: () => Promise<T>,
+    signal: AbortSignal,
+  ): Promise<T> {
+    if (this.closing) throw new Error("Activity view is closed");
+    const task = this.readOnce(operation, signal);
+    this.reads.add(task);
+    try {
+      return await task;
+    } finally {
+      this.reads.delete(task);
+    }
+  }
+  private async readOnce<T>(
+    operation: () => Promise<T>,
+    signal: AbortSignal,
+  ): Promise<T> {
+    signal.throwIfAborted();
+    try {
+      return await operation();
+    } catch (error) {
+      signal.throwIfAborted();
+      if (
+        !this.recover ||
+        !(error instanceof ProtocolError) ||
+        error.code !== "stale_lease"
+      )
+        throw error;
+      this.recovery ??= this.recover(signal).finally(() => {
+        this.recovery = undefined;
+      });
+      await this.recovery;
+      signal.throwIfAborted();
+      return operation();
+    }
+  }
   /** Small presentation header; object maps are loaded separately by the activity feed. */
   get summary(): RecordingState {
     return {
@@ -51,9 +111,70 @@ export class PagedActivityView {
       timelineMs: this.root.timelineMs,
       title: this.root.title,
       lifecycle: this.root.lifecycle,
+      ...(this.root.completeness
+        ? { completeness: { ...this.root.completeness } }
+        : {}),
     };
   }
-  async attachment(artifactId: string, version: number, signal: AbortSignal) {
+  /** Persisted notice, or a bounded derivation for an ended boundary. At most
+   * `limit` of the most recently inserted messages and tools are each checked. */
+  completeness(
+    signal: AbortSignal,
+    limit = 2048,
+  ): Promise<CompletenessSummary | undefined> {
+    return this.readRecovery(async () => {
+      if (this.root.completeness || this.root.lifecycle !== "ended")
+        return completenessSummary(this.root);
+      let unfinishedMessages = 0,
+        unfinishedTools = 0,
+        exhaustive = true;
+      for (const name of ["messages", "tools"] as const) {
+        const size = this.root.maps[name]?.size ?? 0;
+        if (size > limit) exhaustive = false;
+        for (
+          let offset = Math.max(0, size - limit);
+          offset < size;
+          offset += 32
+        )
+          for (const [, item] of await this.reducer.entries(
+            this.root,
+            name,
+            offset,
+            32,
+            signal,
+          )) {
+            if (item.visible === false) continue;
+            if (
+              name === "messages" &&
+              !(item as PagedItem<"messages">).completed
+            )
+              unfinishedMessages++;
+            if (
+              name === "tools" &&
+              (item as PagedItem<"tools">).status === "running"
+            )
+              unfinishedTools++;
+          }
+      }
+      signal.throwIfAborted();
+      return completenessSummary(this.root, {
+        unfinishedMessages,
+        unfinishedTools,
+        exhaustive,
+      });
+    }, signal);
+  }
+  attachment(artifactId: string, version: number, signal: AbortSignal) {
+    return this.readRecovery(
+      () => this.attachmentOnce(artifactId, version, signal),
+      signal,
+    );
+  }
+  private async attachmentOnce(
+    artifactId: string,
+    version: number,
+    signal: AbortSignal,
+  ) {
     const artifact = await this.reducer.get(
       this.root,
       "artifacts",
@@ -83,16 +204,31 @@ export class PagedActivityView {
     signal: AbortSignal,
   ): Promise<ActivityRow[]> {
     const { index, root } = this.indexed();
-    return (await index.entries(root, offset, limit, signal)).map((row) => ({
+    return (
+      await this.readRecovery(
+        () => index.entries(root, offset, limit, signal),
+        signal,
+      )
+    ).map((row) => ({
       ...row,
       anchor: objectAnchor(row.kind, row.id),
     }));
   }
   position(key: string, signal: AbortSignal) {
     const { index, root } = this.indexed();
-    return index.position(root, key, signal);
+    return this.readRecovery(() => index.position(root, key, signal), signal);
   }
   async load(
+    row: ActivityRow,
+    signal: AbortSignal,
+    versionOffset = 0,
+  ): Promise<LoadedActivity | null> {
+    return this.readRecovery(
+      () => this.loadOnce(row, signal, versionOffset),
+      signal,
+    );
+  }
+  private async loadOnce(
     row: ActivityRow,
     signal: AbortSignal,
     versionOffset = 0,

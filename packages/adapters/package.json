@@ -10,10 +10,15 @@
     }
   },
   "dependencies": {
+    "@agentlive/client": "workspace:*",
     "@agentlive/protocol": "workspace:*",
     "@agentlive/publisher": "workspace:*",
-    "zod": "4.5.4",
-    "@agentlive/client": "workspace:*",
-    "@agentlive/storage": "workspace:*"
+    "@agentlive/storage": "workspace:*",
+    "es-module-lexer": "3.0.2",
+    "parse5": "8.0.1",
+    "postcss": "8.5.28",
+    "postcss-value-parser": "4.2.0",
+    "srcset": "5.0.3",
+    "zod": "4.5.4"
   }
 }

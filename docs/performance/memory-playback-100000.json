@@ -1,0 +1,124 @@
+{
+  "success": false,
+  "runtime": "v26.8.1",
+  "platform": "darwin/arm64",
+  "count": 100000,
+  "completed": 35584,
+  "phase": "complete",
+  "collections": [
+    {
+      "through": 4352,
+      "elapsedMs": 168.64304200000004,
+      "removedBytes": 3867802,
+      "removedEntries": 3581,
+      "bytes": 434704,
+      "entries": 1342
+    },
+    {
+      "through": 7680,
+      "elapsedMs": 406.49875,
+      "removedBytes": 3891691,
+      "removedEntries": 2853,
+      "bytes": 846186,
+      "entries": 2334
+    },
+    {
+      "through": 10496,
+      "elapsedMs": 789.5102920000002,
+      "removedBytes": 3903825,
+      "removedEntries": 2401,
+      "bytes": 1232237,
+      "entries": 3186
+    },
+    {
+      "through": 13056,
+      "elapsedMs": 1155.7058749999997,
+      "removedBytes": 3989838,
+      "removedEntries": 2175,
+      "bytes": 1617162,
+      "entries": 3968
+    },
+    {
+      "through": 15360,
+      "elapsedMs": 1628.180542,
+      "removedBytes": 3986875,
+      "removedEntries": 1951,
+      "bytes": 1978593,
+      "entries": 4680
+    },
+    {
+      "through": 17664,
+      "elapsedMs": 2320.5404160000007,
+      "removedBytes": 4061893,
+      "removedEntries": 2107,
+      "bytes": 2423564,
+      "entries": 5434
+    },
+    {
+      "through": 19968,
+      "elapsedMs": 3271.760875,
+      "removedBytes": 4000504,
+      "removedEntries": 2505,
+      "bytes": 2812771,
+      "entries": 6172
+    },
+    {
+      "through": 22016,
+      "elapsedMs": 4032.5230420000007,
+      "removedBytes": 3882177,
+      "removedEntries": 2211,
+      "bytes": 3183737,
+      "entries": 6838
+    },
+    {
+      "through": 24320,
+      "elapsedMs": 5098.184416,
+      "removedBytes": 4269132,
+      "removedEntries": 2695,
+      "bytes": 3624640,
+      "entries": 7594
+    },
+    {
+      "through": 26624,
+      "elapsedMs": 6609.900540999999,
+      "removedBytes": 3884655,
+      "removedEntries": 2761,
+      "bytes": 4087623,
+      "entries": 8366
+    },
+    {
+      "through": 28928,
+      "elapsedMs": 7987.862374999997,
+      "removedBytes": 3872883,
+      "removedEntries": 2729,
+      "bytes": 4591971,
+      "entries": 9164
+    },
+    {
+      "through": 31232,
+      "elapsedMs": 9260.930499999995,
+      "removedBytes": 4168345,
+      "removedEntries": 2753,
+      "bytes": 5075641,
+      "entries": 9938
+    },
+    {
+      "through": 33280,
+      "elapsedMs": 10092.67325,
+      "removedBytes": 3822694,
+      "removedEntries": 2445,
+      "bytes": 5502812,
+      "entries": 10624
+    }
+  ],
+  "peakHeap": 875716344,
+  "peakRss": 1109540864,
+  "peakBytes": 9968484,
+  "peakEntries": 14149,
+  "failure": "TimeoutError: The operation was aborted due to timeout\n    at new DOMException (node:internal/per_context/domexception:79:18)\n    at Timeout._onTimeout (node:internal/abort_controller:210:9)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+  "afterClose": {
+    "bytes": 0,
+    "entries": 0
+  },
+  "elapsedMs": 67323.098625
+}

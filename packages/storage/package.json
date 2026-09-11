@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@agentlive/protocol": "workspace:*",
-    "fs-native-extensions": "1.5.1"
+    "fs-native-extensions": "1.5.1",
+    "yauzl": "3.4.0",
+    "yazl": "3.3.1"
   }
 }

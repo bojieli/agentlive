@@ -1,0 +1,147 @@
+{
+  "success": true,
+  "checks": [
+    "cached private join",
+    "fresh IndexedDB imports server snapshot blobs",
+    "exact tied previous event",
+    "idle cap control",
+    "live receipt preserves paused prefix",
+    "IndexedDB survives page reload with exact selection",
+    "renderer crash preserves committed cached selection",
+    "keyboard next event",
+    "active generation recovery preserves paused presentation",
+    "follow live",
+    "activity keyboard navigation retains row focus",
+    "desktop viewport has no document overflow",
+    "mobile viewport has no document overflow",
+    "paged activity search",
+    "clear persistent playback cache",
+    "uncached fallback joins and steps",
+    "multi-row virtualized keyboard navigation in both cache modes"
+  ],
+  "errors": [],
+  "timings": [
+    {
+      "name": "cached private join",
+      "elapsedMs": 184.37537499999985
+    },
+    {
+      "name": "fresh IndexedDB imports server snapshot blobs",
+      "elapsedMs": 76.19229099999984
+    },
+    {
+      "name": "exact tied previous event",
+      "elapsedMs": 105.72554200000013
+    },
+    {
+      "name": "idle cap control",
+      "elapsedMs": 4.3350410000000466
+    },
+    {
+      "name": "live receipt preserves paused prefix",
+      "elapsedMs": 28.944499999999834
+    },
+    {
+      "name": "IndexedDB survives page reload with exact selection",
+      "elapsedMs": 168.07212499999991
+    },
+    {
+      "name": "renderer crash preserves committed cached selection",
+      "elapsedMs": 570.8048749999998
+    },
+    {
+      "name": "keyboard next event",
+      "elapsedMs": 31.37350000000015
+    },
+    {
+      "name": "active generation recovery preserves paused presentation",
+      "elapsedMs": 92.22412500000019
+    },
+    {
+      "name": "follow live",
+      "elapsedMs": 31.46324999999979
+    },
+    {
+      "name": "activity keyboard navigation retains row focus",
+      "elapsedMs": 31.543458999999984
+    },
+    {
+      "name": "desktop viewport has no document overflow",
+      "elapsedMs": 338.1249579999999
+    },
+    {
+      "name": "mobile viewport has no document overflow",
+      "elapsedMs": 272.77745799999957
+    },
+    {
+      "name": "paged activity search",
+      "elapsedMs": 61.609500000000025
+    },
+    {
+      "name": "clear persistent playback cache",
+      "elapsedMs": 50.027458000000024
+    },
+    {
+      "name": "uncached fallback joins and steps",
+      "elapsedMs": 127.22625000000016
+    },
+    {
+      "name": "multi-row virtualized keyboard navigation in both cache modes",
+      "elapsedMs": 28390.071375
+    }
+  ],
+  "phase": "complete",
+  "browser": "152.0.7977.83",
+  "accessibility": {
+    "desktop": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    },
+    "mobile": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    }
+  },
+  "navigation": [
+    {
+      "cached": true,
+      "totalRows": 65,
+      "mountedRows": 12,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    },
+    {
+      "cached": false,
+      "totalRows": 65,
+      "mountedRows": 7,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    }
+  ]
+}

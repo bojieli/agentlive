@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { TextStore } from "../../packages/storage/src/index.js";
 import {
   PagedReducer,
+  PagedTerminalRenderer,
+  renderTerminalEvent,
+  renderTerminalSnapshot,
   OrderedContentMap,
   initialPagedState,
   initialState,
@@ -42,6 +45,33 @@ it("matches reference replay for every event kind, pending replacements, and che
     let reducer = new PagedReducer(store),
       state = initialPagedState(),
       reference = initialState();
+    const verifyTrace = async () => {
+      const checkpoint = await reducer.checkpoint(state, binding);
+      const retained = new Set<string>();
+      await reducer.trace(checkpoint, binding, async (reference) => {
+        // Every emitted reference must actually be a valid codec manifest.
+        await current.trace(reference);
+        retained.add(reference.hash);
+        reference.hash = "0".repeat(64);
+      });
+      const isolated = new PagedReducer({
+        put: async () => {
+          throw new Error("No writes during trace recovery");
+        },
+        append: async () => {
+          throw new Error("No appends during trace recovery");
+        },
+        read: (ref, offset, length, signal) => {
+          if (!retained.has(ref.hash))
+            throw new Error("Missing traced content");
+          return current.read(ref, offset, length, signal);
+        },
+      });
+      expect(
+        await isolated.materialize(await isolated.open(checkpoint, binding)),
+      ).toStrictEqual(reference);
+      expect(retained.has("a".repeat(64))).toBe(false);
+    };
     const attachment = {
       artifactId: "artifact",
       version: 1,
@@ -205,6 +235,16 @@ it("matches reference replay for every event kind, pending replacements, and che
         payload: { reason: "synthetic gap", recoveredState: true },
       },
       {
+        kind: "capture.completeness",
+        payload: {
+          version: 1,
+          reason: "frozen-native-source",
+          unfinishedMessages: 1,
+          unfinishedTools: 1,
+          withheldTextMessages: 1,
+        },
+      },
+      {
         kind: "capture.clock",
         payload: {
           segmentId: "clock",
@@ -262,6 +302,8 @@ it("matches reference replay for every event kind, pending replacements, and che
     );
     for (const content of contents) {
       const record = event(reference.appliedSeq + 1, content);
+      const previous = reference,
+        prior = state;
       reference = apply(reference, record);
       state = await reducer.apply(state, record);
       if (
@@ -273,6 +315,7 @@ it("matches reference replay for every event kind, pending replacements, and che
         current = await TextStore.open(root);
         reducer = new PagedReducer(current);
         state = await reducer.open(checkpoint, binding);
+        await verifyTrace();
         await expect(
           reducer.open(checkpoint, { ...binding, revision: "other" }),
         ).rejects.toMatchObject({ code: "revision_changed" });
@@ -280,7 +323,59 @@ it("matches reference replay for every event kind, pending replacements, and che
       expect(await reducer.materialize(state), content.kind).toStrictEqual(
         reference,
       );
+      const renderer = new PagedTerminalRenderer(
+        reducer,
+        current,
+        "https://example.test",
+        "stream",
+      );
+      const collect = async (chunks: AsyncIterable<string>) => {
+        let output = "";
+        for await (const chunk of chunks) output += chunk;
+        return output;
+      };
+      expect(
+        await collect(
+          renderer.event(record, state, AbortSignal.timeout(10000), prior),
+        ),
+        content.kind,
+      ).toBe(
+        renderTerminalEvent(
+          record,
+          reference,
+          "https://example.test",
+          "stream",
+          previous,
+        ),
+      );
+      expect(
+        await collect(
+          renderer.snapshot(
+            state,
+            AbortSignal.timeout(10000),
+            state.timelineMs + 5,
+          ),
+        ),
+        content.kind,
+      ).toBe(
+        [
+          ...renderTerminalSnapshot(
+            reference,
+            "https://example.test",
+            "stream",
+            state.timelineMs + 5,
+          ),
+        ].join(""),
+      );
     }
+    const batched = await reducer.applyBatch(
+      initialPagedState(),
+      contents.map((content, index) => event(index + 1, content)),
+    );
+    expect(await reducer.checkpoint(batched, binding)).toEqual(
+      await reducer.checkpoint(state, binding),
+    );
+    await verifyTrace();
     await expect(reducer.materialize(state, 10)).rejects.toThrow("budget");
   } finally {
     await current.close();
@@ -455,6 +550,13 @@ it("rejects an artifact descriptor stored under a different identity or version"
         await store.put(JSON.stringify({ ...artifact, versions })),
       );
       const corrupted = { ...state, maps: { ...state.maps, artifacts } };
+      await expect(
+        reducer.trace(
+          await reducer.checkpoint(corrupted, binding),
+          binding,
+          async () => {},
+        ),
+      ).rejects.toMatchObject({ code: "corrupt_storage" });
       await expect(reducer.materialize(corrupted)).rejects.toMatchObject({
         code: "corrupt_storage",
       });
@@ -470,6 +572,58 @@ it("rejects an artifact descriptor stored under a different identity or version"
         .get("artifact")!
         .versions.get(1),
     ).toEqual(descriptor);
+  } finally {
+    await store.close();
+  }
+});
+
+it("does not interpret user JSON as content links and fails incomplete or cancelled traces", async () => {
+  const { store } = await setup();
+  try {
+    const reducer = new PagedReducer(store);
+    const fake = { hash: "f".repeat(64), byteSize: 100, units: 20 };
+    const state = await reducer.applyBatch(initialPagedState(), [
+      event(1, {
+        kind: "message.started",
+        payload: { messageId: "m", role: "assistant" },
+      }),
+      event(2, {
+        kind: "message.text.append",
+        payload: { messageId: "m", text: JSON.stringify(fake) },
+      }),
+    ]);
+    const checkpoint = await reducer.checkpoint(state, binding);
+    const refs = new Set<string>();
+    await reducer.trace(checkpoint, binding, async (ref) => {
+      refs.add(ref.hash);
+      await store.trace(ref);
+    });
+    expect(refs.has(fake.hash)).toBe(false);
+    let calls = 0;
+    await expect(
+      reducer.trace(checkpoint, { ...binding, revision: "other" }, async () => {
+        calls++;
+      }),
+    ).rejects.toMatchObject({ code: "revision_changed" });
+    expect(calls).toBe(0);
+    const abort = new AbortController();
+    await expect(
+      reducer.trace(
+        checkpoint,
+        binding,
+        async () => {
+          calls++;
+          abort.abort(new Error("trace cancelled"));
+        },
+        abort.signal,
+      ),
+    ).rejects.toThrow("trace cancelled");
+    expect(calls).toBe(1);
+    await expect(
+      reducer.trace(checkpoint, binding, async () => {
+        throw new Error("mark failed");
+      }),
+    ).rejects.toThrow("mark failed");
   } finally {
     await store.close();
   }

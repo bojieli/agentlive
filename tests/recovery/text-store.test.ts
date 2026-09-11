@@ -501,3 +501,123 @@ it.each(["put", "append"] as const)(
     }
   },
 );
+
+it("flushes all installed pages once before exposing a text reference and retries an uncertain directory flush", async () => {
+  const atomic = await import("../../packages/storage/src/atomic.js");
+  const root = await directory();
+  const store = await TextStore.open(root);
+  const original = atomic.syncDirectory;
+  const flush = vi.spyOn(atomic, "syncDirectory");
+  const text =
+    "a".repeat(CONTENT_PAGE_UNITS) + "b".repeat(CONTENT_PAGE_UNITS) + "tail";
+  try {
+    flush.mockRejectedValueOnce(new Error("directory flush failed"));
+    await expect(store.put(text)).rejects.toThrow("directory flush failed");
+    expect(flush).toHaveBeenCalledTimes(1);
+    const installedBytes = store.usage.storedBytes;
+    expect(installedBytes).toBeGreaterThan(text.length);
+    flush.mockImplementation(original);
+    const ref = await store.put(text);
+    expect(flush).toHaveBeenCalledTimes(2);
+    expect(store.usage.storedBytes).toBe(installedBytes);
+    expect(await store.read(ref, CONTENT_PAGE_UNITS - 1, 2)).toBe("ab");
+    const appended = await store.append(ref, " suffix");
+    expect(flush).toHaveBeenCalledTimes(3);
+    expect(await store.read(appended, text.length, 7)).toBe(" suffix");
+  } finally {
+    flush.mockRestore();
+    await store.close();
+  }
+});
+it("holds ownership until the final directory flush drains during close", async () => {
+  const atomic = await import("../../packages/storage/src/atomic.js");
+  const root = await directory();
+  const store = await TextStore.open(root);
+  const original = atomic.syncDirectory;
+  let entered!: () => void, release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const wait = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const flush = vi
+    .spyOn(atomic, "syncDirectory")
+    .mockImplementationOnce(async (path) => {
+      entered();
+      await wait;
+      await original(path);
+    });
+  try {
+    const failed = expect(store.put("durability boundary")).rejects.toThrow(
+      "closing",
+    );
+    await ready;
+    const closing = store.close();
+    await expect(TextStore.open(root)).rejects.toThrow();
+    release();
+    await failed;
+    await closing;
+    const reopened = await TextStore.open(root);
+    try {
+      const ref = await reopened.put("durability boundary");
+      expect(await reopened.read(ref, 0, ref.units)).toBe(
+        "durability boundary",
+      );
+    } finally {
+      await reopened.close();
+    }
+  } finally {
+    release?.();
+    flush.mockRestore();
+    await store.close();
+  }
+});
+
+it("traces complete unique codec dependencies, copies admission refs and rejects damaged pages", async () => {
+  const root = await directory();
+  let store = await TextStore.open(root);
+  try {
+    const ref = await store.put("x".repeat(CONTENT_PAGE_UNITS * 2) + "tail");
+    const before = store.usage.storedBytes;
+    const caller = { ...ref };
+    const pending = store.trace(caller);
+    caller.hash = "0".repeat(64);
+    const traced = await pending;
+    // The two identical full pages share one blob.
+    expect(traced).toHaveLength(3);
+    expect(traced[0]).toEqual(ref);
+    expect(new Set(traced.map((item) => item.hash)).size).toBe(3);
+    expect(traced.reduce((sum, item) => sum + item.byteSize, 0)).toBe(before);
+    expect(store.usage.storedBytes).toBe(before);
+    await store.close();
+    store = await TextStore.open(root);
+    expect(await store.trace(ref)).toEqual(traced);
+    const abort = new AbortController();
+    abort.abort(new Error("trace cancelled"));
+    await expect(store.trace(ref, abort.signal)).rejects.toThrow(
+      "trace cancelled",
+    );
+    await writeFile(join(root, "pages", traced[1]!.hash), '"damaged"');
+    await expect(store.trace(ref)).rejects.toMatchObject({
+      code: "corrupt_storage",
+    });
+  } finally {
+    await store.close();
+  }
+});
+
+it("traces empty text and treats reference-shaped text as opaque user content", async () => {
+  const store = await TextStore.open(await directory());
+  try {
+    const empty = await store.put("");
+    expect(await store.trace(empty)).toEqual([empty]);
+    const fake = { hash: "f".repeat(64), byteSize: 123, units: 456 };
+    const ref = await store.put(JSON.stringify(fake));
+    const traced = await store.trace(ref);
+    expect(traced).toHaveLength(2);
+    expect(traced.some((item) => item.hash === fake.hash)).toBe(false);
+  } finally {
+    await store.close();
+  }
+});

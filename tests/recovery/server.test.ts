@@ -554,3 +554,86 @@ it("rejects a corrupted snapshot catalog while retaining authoritative history",
   expect(history).toHaveLength(1);
   expect(history[0].content.kind).toBe("recording.created");
 });
+
+it("automatically checkpoints bounded suffixes, resumes after restart and drains cache eviction", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-auto-snapshot-"));
+  roots.push(root);
+  const options = {
+    maxCachedSessions: 1,
+    snapshots: { batchEvents: 3, pollMs: 10, intervalMs: 50 },
+  };
+  let store = await RecordingStore.open(root, options);
+  stores.push(store);
+  const input = request();
+  let session = await store.create(input);
+  const id = session.info.id;
+  let { lease } = await session.resume(input.writeSecret, {
+    publisherId: input.publisherId,
+    producerEpoch: input.producerEpoch,
+    attempt: 1,
+    revision: session.info.revision,
+  });
+  await session.append(
+    lease,
+    Array.from({ length: 8 }, (_, index) => event(id, index + 1)),
+  );
+  await expect
+    .poll(async () => (await session.selectSnapshot(9))?.serverSeq, {
+      timeout: 15000,
+    })
+    .toBe(9);
+  expect(store.snapshotStatus.failures).toBe(0);
+  await store.close();
+  store = await RecordingStore.open(root, options);
+  stores.push(store);
+  session = await store.get(id);
+  const reads = vi.spyOn(session, "history");
+  ({ lease } = await session.resume(input.writeSecret, {
+    publisherId: input.publisherId,
+    producerEpoch: input.producerEpoch,
+    attempt: 2,
+    revision: session.info.revision,
+  }));
+  await session.append(lease, [event(id, 9)]);
+  await expect
+    .poll(async () => (await session.selectSnapshot(10))?.serverSeq, {
+      timeout: 15000,
+    })
+    .toBe(10);
+  expect(reads.mock.calls).toEqual([[9, 10]]);
+  reads.mockRestore();
+  let entered!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let cancelled = false;
+  vi.spyOn(session, "buildSnapshot").mockImplementation(
+    async (_through, signal) => {
+      entered();
+      return new Promise((_resolve, reject) => {
+        signal!.addEventListener(
+          "abort",
+          () => {
+            cancelled = true;
+            reject(signal!.reason);
+          },
+          { once: true },
+        );
+      });
+    },
+  );
+  await session.append(lease, [event(id, 10), event(id, 11), event(id, 12)]);
+  await ready;
+  // A stuck derivative build cannot block durable publisher receipt.
+  expect(
+    (await session.append(lease, [event(id, 13)])).throughProducerSeq,
+  ).toBe(13);
+  store.release(session);
+  const next = await store.create({ ...input, requestId: "second" });
+  expect(cancelled).toBe(true);
+  expect(store.cacheSize).toBe(1);
+  expect(store.snapshotStatus.registered).toBe(1);
+  store.release(next);
+  await store.close();
+  expect(store.snapshotStatus.active).toBe(0);
+}, 30000);

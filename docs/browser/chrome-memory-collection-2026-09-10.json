@@ -1,0 +1,167 @@
+{
+  "success": true,
+  "checks": [
+    "cached private join",
+    "fresh IndexedDB imports server snapshot blobs",
+    "exact tied previous event",
+    "idle cap control",
+    "live receipt preserves paused prefix",
+    "IndexedDB survives page reload with exact selection",
+    "renderer crash preserves committed cached selection",
+    "keyboard next event",
+    "active generation recovery preserves paused presentation",
+    "follow live",
+    "activity keyboard navigation retains row focus",
+    "desktop viewport has no document overflow",
+    "mobile viewport has no document overflow",
+    "paged activity search",
+    "clear persistent playback cache",
+    "uncached fallback joins and steps",
+    "multi-row virtualized keyboard navigation in both cache modes",
+    "tool disclosure and text page choices survive cached reopen",
+    "attachment inspector restores exact version and rejects unavailable history",
+    "automatic latest text survives paused virtual remount in both cache modes",
+    "attachment version pages survive remount, cached reopen and history clamping"
+  ],
+  "errors": [],
+  "timings": [
+    {
+      "name": "cached private join",
+      "elapsedMs": 188.88979199999994
+    },
+    {
+      "name": "fresh IndexedDB imports server snapshot blobs",
+      "elapsedMs": 75.08879199999956
+    },
+    {
+      "name": "exact tied previous event",
+      "elapsedMs": 103.34795799999938
+    },
+    {
+      "name": "idle cap control",
+      "elapsedMs": 3.144999999999527
+    },
+    {
+      "name": "live receipt preserves paused prefix",
+      "elapsedMs": 29.75183299999935
+    },
+    {
+      "name": "IndexedDB survives page reload with exact selection",
+      "elapsedMs": 167.02537500000017
+    },
+    {
+      "name": "renderer crash preserves committed cached selection",
+      "elapsedMs": 584.7836669999997
+    },
+    {
+      "name": "keyboard next event",
+      "elapsedMs": 28.733040999999503
+    },
+    {
+      "name": "active generation recovery preserves paused presentation",
+      "elapsedMs": 700.7453749999995
+    },
+    {
+      "name": "follow live",
+      "elapsedMs": 38.618250000000444
+    },
+    {
+      "name": "activity keyboard navigation retains row focus",
+      "elapsedMs": 33.13516600000003
+    },
+    {
+      "name": "desktop viewport has no document overflow",
+      "elapsedMs": 341.54654199999914
+    },
+    {
+      "name": "mobile viewport has no document overflow",
+      "elapsedMs": 274.92454199999884
+    },
+    {
+      "name": "paged activity search",
+      "elapsedMs": 55.930749999999534
+    },
+    {
+      "name": "clear persistent playback cache",
+      "elapsedMs": 48.846041999999215
+    },
+    {
+      "name": "uncached fallback joins and steps",
+      "elapsedMs": 198.59008299999914
+    },
+    {
+      "name": "multi-row virtualized keyboard navigation in both cache modes",
+      "elapsedMs": 22714.760457999997
+    },
+    {
+      "name": "tool disclosure and text page choices survive cached reopen",
+      "elapsedMs": 1374.6910000000025
+    },
+    {
+      "name": "attachment inspector restores exact version and rejects unavailable history",
+      "elapsedMs": 980.9740840000013
+    },
+    {
+      "name": "automatic latest text survives paused virtual remount in both cache modes",
+      "elapsedMs": 1396.5735419999983
+    },
+    {
+      "name": "attachment version pages survive remount, cached reopen and history clamping",
+      "elapsedMs": 4223.591124999999
+    }
+  ],
+  "phase": "complete",
+  "browser": "152.0.7977.83",
+  "accessibility": {
+    "desktop": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    },
+    "mobile": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    }
+  },
+  "navigation": [
+    {
+      "cached": true,
+      "totalRows": 65,
+      "mountedRows": 12,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    },
+    {
+      "cached": false,
+      "totalRows": 65,
+      "mountedRows": 8,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    }
+  ]
+}

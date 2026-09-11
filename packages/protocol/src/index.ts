@@ -34,6 +34,23 @@ export const snapshotDescriptorSchema = z.strictObject({
     units: z.number().int().min(0).max(32768),
   }),
 });
+export const snapshotLeaseTokenSchema = hashSchema;
+export const snapshotLeaseSchema = z.strictObject({
+  token: snapshotLeaseTokenSchema,
+  expiresAt: cursorSchema,
+  snapshot: snapshotDescriptorSchema.extend({
+    format: z.literal("agentlive.paged-state"),
+    activity: snapshotContentReferenceSchema.extend({
+      units: z.number().int().min(0).max(32768),
+    }),
+  }),
+});
+export const snapshotLeaseSelectionSchema = z.strictObject({
+  streamId: idSchema,
+  revision: idSchema,
+  lease: snapshotLeaseSchema.nullable(),
+});
+export type SnapshotLease = z.infer<typeof snapshotLeaseSchema>;
 export const snapshotSelectionSchema = z.strictObject({
   streamId: idSchema,
   revision: idSchema,
@@ -65,6 +82,39 @@ export const attachmentSchema = z.strictObject({
     .enum(["live-capture", "historical-version", "current-file"])
     .optional(),
 });
+
+/** Content-free counts describing captured work that the native source never finished.
+ * Version 1 has one reason: the importer froze a native source at a boundary where
+ * normalized messages/tools were still active or text was withheld by redaction. */
+export const completenessNoticeSchema = z.strictObject({
+  version: z.literal(1),
+  reason: z.enum(["frozen-native-source"]),
+  unfinishedMessages: cursorSchema,
+  unfinishedTools: cursorSchema,
+  withheldTextMessages: cursorSchema,
+});
+export type CompletenessNotice = z.infer<typeof completenessNoticeSchema>;
+/** Reduced form: the notice plus the server sequence that recorded it. */
+export const reducedCompletenessNoticeSchema = completenessNoticeSchema.extend({
+  at: sequenceSchema,
+});
+export type ReducedCompletenessNotice = z.infer<
+  typeof reducedCompletenessNoticeSchema
+>;
+/** Shared deterministic transition: the latest notice applies until the recording reopens,
+ * because continued capture may finish or reconcile the counted work. */
+export function reduceCompletenessNotice(
+  current: ReducedCompletenessNotice | undefined,
+  event: { serverSeq: number; content: { kind: string; payload: unknown } },
+): ReducedCompletenessNotice | undefined {
+  if (event.content.kind === "capture.completeness")
+    return reducedCompletenessNoticeSchema.parse({
+      ...(event.content.payload as CompletenessNotice),
+      at: event.serverSeq,
+    });
+  if (event.content.kind === "recording.reopened") return undefined;
+  return current;
+}
 
 export const contentSchema = z.discriminatedUnion("kind", [
   event("session.started", {
@@ -218,6 +268,7 @@ export const contentSchema = z.discriminatedUnion("kind", [
     version: sequenceSchema,
   }),
   event("capture.gap", { reason: text, recoveredState: z.boolean() }),
+  event("capture.completeness", completenessNoticeSchema.shape),
   event("capture.clock", {
     segmentId: idSchema,
     wallAnchor: z.iso.datetime(),
@@ -280,6 +331,96 @@ export const storedEventSchema = z.strictObject({
   ]),
 });
 export type StoredEvent = z.infer<typeof storedEventSchema>;
+
+/** Owner-declared replacement lineage; disposition records intent, not deletion proof. */
+export const migrationOriginSchema = z.strictObject({
+  version: z.literal(1),
+  operationId: idSchema,
+  sourceStreamId: idSchema,
+  sourceRevision: idSchema,
+  externalSource: z
+    .strictObject({
+      serverOrigin: z
+        .string()
+        .max(2048)
+        .refine((value) => {
+          try {
+            const url = new URL(value);
+            return (
+              ["http:", "https:"].includes(url.protocol) && url.origin === value
+            );
+          } catch {
+            return false;
+          }
+        }, "Expected an HTTP(S) server origin"),
+      verification: z.literal("owner-declared"),
+    })
+    .optional(),
+  sourceConverterVersion: z.string().min(1).max(200),
+  targetConverterVersion: z.string().min(1).max(200),
+  requestedSourceDisposition: z.enum(["retain", "remove"]),
+});
+export type MigrationOrigin = z.infer<typeof migrationOriginSchema>;
+
+/** Immediate archive-import source; inherited projection lineage remains separate. */
+export const archiveServerOriginSchema = z
+  .string()
+  .max(2048)
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      return ["http:", "https:"].includes(url.protocol) && url.origin === value;
+    } catch {
+      return false;
+    }
+  }, "Expected an HTTP(S) server origin");
+export const archiveOriginSchema = z.strictObject({
+  serverOrigin: archiveServerOriginSchema.optional(),
+  streamId: idSchema,
+  revision: idSchema,
+  throughServerSeq: cursorSchema,
+});
+/** Portable recording envelope; deliberately excludes server/publisher secrets. */
+export const archiveManifestSchema = z.strictObject({
+  format: z.literal("agentlive.recording"),
+  version: z.literal(1),
+  protocolVersion: z.literal(PROTOCOL_VERSION),
+  reducerVersion: z.literal(1),
+  exportedAt: z.iso.datetime(),
+  recording: z.strictObject({
+    serverOrigin: archiveServerOriginSchema.optional(),
+    streamId: idSchema,
+    revision: idSchema,
+    title: z.string().max(500),
+    createdAt: z.iso.datetime(),
+    throughServerSeq: cursorSchema,
+    timelineMs: clock,
+    lifecycle: z.enum(["open", "ended"]),
+  }),
+  provenance: z.strictObject({
+    migrationOrigin: migrationOriginSchema.optional(),
+    archiveOrigin: archiveOriginSchema.optional(),
+    agent: agentSchema.nullable(),
+    sourceVersion: z.string().max(200).nullable(),
+    adapterVersion: z.string().max(200).nullable(),
+    capabilities: z.array(z.string().max(200)).max(128),
+    completeness: z.enum(["captured-prefix", "ended-recording"]),
+    gapCount: cursorSchema,
+    /** Effective `capture.completeness` notice at the frozen boundary; omitted when none. */
+    completenessNotice: reducedCompletenessNoticeSchema.optional(),
+  }),
+  files: z
+    .array(
+      z.strictObject({
+        path: z.string().regex(/^(events\.jsonl|attachments\/[a-f0-9]{64})$/),
+        byteSize: cursorSchema,
+        hash: hashSchema,
+      }),
+    )
+    .min(1)
+    .max(100000),
+});
+export type ArchiveManifest = z.infer<typeof archiveManifestSchema>;
 
 export const errorCodes = [
   "invalid_request",
@@ -393,3 +534,15 @@ export {
   type TextReference,
   type TextContentBackend,
 } from "./text-content.js";
+
+export {
+  ARTIFACT_BUNDLE_MEDIA_TYPE,
+  ARTIFACT_BUNDLE_MAX_BYTES,
+  ARTIFACT_BUNDLE_MAX_CONTENT_BYTES,
+  ARTIFACT_BUNDLE_MAX_FILES,
+  artifactBundlePathSchema,
+  artifactBundleManifestSchema,
+  artifactBundleHash,
+  decodeArtifactBundle,
+  type ArtifactBundleManifest,
+} from "./artifact-bundle.js";

@@ -1,0 +1,20 @@
+{
+  "success": true,
+  "image": "agentlive:production-gate-local",
+  "imageId": "sha256:09f841d50ee133f8cbbc472b5c1b8996ce98896c54baa75322b100e687055dc9",
+  "at": "2026-09-10T13:23:47.490Z",
+  "checks": [
+    "non-root-read-only-start",
+    "readiness-healthcheck",
+    "browser-preview-assets",
+    "private-import-replay",
+    "graceful-stop",
+    "volume-container-replacement",
+    "owner-credential-permissions-and-persistence",
+    "portable-export-offline-replay",
+    "running-server-backup-refusal",
+    "offline-container-backup-and-restore",
+    "restored-revision-and-exact-replay"
+  ],
+  "replayHash": "dfa897fad82e8be2553652a54503830e117d7c767786192bc5bd0271be0db9fb"
+}

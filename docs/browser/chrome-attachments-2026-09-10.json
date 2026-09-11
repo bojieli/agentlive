@@ -1,0 +1,157 @@
+{
+  "success": true,
+  "checks": [
+    "cached private join",
+    "fresh IndexedDB imports server snapshot blobs",
+    "exact tied previous event",
+    "idle cap control",
+    "live receipt preserves paused prefix",
+    "IndexedDB survives page reload with exact selection",
+    "renderer crash preserves committed cached selection",
+    "keyboard next event",
+    "active generation recovery preserves paused presentation",
+    "follow live",
+    "activity keyboard navigation retains row focus",
+    "desktop viewport has no document overflow",
+    "mobile viewport has no document overflow",
+    "paged activity search",
+    "clear persistent playback cache",
+    "uncached fallback joins and steps",
+    "multi-row virtualized keyboard navigation in both cache modes",
+    "tool disclosure and text page choices survive cached reopen",
+    "attachment inspector restores exact version and rejects unavailable history"
+  ],
+  "errors": [],
+  "timings": [
+    {
+      "name": "cached private join",
+      "elapsedMs": 181.50412499999993
+    },
+    {
+      "name": "fresh IndexedDB imports server snapshot blobs",
+      "elapsedMs": 74.68687499999987
+    },
+    {
+      "name": "exact tied previous event",
+      "elapsedMs": 105.3371659999998
+    },
+    {
+      "name": "idle cap control",
+      "elapsedMs": 3.414832999999817
+    },
+    {
+      "name": "live receipt preserves paused prefix",
+      "elapsedMs": 29.715208000000075
+    },
+    {
+      "name": "IndexedDB survives page reload with exact selection",
+      "elapsedMs": 168.73362500000007
+    },
+    {
+      "name": "renderer crash preserves committed cached selection",
+      "elapsedMs": 557.638125
+    },
+    {
+      "name": "keyboard next event",
+      "elapsedMs": 50.36387500000001
+    },
+    {
+      "name": "active generation recovery preserves paused presentation",
+      "elapsedMs": 727.7585830000003
+    },
+    {
+      "name": "follow live",
+      "elapsedMs": 28.98037499999964
+    },
+    {
+      "name": "activity keyboard navigation retains row focus",
+      "elapsedMs": 33.251458000000184
+    },
+    {
+      "name": "desktop viewport has no document overflow",
+      "elapsedMs": 339.0834169999998
+    },
+    {
+      "name": "mobile viewport has no document overflow",
+      "elapsedMs": 270.6185840000003
+    },
+    {
+      "name": "paged activity search",
+      "elapsedMs": 61.93766700000015
+    },
+    {
+      "name": "clear persistent playback cache",
+      "elapsedMs": 47.57037500000024
+    },
+    {
+      "name": "uncached fallback joins and steps",
+      "elapsedMs": 111.56820800000014
+    },
+    {
+      "name": "multi-row virtualized keyboard navigation in both cache modes",
+      "elapsedMs": 28775.316333999996
+    },
+    {
+      "name": "tool disclosure and text page choices survive cached reopen",
+      "elapsedMs": 1399.6499590000021
+    },
+    {
+      "name": "attachment inspector restores exact version and rejects unavailable history",
+      "elapsedMs": 997.1900000000023
+    }
+  ],
+  "phase": "complete",
+  "browser": "152.0.7977.83",
+  "accessibility": {
+    "desktop": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    },
+    "mobile": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    }
+  },
+  "navigation": [
+    {
+      "cached": true,
+      "totalRows": 65,
+      "mountedRows": 10,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    },
+    {
+      "cached": false,
+      "totalRows": 65,
+      "mountedRows": 7,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    }
+  ]
+}

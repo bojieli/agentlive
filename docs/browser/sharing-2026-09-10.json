@@ -1,0 +1,15 @@
+{
+  "success": true,
+  "checks": [
+    "owner opens empty grant list",
+    "issue shows masked credential and credential-free recording link",
+    "issued credential reads private recording but cannot administer",
+    "missing clipboard API provides manual-copy feedback",
+    "closing clears issued token while reopening retains grant metadata",
+    "viewer credential cannot open management data",
+    "mobile sharing has no horizontal overflow or automated accessibility violations",
+    "browser revocation removes grant and denies subsequent private reads"
+  ],
+  "browser": "152.0.7977.83",
+  "accessibilityIncomplete": []
+}

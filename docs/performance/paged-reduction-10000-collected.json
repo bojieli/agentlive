@@ -1,0 +1,69 @@
+{
+  "workload": "paged reducer; one message per 64 events, 48-byte text deltas, 8-hour simulated timeline",
+  "runtime": "v26.8.1",
+  "platform": "darwin",
+  "requestedEvents": 10000,
+  "batchSize": 256,
+  "collectionPolicy": "every 8192 events and final; latest 128 checkpoint roots",
+  "collections": [
+    {
+      "completed": 8192,
+      "roots": 32,
+      "beforeBytes": 3822617,
+      "afterBytes": 619706,
+      "elapsedMs": 6005.010542000004,
+      "removed": 3417,
+      "reclaimedBytes": 3202911
+    },
+    {
+      "completed": 10000,
+      "roots": 40,
+      "beforeBytes": 1669942,
+      "afterBytes": 809813,
+      "elapsedMs": 8476.912250000001,
+      "removed": 823,
+      "reclaimedBytes": 860129
+    }
+  ],
+  "latencyUnit": "batch",
+  "completed": 10000,
+  "elapsedMs": 58515.865750000004,
+  "eventsPerSecond": 170.8938229286986,
+  "reductionP50Ms": 1137.704959,
+  "reductionP95Ms": 1404.043263,
+  "peakHeap": 43176424,
+  "peakRss": 133775360,
+  "storedBytes": 809813,
+  "blobFiles": 1128,
+  "operations": {
+    "put": {
+      "calls": 2839,
+      "ms": 41654.06843100002
+    },
+    "append": {
+      "calls": 157,
+      "ms": 318.9417129999764
+    },
+    "read": {
+      "calls": 5428,
+      "ms": 1607.4297209997753
+    }
+  },
+  "failure": null,
+  "retention": {
+    "latest": {
+      "roots": 1,
+      "manifests": 335,
+      "blobFiles": 670,
+      "bytes": 165914
+    },
+    "checkpoints": {
+      "roots": 41,
+      "manifests": 564,
+      "blobFiles": 1128,
+      "bytes": 809813
+    },
+    "diagnosticMs": 5926.573666000004,
+    "scope": "Format-aware reducer and codec tracing; no pins or reclamation; excluded from reduction timing"
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "workload": "paged reducer; one message per 64 events, 48-byte text deltas, 8-hour simulated timeline",
+  "runtime": "v26.8.1",
+  "platform": "darwin",
+  "requestedEvents": 1000,
+  "batchSize": 256,
+  "latencyUnit": "batch",
+  "completed": 1000,
+  "elapsedMs": 5386.880125,
+  "eventsPerSecond": 185.6362081196303,
+  "reductionP50Ms": 1257.242623,
+  "reductionP95Ms": 1415.577599,
+  "peakHeap": 19539240,
+  "peakRss": 80232448,
+  "storedBytes": 183055,
+  "blobFiles": 389,
+  "operations": {
+    "put": {
+      "calls": 208,
+      "ms": 4992.722634
+    },
+    "append": {
+      "calls": 16,
+      "ms": 168.63062400000058
+    },
+    "read": {
+      "calls": 348,
+      "ms": 167.18800199999464
+    }
+  },
+  "failure": null,
+  "retention": {
+    "latest": {
+      "roots": 1,
+      "manifests": 37,
+      "blobFiles": 74,
+      "bytes": 23039
+    },
+    "checkpoints": {
+      "roots": 4,
+      "manifests": 46,
+      "blobFiles": 92,
+      "bytes": 35277
+    },
+    "diagnosticMs": 42.670875000000706,
+    "scope": "Synthetic JSON reference traversal, not a production garbage-collection proof; excluded from reduction timing"
+  }
+}

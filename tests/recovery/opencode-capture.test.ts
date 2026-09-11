@@ -7,11 +7,13 @@ import {
   parseOpenCodeSnapshot,
 } from "../../packages/adapters/src/index.js";
 import { PublisherJournal } from "../../packages/publisher/src/index.js";
+import { OpenCodeFamilyCapture } from "../../packages/adapters/src/opencode-family.js";
 import { initialState, apply } from "../../packages/playback/src/index.js";
 const roots: string[] = [];
 const journals: PublisherJournal[] = [];
 const captures: OpenCodeCapture[] = [];
 afterEach(async () => {
+  vi.unstubAllGlobals();
   for (const capture of captures.splice(0)) await capture.close();
   for (const journal of journals.splice(0)) await journal.close();
   for (const root of roots.splice(0))
@@ -78,13 +80,176 @@ async function replay(journal: PublisherJournal) {
       protocolVersion: 1,
       serverSeq: event.producerSeq,
       receivedAt: event.observedAt,
-      timelineMs: event.elapsedMs,
+      timelineMs: Math.max(state.timelineMs, event.elapsedMs),
       content: event.content,
       origin: { type: "server", operationId: `test${event.producerSeq}` },
     });
   }
   return { state, events };
 }
+it.each(["changed", "missing"])(
+  "retains explicit parent lineage across restart and rejects %s lineage",
+  async (variant) => {
+    const journal = await setup();
+    let capture = await OpenCodeCapture.open(journal);
+    const child = snapshot("child message", true);
+    child.info.parentID = "ses_parent";
+    await capture.accept(child);
+    const before = await replay(journal);
+    const agents = [...before.state.agents.values()];
+    const parent = agents.find(
+      (agent) => agent.nativeSessionId === "ses_parent",
+    )!;
+    expect(parent.status).toBe("unknown");
+    expect(
+      agents.find((agent) => agent.nativeSessionId === "ses_test"),
+    ).toMatchObject({ parentAgentId: parent.agentId, status: "unknown" });
+    await capture.close();
+    capture = await OpenCodeCapture.open(journal);
+    captures.push(capture);
+    await capture.accept(child);
+    expect((await replay(journal)).events).toHaveLength(before.events.length);
+    if (variant === "changed") child.info.parentID = "ses_other";
+    else delete child.info.parentID;
+    await expect(capture.accept(child)).rejects.toThrow(
+      variant === "changed" ? "identity changed" : "identity disappeared",
+    );
+  },
+);
+
+it("rejects invalid and self-referencing native parent identities", () => {
+  const child = snapshot("child", true);
+  child.info.parentID = "ses_test";
+  expect(() => parseOpenCodeSnapshot(child)).toThrow("own parent");
+  child.info.parentID = "../bad";
+  expect(() => parseOpenCodeSnapshot(child)).toThrow();
+});
+
+it("recursively reconciles a family, discovers later children and rejects unrelated snapshots", async () => {
+  const journal = await setup();
+  const nodes: Record<string, { parent: string; text: string }> = {
+    child: { parent: "ses_test", text: "child text" },
+    grandchild: { parent: "child", text: "grandchild text" },
+  };
+  let foreign = false;
+  vi.stubGlobal("fetch", (async (input) => {
+    const parts = new URL(String(input)).pathname.split("/");
+    const id = parts[2]!;
+    if (parts[3] === "children")
+      return Response.json(
+        Object.entries(nodes)
+          .filter(([, node]) => node.parent === id)
+          .map(([child, node]) => ({
+            id: child,
+            parentID: node.parent,
+            time: { created: 1 },
+          })),
+      );
+    const node = nodes[id]!;
+    if (!parts[3])
+      return Response.json({
+        id,
+        parentID: foreign ? "unrelated" : node.parent,
+        time: { created: 1 },
+      });
+    return Response.json([
+      {
+        info: {
+          id: "same_message",
+          sessionID: id,
+          role: "user",
+          time: { created: 1 },
+        },
+        parts: [
+          {
+            id: "same_part",
+            sessionID: id,
+            messageID: "same_message",
+            type: "text",
+            text: node.text,
+          },
+        ],
+      },
+    ]);
+  }) as typeof fetch);
+  let family = new OpenCodeFamilyCapture({
+    journal,
+    origin: "http://localhost",
+    root: "ses_test",
+    secrets: [],
+  });
+  try {
+    await family.reconcile(new AbortController().signal);
+    expect(
+      [...(await replay(journal)).state.messages.values()].map((m) => m.text),
+    ).toEqual(["child text", "grandchild text"]);
+    const before = journal.capturedThrough;
+    await family.close();
+    family = new OpenCodeFamilyCapture({
+      journal,
+      origin: "http://localhost",
+      root: "ses_test",
+      secrets: [],
+    });
+    await family.reconcile(new AbortController().signal);
+    expect(journal.capturedThrough).toBe(before);
+    nodes.later = { parent: "ses_test", text: "later child" };
+    await family.reconcile(new AbortController().signal);
+    expect((await replay(journal)).state.messages.size).toBe(3);
+    foreign = true;
+    await expect(
+      family.reconcile(new AbortController().signal),
+    ).rejects.toThrow("identity changed");
+  } finally {
+    await family.close();
+  }
+});
+
+it("merges child messages with colliding native object IDs without replacing parent content", async () => {
+  const journal = await setup();
+  const root = await OpenCodeCapture.open(journal);
+  captures.push(root);
+  await root.accept(snapshot("parent message", true, "completed"));
+  const scope = {
+    nativeSessionId: "ses_child",
+    parentNativeSessionId: "ses_test",
+  };
+  let child = await OpenCodeCapture.open(journal, [], undefined, scope);
+  captures.push(child);
+  const data = snapshot("child message", true, "completed");
+  data.info.id = "ses_child";
+  data.info.parentID = "ses_test";
+  for (const message of data.messages) {
+    message.info.sessionID = "ses_child";
+    for (const part of message.parts) part.sessionID = "ses_child";
+  }
+  await child.accept(data);
+  const before = await replay(journal);
+  expect(
+    [...before.state.messages.values()].map((message) => message.text),
+  ).toEqual(["parent message", "child message"]);
+  expect(before.state.tools.size).toBe(2);
+  expect(
+    before.events.filter((event) => event.content.kind === "session.started"),
+  ).toHaveLength(1);
+  const childAgent = [...before.state.agents.values()].find(
+    (agent) => agent.nativeSessionId === "ses_child",
+  )!;
+  expect(
+    [...before.state.messages.values()].find(
+      (message) => message.text === "child message",
+    )?.agentId,
+  ).toBe(childAgent.agentId);
+  await child.close();
+  captures.pop();
+  child = await OpenCodeCapture.open(journal, [], undefined, scope);
+  captures.push(child);
+  await child.accept(data);
+  expect((await replay(journal)).events).toHaveLength(before.events.length);
+  data.info.parentID = "foreign_parent";
+  await expect(child.accept(data)).rejects.toThrow("selected parent");
+});
+
 it("reconciles partial secrets, tools and repeated snapshots across restart without duplicates", async () => {
   const journal = await setup();
   let capture = await OpenCodeCapture.open(journal, ["token_abcdef"]);
@@ -593,4 +758,55 @@ it("retains a possible secret prefix in an active error and releases it only at 
   expect([...(await replay(journal)).state.messages.values()][0]).toMatchObject(
     { text: "Starting\ncredits exhausted", completed: true },
   );
+});
+
+it("applies native revert boundaries and restores hidden messages on unrevert", async () => {
+  const journal = await setup();
+  const capture = await OpenCodeCapture.open(journal, []);
+  captures.push(capture);
+  const original = snapshot("Retained text", true, "completed");
+  await capture.accept(original);
+  const reverted = structuredClone(original);
+  reverted.info.revert = {
+    messageID: "msg1",
+    snapshot: "native-snapshot",
+    diff: "not copied",
+  };
+  await capture.accept(reverted);
+  let result = await replay(journal);
+  expect([...result.state.messages.values()][0]?.visible).toBe(false);
+  expect([...result.state.tools.values()][0]?.visible).toBe(false);
+  const through = journal.capturedThrough;
+  await capture.accept(reverted);
+  expect(journal.capturedThrough).toBe(through);
+  await capture.close();
+  captures.pop();
+  const reopened = await OpenCodeCapture.open(journal, []);
+  captures.push(reopened);
+  await reopened.accept(reverted);
+  expect(journal.capturedThrough).toBe(through);
+  await reopened.accept(original);
+  result = await replay(journal);
+  expect([...result.state.messages.values()][0]?.visible).toBe(true);
+  expect([...result.state.tools.values()][0]?.visible).toBe(true);
+});
+
+it("captures only the retained part prefix from an initially reverted snapshot and rejects unknown boundaries", async () => {
+  const journal = await setup();
+  const capture = await OpenCodeCapture.open(journal, []);
+  captures.push(capture);
+  const input = snapshot("Kept prefix", true, "completed");
+  input.info.revert = { messageID: "msg1", partID: "tool1" };
+  await capture.accept(input);
+  const result = await replay(journal);
+  expect(result.state.messages.size).toBe(1);
+  expect(result.state.tools.size).toBe(0);
+  expect(input.messages[0]!.parts).toHaveLength(2);
+  const before = journal.capturedThrough;
+  const malformed = structuredClone(input);
+  malformed.info.revert = { messageID: "msg1", partID: "missing" };
+  expect(() => capture.accept(malformed)).toThrow("revert part");
+  malformed.info.revert = { messageID: "missing" };
+  expect(() => capture.accept(malformed)).toThrow("revert message");
+  expect(journal.capturedThrough).toBe(before);
 });

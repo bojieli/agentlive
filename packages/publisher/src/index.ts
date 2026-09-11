@@ -13,3 +13,11 @@ export {
   type PublisherStatus,
 } from "./network.js";
 export { uploadArtifact } from "./artifact-upload.js";
+export { recoverPublisher } from "./recover.js";
+export { rotatePublisherCredential } from "./rotate-credential.js";
+
+export {
+  finishPublisher,
+  assertPublisherNotFinished,
+  readPublisherOperation,
+} from "./finish.js";

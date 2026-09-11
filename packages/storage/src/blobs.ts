@@ -1,4 +1,12 @@
-import { mkdir, open, readdir, lstat, unlink, link } from "node:fs/promises";
+import {
+  mkdir,
+  open,
+  opendir,
+  readdir,
+  lstat,
+  unlink,
+  link,
+} from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join, dirname } from "node:path";
@@ -248,8 +256,11 @@ export class BlobStore {
       }
     }
   }
-  /** Must run in the same serialized queue as event reference commits and garbage collection. */
-  async install(staged: StagedBlob): Promise<BlobDescriptor> {
+  /** Must share the reference-commit/collection queue. Deferred directory sync requires a caller flush before publishing any reference. */
+  async install(
+    staged: StagedBlob,
+    options: { deferDirectorySync?: boolean } = {},
+  ): Promise<BlobDescriptor> {
     const upload = this.staged.get(staged.token);
     if (
       !upload ||
@@ -270,7 +281,7 @@ export class BlobStore {
         await this.verify(upload);
       }
       if (installed) this.usedBytes += upload.byteSize;
-      await syncDirectory(this.directory);
+      if (!options.deferDirectorySync) await syncDirectory(this.directory);
       return { hash: upload.hash, byteSize: upload.byteSize };
     } finally {
       await this.discard(staged);
@@ -341,32 +352,70 @@ export class BlobStore {
     }
   }
   /** A frozen set must include all retained event versions and active export/read pins. */
-  async collect(
+  collect(
     referenced: ReadonlySet<string>,
     olderThan: number,
+    signal?: AbortSignal,
   ): Promise<number> {
+    const retained = new Set(referenced);
+    for (const hash of retained) hashSchema.parse(hash);
+    return this.collectMarked(
+      async (hash) => retained.has(hash),
+      olderThan,
+      signal,
+    );
+  }
+  /** Streaming sweep against a completed immutable mark store.
+   * Caller must exclude installs/publication and retain every active read/export root.
+   * A failed mark lookup aborts; it must never be interpreted as an absent mark.
+   */
+  async collectMarked(
+    retained: (hash: string) => Promise<boolean>,
+    olderThan: number,
+    signal?: AbortSignal,
+  ): Promise<number> {
+    if (!Number.isFinite(olderThan))
+      throw new RangeError("Invalid collection cutoff");
     if (this.closed)
       throw new ProtocolError("storage_failed", "Attachment store is closed");
+    signal?.throwIfAborted();
     let removed = 0;
-    for (const entry of await readdir(this.directory, {
-      withFileTypes: true,
-    })) {
-      if (entry.name === ".uploads" || referenced.has(entry.name)) continue;
-      hashSchema.parse(entry.name);
-      if (!entry.isFile())
-        throw new ProtocolError(
-          "corrupt_storage",
-          "Unexpected attachment file",
-        );
-      const path = join(this.directory, entry.name);
-      const info = await lstat(path);
-      if (info.mtimeMs >= olderThan) continue;
-      await unlink(path);
-      this.usedBytes -= info.size;
-      removed++;
+    try {
+      for await (const entry of await opendir(this.directory)) {
+        signal?.throwIfAborted();
+        if (entry.name === ".uploads") continue;
+        hashSchema.parse(entry.name);
+        if (!entry.isFile())
+          throw new ProtocolError(
+            "corrupt_storage",
+            "Unexpected attachment file",
+          );
+        const marked = await retained(entry.name);
+        signal?.throwIfAborted();
+        if (typeof marked !== "boolean")
+          throw new ProtocolError(
+            "corrupt_storage",
+            "Invalid content mark result",
+          );
+        if (marked) continue;
+        const path = join(this.directory, entry.name);
+        const info = await lstat(path);
+        if (!info.isFile())
+          throw new ProtocolError(
+            "corrupt_storage",
+            "Unexpected attachment file",
+          );
+        if (info.mtimeMs >= olderThan) continue;
+        signal?.throwIfAborted();
+        await unlink(path);
+        this.usedBytes -= info.size;
+        removed++;
+      }
+      return removed;
+    } finally {
+      // Persist completed deletions even when cancellation or a later lookup fails.
+      if (removed) await syncDirectory(this.directory);
     }
-    if (removed) await syncDirectory(this.directory);
-    return removed;
   }
   async close(): Promise<void> {
     this.closed = true;

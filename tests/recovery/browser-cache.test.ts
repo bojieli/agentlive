@@ -454,6 +454,10 @@ it("ignores malformed or unbound view preferences without discarding valid recei
   cache.close();
   for (const changes of [
     { speed: 0 },
+    { gapAnchorMs: -1 },
+    { gapAnchorMs: 2 },
+    { gapAnchorMs: "0" },
+    { gapAnchorMs: Infinity },
     { hash: "f".repeat(64) },
     { serverSeq: 100 },
   ]) {

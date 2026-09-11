@@ -113,6 +113,70 @@ it("preserves first mentions, artifact introductions and trailing gap order acro
     await expect(
       index.entries({ ...hidden, visible: root.visible }, 0, 32),
     ).rejects.toMatchObject({ code: "corrupt_storage" });
+    for (const selected of [root, hidden, restored]) {
+      const ref = await index.checkpoint(selected, binding);
+      const retained = new Set<string>();
+      await index.trace(ref, binding, async (ref) => {
+        await store.trace(ref);
+        retained.add(ref.hash);
+        ref.hash = "0".repeat(64);
+      });
+      const reader = new ActivityIndex({
+        put: async () => {
+          throw new Error("No writes during trace recovery");
+        },
+        read: (ref, offset, length, signal) => {
+          if (!retained.has(ref.hash))
+            throw new Error("Missing traced reference");
+          return store.read(ref, offset, length, signal);
+        },
+      });
+      const reopened = await reader.open(ref, binding);
+      expect(await keys(reader, reopened)).toEqual(await keys(index, selected));
+      expect(await reader.position(reopened, "messages/m")).toBe(
+        await index.position(selected, "messages/m"),
+      );
+      expect(retained.has("a".repeat(64))).toBe(false);
+    }
+    const inconsistent = await index.checkpoint(
+      { ...hidden, visible: root.visible },
+      binding,
+    );
+    await expect(
+      index.trace(inconsistent, binding, async () => {}),
+    ).rejects.toMatchObject({ code: "corrupt_storage" });
+    const missingGap = await index.checkpoint(
+      { ...root, gaps: root.gaps + 1 },
+      binding,
+    );
+    await expect(
+      index.trace(missingGap, binding, async () => {}),
+    ).rejects.toMatchObject({ code: "corrupt_storage" });
+    let calls = 0;
+    await expect(
+      index.trace(checkpoint, { ...binding, revision: "other" }, async () => {
+        calls++;
+      }),
+    ).rejects.toMatchObject({ code: "revision_changed" });
+    expect(calls).toBe(0);
+    const cancel = new AbortController();
+    await expect(
+      index.trace(
+        checkpoint,
+        binding,
+        async () => {
+          calls++;
+          cancel.abort(new Error("trace cancelled"));
+        },
+        cancel.signal,
+      ),
+    ).rejects.toThrow("trace cancelled");
+    expect(calls).toBe(1);
+    await expect(
+      index.trace(checkpoint, binding, async () => {
+        throw new Error("mark failed");
+      }),
+    ).rejects.toThrow("mark failed");
     await expect(
       index.open(checkpoint, { ...binding, revision: "other" }),
     ).rejects.toMatchObject({ code: "revision_changed" });

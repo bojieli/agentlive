@@ -1,0 +1,13 @@
+{
+  "requestedEvents": 500000,
+  "batchSize": 256,
+  "collection": true,
+  "lastReportedCompleted": 71680,
+  "lastReportedElapsedMs": 778131.036833,
+  "lastReportedStoredBytes": 12142194,
+  "status": "operator-terminated-after-diagnosed-stall",
+  "finalValidation": false,
+  "diagnosis": "Pending OrderedContentMap.hash(message-328) crypto.subtle.digest; fresh digest in same process exceeded 2-second diagnostic; idle event loop and libuv workers. Exact runtime cause unproven.",
+  "sample": "paged-reduction-500000-active-sample.txt",
+  "note": "Last reported progress is a lower bound, not the exact completed count at termination. No final benchmark report was produced."
+}

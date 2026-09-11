@@ -1,0 +1,37 @@
+{
+  "success": true,
+  "runtime": "v26.8.1",
+  "platform": "darwin/arm64",
+  "count": 1000,
+  "completed": 1000,
+  "phase": "complete",
+  "collections": [],
+  "peakHeap": 27808504,
+  "peakRss": 93028352,
+  "peakBytes": 595168,
+  "peakEntries": 803,
+  "receiptMs": 96.90566700000001,
+  "seeks": [
+    {
+      "through": 500,
+      "elapsedMs": 22.31008299999999
+    },
+    {
+      "through": 1,
+      "elapsedMs": 1.5374579999999867
+    },
+    {
+      "through": 1000,
+      "elapsedMs": 4.894417000000004
+    }
+  ],
+  "finalUsage": {
+    "bytes": 595168,
+    "entries": 803
+  },
+  "afterClose": {
+    "bytes": 0,
+    "entries": 0
+  },
+  "elapsedMs": 127.411625
+}

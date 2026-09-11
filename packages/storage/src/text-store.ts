@@ -1,3 +1,4 @@
+import { rm } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import {
@@ -11,9 +12,26 @@ import {
 export { CONTENT_PAGE_UNITS, type TextReference } from "@agentlive/protocol";
 const MAX_PAGES = 4096,
   MAX_BLOB_BYTES = 1024 * 1024;
+import { ContentMarks } from "./content-marks.js";
 import { BlobStore } from "./blobs.js";
 import { FileLock } from "./lock.js";
 import { syncDirectory } from "./atomic.js";
+export type TextBlobLoader = (
+  ref: TextReference,
+  signal: AbortSignal,
+) => Promise<Uint8Array>;
+export interface ContentCollectionTrace {
+  read(
+    ref: TextReference,
+    offset: number,
+    length: number,
+    signal?: AbortSignal,
+  ): Promise<string>;
+  /** Retain a complete text manifest and its validated pages. */
+  retain(ref: TextReference): Promise<void>;
+  /** Retain an exact raw blob, for active raw-blob read pins. */
+  retainBlob(ref: TextReference): Promise<void>;
+}
 /** Rebuildable immutable text content, separate from attachment references and event durability. */
 export class TextStore {
   private readonly codec = new TextContent({
@@ -31,10 +49,19 @@ export class TextStore {
   private constructor(
     private readonly blobs: BlobStore,
     private readonly lock: FileLock,
+    private readonly loader?: TextBlobLoader,
   ) {}
-  static async open(directory: string, maxTotalBytes = 512 * 1024 * 1024) {
+  static async open(
+    directory: string,
+    maxTotalBytes = 512 * 1024 * 1024,
+    loader?: TextBlobLoader,
+  ) {
     const lock = await FileLock.acquire(join(directory, "content.lock"));
     try {
+      // The exclusive store lock proves no mark attempt in this directory is live.
+      // Marks are never reused: root/publication state may have changed after a crash.
+      await rm(join(directory, "collection"), { recursive: true, force: true });
+      await syncDirectory(directory);
       return new TextStore(
         await BlobStore.open(join(directory, "pages"), {
           maxBlobBytes: MAX_BLOB_BYTES,
@@ -42,6 +69,7 @@ export class TextStore {
           maxConcurrentUploads: 1,
         }),
         lock,
+        loader,
       );
     } catch (error) {
       await lock.release();
@@ -70,7 +98,7 @@ export class TextStore {
     );
     return task;
   }
-  private async load(
+  private async loadLocal(
     ref: TextReference,
     signal?: AbortSignal,
   ): Promise<Buffer> {
@@ -105,6 +133,69 @@ export class TextStore {
       await file.close();
     }
   }
+  private async load(
+    ref: TextReference,
+    parent?: AbortSignal,
+  ): Promise<Buffer> {
+    try {
+      return await this.loadLocal(ref, parent);
+    } catch (error) {
+      if (
+        !this.loader ||
+        !(error instanceof ProtocolError) ||
+        error.code !== "precondition_failed"
+      )
+        throw error;
+    }
+    const signal = AbortSignal.any([
+      this.sourceStop.signal,
+      AbortSignal.timeout(10000),
+      ...(parent ? [parent] : []),
+    ]);
+    signal.throwIfAborted();
+    const remote = await new Promise<Uint8Array>((resolve, reject) => {
+      const cleanup = () => signal.removeEventListener("abort", abort);
+      const abort = () => {
+        cleanup();
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", abort, { once: true });
+      Promise.resolve()
+        .then(() => {
+          signal.throwIfAborted();
+          return this.loader!({ ...ref }, signal);
+        })
+        .then(resolve, reject)
+        .finally(cleanup);
+    });
+    signal.throwIfAborted();
+    if (!(remote instanceof Uint8Array) || remote.length !== ref.byteSize)
+      throw new ProtocolError(
+        "corrupt_storage",
+        "Downloaded content size differs",
+      );
+    const bytes = Buffer.from(remote);
+    if (createHash("sha256").update(bytes).digest("hex") !== ref.hash)
+      throw new ProtocolError(
+        "corrupt_storage",
+        "Downloaded content checksum differs",
+      );
+    const staged = await this.blobs.stage(
+      ref,
+      (async function* () {
+        yield bytes;
+      })(),
+      signal,
+    );
+    try {
+      signal.throwIfAborted();
+      await this.blobs.install(staged);
+      signal.throwIfAborted();
+      return bytes;
+    } finally {
+      await this.blobs.discard(staged);
+    }
+  }
   private async save(
     value: unknown,
     units: number,
@@ -119,9 +210,8 @@ export class TextStore {
     };
     validateTextReference(ref, MAX_PAGES * CONTENT_PAGE_UNITS);
     try {
-      await this.load(ref, signal);
-      // A previous install may have linked the file before a directory flush failed.
-      await syncDirectory(this.blobs.directory);
+      await this.loadLocal(ref, signal);
+      // The enclosing codec operation flushes the directory, including a prior uncertain install.
       return ref;
     } catch (error) {
       if (
@@ -139,7 +229,7 @@ export class TextStore {
     );
     try {
       signal?.throwIfAborted();
-      await this.blobs.install(staged);
+      await this.blobs.install(staged, { deferDirectorySync: true });
       return ref;
     } finally {
       await this.blobs.discard(staged);
@@ -173,7 +263,159 @@ export class TextStore {
     signal?: AbortSignal,
   ): Promise<string> {
     ref = { ...ref };
-    return this.run(() => this.codec.read(ref, offset, length, signal));
+    const active = signal
+      ? AbortSignal.any([signal, this.sourceStop.signal])
+      : this.sourceStop.signal;
+    return this.run(() => this.codec.read(ref, offset, length, active));
+  }
+  /** Complete verified manifest/page set; caller must pin retained roots before any collection. */
+  trace(ref: TextReference, signal?: AbortSignal): Promise<TextReference[]> {
+    ref = { ...ref };
+    const active = signal
+      ? AbortSignal.any([signal, this.sourceStop.signal])
+      : this.sourceStop.signal;
+    return this.run(() => this.codec.trace(ref, active));
+  }
+  /** Exact immutable codec bytes, verified against their content address. */
+  readBlob(ref: TextReference, signal?: AbortSignal): Promise<Buffer> {
+    ref = { ...ref };
+    const active = signal
+      ? AbortSignal.any([signal, this.sourceStop.signal])
+      : this.sourceStop.signal;
+    return this.run(() => this.load(ref, active));
+  }
+  /** Exclusive local mark/seal/sweep. Caller must freeze publication and retain all live roots.
+   * Use only the scoped reader in trace: calling this store's queued methods would deadlock.
+   * A failed/cancelled trace never starts sweeping; partial sweep is safe only for complete marks.
+   */
+  collect(
+    trace: (
+      content: ContentCollectionTrace,
+      signal: AbortSignal,
+    ) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<{ removed: number; reclaimedBytes: number }> {
+    const active = signal
+      ? AbortSignal.any([signal, this.sourceStop.signal])
+      : this.sourceStop.signal;
+    return this.run(async () => {
+      active.throwIfAborted();
+      const marks = await ContentMarks.create(
+        join(this.blobs.directory, "..", "collection"),
+      );
+      let accepting = true,
+        failure: unknown,
+        failed = false;
+      let tail: Promise<void> = Promise.resolve();
+      let pending = 0;
+      const admit = <T>(operation: () => Promise<T>): Promise<T> => {
+        if (!accepting || pending >= 16) {
+          const error = new ProtocolError(
+            "precondition_failed",
+            "Collection trace scope is closed or full",
+          );
+          if (accepting) {
+            failed = true;
+            failure = error;
+          }
+          return Promise.reject(error);
+        }
+        pending++;
+        const task = tail.then(async () => {
+          active.throwIfAborted();
+          return operation();
+        });
+        tail = task
+          .then(
+            () => {},
+            (error) => {
+              failed = true;
+              failure = error;
+            },
+          )
+          .finally(() => {
+            pending--;
+          });
+        return task;
+      };
+      // Bounded attempt-local cache for repeated metadata reads across retained roots.
+      const readCache = new Map<string, string>();
+      let cachedUnits = 0;
+      const scoped: ContentCollectionTrace = {
+        read: (reference, offset, length, signal) => {
+          const ref = { ...reference };
+          return admit(async () => {
+            const combined = signal
+              ? AbortSignal.any([active, signal])
+              : active;
+            combined.throwIfAborted();
+            const key = canonicalJson({ ref, offset, length });
+            const cached = readCache.get(key);
+            if (cached !== undefined) {
+              readCache.delete(key);
+              readCache.set(key, cached);
+              return cached;
+            }
+            const text = await this.codec.read(ref, offset, length, combined);
+            while (
+              readCache.size &&
+              (readCache.size >= 128 || cachedUnits + text.length > 1048576)
+            ) {
+              const oldest = readCache.keys().next().value!;
+              cachedUnits -= readCache.get(oldest)!.length;
+              readCache.delete(oldest);
+            }
+            readCache.set(key, text);
+            cachedUnits += text.length;
+            return text;
+          });
+        },
+        retain: (reference) => {
+          const ref = { ...reference };
+          return admit(async () => {
+            if (marks.traced(ref, active)) return;
+            for (const blob of await this.codec.trace(ref, active))
+              marks.add(blob.hash, active);
+            marks.recordTrace(ref, active);
+          });
+        },
+        retainBlob: (reference) => {
+          const ref = { ...reference };
+          return admit(async () => {
+            await this.load(ref, active);
+            marks.add(ref.hash, active);
+          });
+        },
+      };
+      try {
+        try {
+          await trace(scoped, active);
+        } catch (error) {
+          failed = true;
+          failure = error;
+        }
+        accepting = false;
+        await tail;
+        if (failed) throw failure;
+        active.throwIfAborted();
+        await marks.seal(active);
+        const before = this.blobs.usage.storedBytes;
+        const removed = await this.blobs.collectMarked(
+          async (hash) => marks.has(hash, active),
+          Number.MAX_VALUE,
+          active,
+        );
+        return {
+          removed,
+          reclaimedBytes: before - this.blobs.usage.storedBytes,
+        };
+      } finally {
+        accepting = false;
+        await tail;
+        readCache.clear();
+        await marks.close();
+      }
+    });
   }
   close(): Promise<void> {
     this.closing ??= this.tail.then(async () => {

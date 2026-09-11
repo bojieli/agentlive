@@ -1,0 +1,23 @@
+{
+  "success": true,
+  "checks": [
+    "replay: raw terminal input",
+    "replay: fragmented left arrow selects previous event",
+    "replay: SS3 right arrow selects next event",
+    "replay: bracketed paste ignored",
+    "replay: stepping survives 120x40, 60x20 and 80x24 resize",
+    "replay: clean exit and terminal mode restored",
+    "watch: raw terminal input",
+    "watch: fragmented left arrow selects previous event",
+    "watch: SS3 right arrow selects next event",
+    "watch: bracketed paste ignored",
+    "watch: stepping survives 120x40, 60x20 and 80x24 resize",
+    "watch: clean exit and terminal mode restored",
+    "redirected replay: exact content remains available without terminal escapes",
+    "redirected interactive replay: explicit terminal requirement"
+  ],
+  "platform": "darwin",
+  "node": "v26.8.1",
+  "at": "2026-09-10T12:44:37.255Z",
+  "scope": "POSIX PTY controls, resize survival and terminal mode; no visual emulator or screen-reader acceptance"
+}

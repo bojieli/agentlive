@@ -1,3 +1,4 @@
+import type { NativeMediaResolvers } from "./native-media.js";
 import {
   CodexCapture,
   type CodexArtifactResolver,
@@ -17,9 +18,12 @@ export async function followCodexHistory(options: {
   signal: AbortSignal;
   secrets?: readonly string[];
   resolveArtifact?: CodexArtifactResolver;
+  mediaResolvers?: NativeMediaResolvers;
   pollMs?: number;
   onRecordCommitted?: (cursor: SourceCursor) => Promise<void>;
   onCaughtUp?: () => Promise<void>;
+  onScan?: (finishing: boolean) => Promise<void>;
+  finishRequested?: () => boolean;
 }): Promise<void> {
   const manifest = await inspectCodexHistory(
     options.sourcePath,
@@ -40,9 +44,15 @@ export async function followCodexHistory(options: {
     options.secrets ?? [],
     manifest.createdAt,
     options.resolveArtifact,
+    undefined,
+    options.mediaResolvers,
   );
   const consumer = await createCodexHistoryConsumer(manifest, capture);
   await followJsonlSource(options.sourcePath, {
+    ...(options.onScan ? { onScan: options.onScan } : {}),
+    ...(options.finishRequested
+      ? { finishRequested: options.finishRequested }
+      : {}),
     signal: options.signal,
     ...(options.pollMs === undefined ? {} : { pollMs: options.pollMs }),
     commit: async (record) => {

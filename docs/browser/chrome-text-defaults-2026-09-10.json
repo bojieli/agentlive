@@ -1,0 +1,162 @@
+{
+  "success": true,
+  "checks": [
+    "cached private join",
+    "fresh IndexedDB imports server snapshot blobs",
+    "exact tied previous event",
+    "idle cap control",
+    "live receipt preserves paused prefix",
+    "IndexedDB survives page reload with exact selection",
+    "renderer crash preserves committed cached selection",
+    "keyboard next event",
+    "active generation recovery preserves paused presentation",
+    "follow live",
+    "activity keyboard navigation retains row focus",
+    "desktop viewport has no document overflow",
+    "mobile viewport has no document overflow",
+    "paged activity search",
+    "clear persistent playback cache",
+    "uncached fallback joins and steps",
+    "multi-row virtualized keyboard navigation in both cache modes",
+    "tool disclosure and text page choices survive cached reopen",
+    "attachment inspector restores exact version and rejects unavailable history",
+    "automatic latest text survives paused virtual remount in both cache modes"
+  ],
+  "errors": [],
+  "timings": [
+    {
+      "name": "cached private join",
+      "elapsedMs": 180.29766700000005
+    },
+    {
+      "name": "fresh IndexedDB imports server snapshot blobs",
+      "elapsedMs": 75.60383300000012
+    },
+    {
+      "name": "exact tied previous event",
+      "elapsedMs": 104.14520900000002
+    },
+    {
+      "name": "idle cap control",
+      "elapsedMs": 3.5411249999999654
+    },
+    {
+      "name": "live receipt preserves paused prefix",
+      "elapsedMs": 30.555249999999887
+    },
+    {
+      "name": "IndexedDB survives page reload with exact selection",
+      "elapsedMs": 166.38758399999983
+    },
+    {
+      "name": "renderer crash preserves committed cached selection",
+      "elapsedMs": 593.5247920000002
+    },
+    {
+      "name": "keyboard next event",
+      "elapsedMs": 29.611499999999978
+    },
+    {
+      "name": "active generation recovery preserves paused presentation",
+      "elapsedMs": 728.7445419999999
+    },
+    {
+      "name": "follow live",
+      "elapsedMs": 27.619542000000365
+    },
+    {
+      "name": "activity keyboard navigation retains row focus",
+      "elapsedMs": 33.063958000000184
+    },
+    {
+      "name": "desktop viewport has no document overflow",
+      "elapsedMs": 338.45954200000006
+    },
+    {
+      "name": "mobile viewport has no document overflow",
+      "elapsedMs": 276.7084169999998
+    },
+    {
+      "name": "paged activity search",
+      "elapsedMs": 55.89541599999984
+    },
+    {
+      "name": "clear persistent playback cache",
+      "elapsedMs": 51.79283299999997
+    },
+    {
+      "name": "uncached fallback joins and steps",
+      "elapsedMs": 126.1913340000001
+    },
+    {
+      "name": "multi-row virtualized keyboard navigation in both cache modes",
+      "elapsedMs": 29086.131166999996
+    },
+    {
+      "name": "tool disclosure and text page choices survive cached reopen",
+      "elapsedMs": 1355.1880420000016
+    },
+    {
+      "name": "attachment inspector restores exact version and rejects unavailable history",
+      "elapsedMs": 999.3089160000018
+    },
+    {
+      "name": "automatic latest text survives paused virtual remount in both cache modes",
+      "elapsedMs": 1096.283666999996
+    }
+  ],
+  "phase": "complete",
+  "browser": "152.0.7977.83",
+  "accessibility": {
+    "desktop": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    },
+    "mobile": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    }
+  },
+  "navigation": [
+    {
+      "cached": true,
+      "totalRows": 65,
+      "mountedRows": 12,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    },
+    {
+      "cached": false,
+      "totalRows": 65,
+      "mountedRows": 7,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    }
+  ]
+}

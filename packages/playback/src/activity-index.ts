@@ -190,6 +190,50 @@ export class ActivityIndex {
     if (row.visible ? !equal(reference, visible) : visible !== undefined) bad();
     return row;
   }
+  /** Append-only reducer groups preserve activity identity, order and visibility. */
+  advanceAppends(
+    input: ActivityIndexRoot,
+    events: readonly StoredEvent[],
+    state: PagedRecordingState,
+  ): ActivityIndexRoot {
+    const root = copy(input);
+    if (!events.length || events.length > 256)
+      throw new RangeError("Invalid activity append group");
+    const encoded = canonicalJson(events);
+    if (new TextEncoder().encode(encoded).length > 1048576)
+      throw new RangeError("Activity append group exceeds byte limit");
+    const validated = (JSON.parse(encoded) as unknown[]).map((event) =>
+      storedEventSchema.parse(event),
+    );
+    for (const event of validated) {
+      if (event.serverSeq !== root.appliedSeq + 1)
+        throw new ProtocolError(
+          "sequence_gap",
+          "Activity append group is not contiguous",
+        );
+      if (
+        ![
+          "message.text.append",
+          "tool.arguments.append",
+          "tool.output.append",
+        ].includes(event.content.kind)
+      )
+        throw new ProtocolError(
+          "invalid_request",
+          "Activity group can only contain text appends",
+        );
+      root.appliedSeq = event.serverSeq;
+    }
+    if (
+      state.appliedSeq !== root.appliedSeq ||
+      (state.maps.gaps?.size ?? 0) !== root.gaps
+    )
+      throw new ProtocolError(
+        "sequence_gap",
+        "Activity append group differs from reduced state",
+      );
+    return root;
+  }
   async apply(
     input: ActivityIndexRoot,
     raw: StoredEvent,
@@ -292,6 +336,63 @@ export class ActivityIndex {
     const position = await this.index.rank(root.visible, order(row), signal);
     if (position === undefined) bad();
     return position;
+  }
+  /** Trace schema-defined activity dependencies, checking both indexes and complete gap rows.
+   * Results are provisional until success; callers own codec tracing and root pins.
+   */
+  async trace(
+    reference: ContentReference,
+    binding: SnapshotBinding,
+    visit: (reference: ContentReference) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    reference = snapshotContentReferenceSchema.parse(reference);
+    binding = { ...binding };
+    const root = await this.open(reference, binding, signal);
+    const emit = async (ref: ContentReference) => {
+      signal?.throwIfAborted();
+      await visit({ ...ref });
+      signal?.throwIfAborted();
+    };
+    await emit(reference);
+    let gaps = 0;
+    await this.index.trace(
+      root.seen,
+      async (entry) => {
+        if (entry.kind === "value") {
+          const row = await this.row(entry.ref, root, signal);
+          if (row.key !== entry.key) bad();
+          const visible = await this.index.get(
+            root.visible,
+            order(row),
+            signal,
+          );
+          if (row.visible ? !equal(entry.ref, visible) : visible !== undefined)
+            bad();
+          if (row.kind === "gaps") gaps++;
+        }
+        await emit(entry.ref);
+      },
+      signal,
+    );
+    if (gaps !== root.gaps) bad();
+    await this.index.trace(
+      root.visible,
+      async (entry) => {
+        if (entry.kind === "value") {
+          const row = await this.row(entry.ref, root, signal);
+          if (
+            !row.visible ||
+            entry.key !== order(row) ||
+            !equal(entry.ref, await this.index.get(root.seen, row.key, signal))
+          )
+            bad();
+        }
+        await emit(entry.ref);
+      },
+      signal,
+    );
+    signal?.throwIfAborted();
   }
   async checkpoint(
     input: ActivityIndexRoot,

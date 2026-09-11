@@ -1,0 +1,152 @@
+{
+  "success": true,
+  "checks": [
+    "cached private join",
+    "fresh IndexedDB imports server snapshot blobs",
+    "exact tied previous event",
+    "idle cap control",
+    "live receipt preserves paused prefix",
+    "IndexedDB survives page reload with exact selection",
+    "renderer crash preserves committed cached selection",
+    "keyboard next event",
+    "active generation recovery preserves paused presentation",
+    "follow live",
+    "activity keyboard navigation retains row focus",
+    "desktop viewport has no document overflow",
+    "mobile viewport has no document overflow",
+    "paged activity search",
+    "clear persistent playback cache",
+    "uncached fallback joins and steps",
+    "multi-row virtualized keyboard navigation in both cache modes",
+    "tool disclosure and text page choices survive cached reopen"
+  ],
+  "errors": [],
+  "timings": [
+    {
+      "name": "cached private join",
+      "elapsedMs": 185.07970799999998
+    },
+    {
+      "name": "fresh IndexedDB imports server snapshot blobs",
+      "elapsedMs": 74.72391700000003
+    },
+    {
+      "name": "exact tied previous event",
+      "elapsedMs": 107.31979100000012
+    },
+    {
+      "name": "idle cap control",
+      "elapsedMs": 3.871208000000024
+    },
+    {
+      "name": "live receipt preserves paused prefix",
+      "elapsedMs": 34.61991699999999
+    },
+    {
+      "name": "IndexedDB survives page reload with exact selection",
+      "elapsedMs": 175.58833400000003
+    },
+    {
+      "name": "renderer crash preserves committed cached selection",
+      "elapsedMs": 626.585333
+    },
+    {
+      "name": "keyboard next event",
+      "elapsedMs": 27.01066600000013
+    },
+    {
+      "name": "active generation recovery preserves paused presentation",
+      "elapsedMs": 698.864709
+    },
+    {
+      "name": "follow live",
+      "elapsedMs": 38.28212499999972
+    },
+    {
+      "name": "activity keyboard navigation retains row focus",
+      "elapsedMs": 32.25387499999988
+    },
+    {
+      "name": "desktop viewport has no document overflow",
+      "elapsedMs": 342.9663340000002
+    },
+    {
+      "name": "mobile viewport has no document overflow",
+      "elapsedMs": 279.9092919999998
+    },
+    {
+      "name": "paged activity search",
+      "elapsedMs": 51.91350000000011
+    },
+    {
+      "name": "clear persistent playback cache",
+      "elapsedMs": 72.62787499999968
+    },
+    {
+      "name": "uncached fallback joins and steps",
+      "elapsedMs": 119.08766699999978
+    },
+    {
+      "name": "multi-row virtualized keyboard navigation in both cache modes",
+      "elapsedMs": 38483.5175
+    },
+    {
+      "name": "tool disclosure and text page choices survive cached reopen",
+      "elapsedMs": 1402.4861669999955
+    }
+  ],
+  "phase": "complete",
+  "browser": "152.0.7977.83",
+  "accessibility": {
+    "desktop": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    },
+    "mobile": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    }
+  },
+  "navigation": [
+    {
+      "cached": true,
+      "totalRows": 65,
+      "mountedRows": 10,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    },
+    {
+      "cached": false,
+      "totalRows": 65,
+      "mountedRows": 7,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    }
+  ]
+}

@@ -1,7 +1,15 @@
+import {
+  nativeMediaEvents,
+  type NativeMediaResolvers,
+} from "./native-media.js";
 import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import { z } from "zod";
-import { canonicalJson, type EventContent } from "@agentlive/protocol";
+import {
+  canonicalJson,
+  idSchema,
+  type EventContent,
+} from "@agentlive/protocol";
 import { PublisherJournal, StreamingRedactor } from "@agentlive/publisher";
 import { chunkContent } from "./chunks.js";
 import type { RpcNotification } from "./stdio.js";
@@ -36,9 +44,16 @@ export class CodexCapture {
     secrets: readonly string[] = [],
     private readonly historyAnchor?: string,
     private readonly resolveArtifact?: CodexArtifactResolver,
+    private readonly childThreadId?: string,
+    private readonly mediaResolvers?: NativeMediaResolvers,
   ) {
     if (journal.identity.nativeAgent !== "codex")
       throw new Error("Codex capture requires a Codex journal");
+    if (childThreadId) {
+      idSchema.parse(childThreadId);
+      if (childThreadId === journal.identity.nativeSessionId)
+        throw new Error("Codex child thread must differ from its root session");
+    }
     if (
       historyAnchor !== undefined &&
       !Number.isFinite(Date.parse(historyAnchor))
@@ -50,6 +65,11 @@ export class CodexCapture {
   private filter(text: string): string {
     const filter = new StreamingRedactor(this.secrets);
     return filter.push(text) + filter.finish();
+  }
+  private objectId(value: string) {
+    return id(
+      this.childThreadId ? `codex-child/${this.childThreadId}/${value}` : value,
+    );
   }
   private async emit(
     key: string,
@@ -65,11 +85,13 @@ export class CodexCapture {
       );
     const capturePart = (sourceKey: string, part: EventContent[]) =>
       this.journal.capture({
-        sourceKey,
+        sourceKey: this.childThreadId
+          ? `codex-child/${id(this.childThreadId)}/${sourceKey}`
+          : sourceKey,
         content: part,
         observedAt: historical ?? new Date().toISOString(),
         clockSegmentId: historical
-          ? `history_${id(this.journal.identity.nativeSessionId)}`
+          ? `history_${id(this.childThreadId ?? this.journal.identity.nativeSessionId)}`
           : this.segment,
         elapsedMs: historical
           ? this.historyElapsed
@@ -106,6 +128,7 @@ export class CodexCapture {
     }
   }
   async begin(): Promise<void> {
+    if (this.childThreadId) return;
     await this.emit("codex/session", [
       {
         kind: "session.started",
@@ -120,12 +143,20 @@ export class CodexCapture {
   async accept(notification: RpcNotification): Promise<void> {
     const p = z.record(z.string(), z.unknown()).parse(notification.params);
     if (p.threadId !== this.journal.identity.nativeSessionId) return;
+    if (
+      this.childThreadId &&
+      typeof p.agentThreadId === "string" &&
+      p.agentThreadId !== this.childThreadId
+    )
+      throw new Error("Codex child notification belongs to another thread");
     const method = notification.method;
     this.sourceAgentId =
       typeof p.agentThreadId === "string" &&
       p.agentThreadId !== this.journal.identity.nativeSessionId
         ? id(p.agentThreadId)
-        : undefined;
+        : this.childThreadId
+          ? id(this.childThreadId)
+          : undefined;
     if (method === "goal/updated") {
       const goal = z
         .object({
@@ -179,6 +210,8 @@ export class CodexCapture {
     }
     if (method === "agent/metadata") {
       const threadId = string(p.nativeThreadId);
+      if (this.childThreadId && threadId !== this.childThreadId)
+        throw new Error("Codex child metadata belongs to another thread");
       await this.emit(`agent/${id(threadId)}/metadata`, [
         {
           kind: "agent.updated",
@@ -201,14 +234,17 @@ export class CodexCapture {
       const turn = z
         .object({ id: z.string(), status: z.string() })
         .parse(p.turn);
-      await this.emit(`turn/${id(turn.id)}/start`, [
-        { kind: "turn.started", payload: { turnId: id(turn.id) } },
+      await this.emit(`turn/${this.objectId(turn.id)}/start`, [
+        { kind: "turn.started", payload: { turnId: this.objectId(turn.id) } },
       ]);
       if (method === "turn/completed")
-        await this.emit(`turn/${id(turn.id)}/end`, [
+        await this.emit(`turn/${this.objectId(turn.id)}/end`, [
           {
             kind: "turn.ended",
-            payload: { turnId: id(turn.id), status: status(turn.status) },
+            payload: {
+              turnId: this.objectId(turn.id),
+              status: status(turn.status),
+            },
           },
         ]);
     } else if (method === "item/started" || method === "item/completed")
@@ -234,8 +270,8 @@ export class CodexCapture {
           {
             kind: tool ? "tool.output.append" : "message.text.append",
             payload: tool
-              ? { toolId: id(itemId), text: filtered }
-              : { messageId: id(itemId), text: filtered },
+              ? { toolId: this.objectId(itemId), text: filtered }
+              : { messageId: this.objectId(itemId), text: filtered },
           },
         ] as EventContent[],
         "delta",
@@ -244,7 +280,9 @@ export class CodexCapture {
   }
   /** Recover only full, terminal turns. Active-turn recovery needs an explicit live handoff. */
   async recoverCompletedTurn(raw: unknown): Promise<void> {
-    this.sourceAgentId = undefined;
+    this.sourceAgentId = this.childThreadId
+      ? id(this.childThreadId)
+      : undefined;
     const turn = z
       .object({
         id: z.string(),
@@ -255,24 +293,24 @@ export class CodexCapture {
       .parse(raw);
     const before = this.journal.capturedThrough;
     await this.emit(
-      `turn/${id(turn.id)}/start`,
-      [{ kind: "turn.started", payload: { turnId: id(turn.id) } }],
+      `turn/${this.objectId(turn.id)}/start`,
+      [{ kind: "turn.started", payload: { turnId: this.objectId(turn.id) } }],
       "reconstructed",
     );
     for (const item of turn.items) await this.item(item, true, "reconstructed");
     await this.emit(
-      `turn/${id(turn.id)}/end`,
+      `turn/${this.objectId(turn.id)}/end`,
       [
         {
           kind: "turn.ended",
-          payload: { turnId: id(turn.id), status: turn.status },
+          payload: { turnId: this.objectId(turn.id), status: turn.status },
         },
       ],
       "reconstructed",
     );
     if (this.journal.capturedThrough > before)
       await this.emit(
-        `recovery/${id(turn.id)}`,
+        `recovery/${this.objectId(turn.id)}`,
         [
           {
             kind: "capture.gap",
@@ -349,8 +387,8 @@ export class CodexCapture {
     fidelity: "block" | "reconstructed" = "block",
   ): Promise<void> {
     const item = itemSchema.parse(raw),
-      key = `item/${id(item.id)}`,
-      itemId = id(item.id);
+      key = `item/${this.objectId(item.id)}`,
+      itemId = this.objectId(item.id);
     if (
       item.type === "agentMessage" ||
       item.type === "plan" ||
@@ -390,9 +428,30 @@ export class CodexCapture {
           for (let index = 0; index < parts.length; index++) {
             const part = parts[index]!;
             if (part.type === "text") continue;
+            if (part.type === "image" && typeof part.url === "string") {
+              const mediaKey = `${key}/content/${index}`;
+              const content = await nativeMediaEvents({
+                url: part.url,
+                mediaKind: "image",
+                artifactId: this.objectId(`${item.id}/content/${index}`),
+                messageId: itemId,
+                sourceKey: mediaKey,
+                nativeAgent: "codex",
+                ...(this.mediaResolvers
+                  ? { resolvers: this.mediaResolvers }
+                  : {}),
+              });
+              if (
+                content.some((event) => event.kind === "attachment.available")
+              )
+                this.artifactReport.available++;
+              else this.artifactReport.unavailable++;
+              await this.emit(mediaKey + "/media", content, fidelity);
+              continue;
+            }
             await this.artifact(
               `${key}/content/${index}`,
-              id(`${item.id}/content/${index}`),
+              this.objectId(`${item.id}/content/${index}`),
               (part.type === "local_image" || part.type === "localImage") &&
                 typeof part.path === "string"
                 ? part.path
@@ -487,7 +546,9 @@ export class CodexCapture {
             payload: {
               agentId: id(child),
               nativeSessionId: child,
-              parentAgentId: id(this.journal.identity.nativeSessionId),
+              parentAgentId: id(
+                this.childThreadId ?? this.journal.identity.nativeSessionId,
+              ),
               name: this.filter(string(item.agentPath ?? "Subagent")).slice(
                 0,
                 500,
@@ -543,7 +604,7 @@ export class CodexCapture {
         .parse(item.changes);
       for (let i = 0; i < changes.length; i++) {
         const change = changes[i]!,
-          changeId = id(`${item.id}/${i}`),
+          changeId = this.objectId(`${item.id}/${i}`),
           payload = {
             changeId,
             path: this.filter(change.path),

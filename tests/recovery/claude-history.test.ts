@@ -7,6 +7,77 @@ import {
   captureClaudeHistory,
 } from "../../packages/adapters/src/index.js";
 import { PublisherJournal } from "../../packages/publisher/src/index.js";
+import { createClaudeHistoryConsumer } from "../../packages/adapters/src/claude-history.js";
+import { readJsonlSource } from "../../packages/adapters/src/jsonl.js";
+
+it("isolates subagent objects and rejects records from another agent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-claude-child-"));
+  let journal: PublisherJournal | undefined;
+  try {
+    journal = await PublisherJournal.open(join(root, "publisher"), {
+      serverOrigin: "http://localhost",
+      agent: "claude",
+      nativeSessionId: "session",
+    });
+    await journal.bindRemote("stream", "revision");
+    const source = join(root, "child.jsonl");
+    const row = (agentId: string) => ({
+      type: "assistant",
+      agentId,
+      isSidechain: true,
+      sessionId: "session",
+      uuid: "same_uuid",
+      timestamp: "2026-09-01T00:00:00Z",
+      message: {
+        content: [
+          { type: "text", text: agentId },
+          {
+            type: "tool_use",
+            id: "same_tool",
+            name: "Bash",
+            input: { command: "echo hello" },
+          },
+        ],
+      },
+    });
+    for (const agentId of ["worker1", "worker2"]) {
+      await writeFile(source, JSON.stringify(row(agentId)) + "\n");
+      const manifest = await inspectClaudeHistory(source);
+      const consumer = await createClaudeHistoryConsumer(
+        manifest,
+        journal,
+        [],
+        undefined,
+        { childAgentId: agentId },
+      );
+      for await (const record of readJsonlSource(source))
+        await consumer.accept(record);
+      await expect(
+        consumer.accept({
+          value: row("foreign"),
+          cursor: { offset: 1, prefixHash: "a".repeat(64) },
+        }),
+      ).rejects.toThrow("conflicting ownership");
+    }
+    const events = [];
+    for await (const event of journal.pending(0)) events.push(event.content);
+    expect(
+      events.filter((event) => event.kind === "session.started"),
+    ).toHaveLength(0);
+    const messages = events.filter((event) => event.kind === "message.started");
+    expect(new Set(messages.map((event) => event.payload.messageId)).size).toBe(
+      2,
+    );
+    expect(new Set(messages.map((event) => event.payload.agentId)).size).toBe(
+      2,
+    );
+    const tools = events.filter((event) => event.kind === "tool.started");
+    expect(new Set(tools.map((event) => event.payload.toolId)).size).toBe(2);
+  } finally {
+    await journal?.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 it("converts Claude text, tool failures and explicit gaps with durable retry identities", async () => {
   const root = await mkdtemp(join(tmpdir(), "agentlive-claude-history-"));
   let journal: PublisherJournal | undefined;

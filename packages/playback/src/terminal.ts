@@ -1,5 +1,6 @@
 import type { EventContent, StoredEvent } from "@agentlive/protocol";
-import type { RecordingState } from "./index.js";
+import { unfinishedActivity, type RecordingState } from "./index.js";
+import { completenessSummary, completenessText } from "./completeness.js";
 /** Keep source content inert: no ANSI/OSC, cursor movement, hidden bidi controls or carriage returns. */
 export function terminalText(text: string): string {
   return text.replace(
@@ -13,6 +14,7 @@ export function renderTerminalEvent(
   serverOrigin: string,
   streamId: string,
   previous?: RecordingState,
+  attachmentLocation?: (hash: string) => string,
 ): string {
   return renderContent(
     event.content,
@@ -21,6 +23,7 @@ export function renderTerminalEvent(
     streamId,
     event.timelineMs,
     previous,
+    attachmentLocation,
   );
 }
 function renderContent(
@@ -30,6 +33,7 @@ function renderContent(
   streamId: string,
   timelineMs: number,
   previous?: RecordingState,
+  attachmentLocation?: (hash: string) => string,
 ): string {
   const section = (label: string, body = "") =>
     `[${(timelineMs / 1000).toFixed(3)}s] ${terminalText(label)}\n${
@@ -135,7 +139,7 @@ function renderContent(
       const attachment = content.payload.attachment;
       return section(
         `Attachment: ${attachment.filename}`,
-        `${attachment.mediaType}; ${attachment.byteSize} bytes; version ${attachment.version}\n${attachment.provenance ?? "provenance unavailable"}\n${serverOrigin}/api/v1/streams/${streamId}/attachments/${attachment.hash}`,
+        `${attachment.mediaType}; ${attachment.byteSize} bytes; version ${attachment.version}\n${attachment.provenance ?? "provenance unavailable"}\n${attachmentLocation?.(attachment.hash) ?? `${serverOrigin}/api/v1/streams/${streamId}/attachments/${attachment.hash}`}`,
       );
     }
     case "attachment.unavailable":
@@ -235,6 +239,14 @@ function renderContent(
         content.payload.recoveredState ? "Capture recovered" : "Capture gap",
         content.payload.reason,
       );
+    case "capture.completeness": {
+      const notice = completenessText({
+        source: "recorded",
+        ...content.payload,
+        at: 1,
+      });
+      return section(notice.title, notice.details.join("\n"));
+    }
     default:
       return "";
   }
@@ -268,6 +280,14 @@ export function* renderTerminalPending(
       "Text replacement incomplete",
       "Previous complete text is retained until replacement chunks finish.",
     );
+  // A persisted notice is rendered from its event/state; derive one only without it.
+  if (!state.completeness) {
+    const summary = completenessSummary(state, unfinishedActivity(state));
+    if (summary) {
+      const notice = completenessText(summary);
+      yield block(notice.title, notice.details.join("\n"));
+    }
+  }
 }
 
 /** Current state at a seek boundary; does not invent or append stored events. */
@@ -333,6 +353,10 @@ export function* renderTerminalSnapshot(
       kind: "capture.gap",
       payload: { reason: gap.reason, recoveredState: gap.recoveredState },
     });
+  if (state.completeness) {
+    const { at: _at, ...payload } = state.completeness;
+    yield render({ kind: "capture.completeness", payload });
+  }
   yield* renderTerminalPending(state);
   if (state.lifecycle === "ended")
     yield `[${(positionMs / 1000).toFixed(3)}s] Recording ended\n\n`;

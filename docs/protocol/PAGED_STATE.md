@@ -10,6 +10,8 @@ Callers serialize updates, retain content-store ownership through accepted I/O, 
 
 `checkpoint` writes a `format: "agentlive.paged-state"`, version 1, reducer-version 1 envelope bound to stream ID and revision. `open` validates this envelope and root metadata; referenced objects are validated as visited. Pending replacements preserve their chunks, aggregate text reference, target and length, so reduction can continue after a checkpoint reopen. Checkpoints do not imply that all referenced content has been eagerly audited.
 
+The root may carry an optional inline `completeness` object (the latest `capture.completeness` payload plus `at`, its server sequence, validated to be at or before `appliedSeq`). It is omitted when no notice applies, so roots of recordings without the event are byte-identical to earlier checkpoints. The legacy `SnapshotReader` codec likewise accepts an optional `completeness` state field.
+
 This format is distinct from the initial `SnapshotReader` format. Server publication now writes paged descriptors and the shared client dispatches explicitly through `openRecordingSnapshot`; descriptors without a format retain the legacy codec. Browser/terminal automatic snapshot use remains required. Substituting one root for the other is invalid.
 
 ## Bounds and limitations

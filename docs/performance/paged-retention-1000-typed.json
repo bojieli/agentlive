@@ -1,0 +1,48 @@
+{
+  "workload": "paged reducer; one message per 64 events, 48-byte text deltas, 8-hour simulated timeline",
+  "runtime": "v26.8.1",
+  "platform": "darwin",
+  "requestedEvents": 1000,
+  "batchSize": 256,
+  "latencyUnit": "batch",
+  "completed": 1000,
+  "elapsedMs": 2987.924292,
+  "eventsPerSecond": 334.68050133580823,
+  "reductionP50Ms": 719.323135,
+  "reductionP95Ms": 772.276223,
+  "peakHeap": 19611872,
+  "peakRss": 80347136,
+  "storedBytes": 183055,
+  "blobFiles": 389,
+  "operations": {
+    "put": {
+      "calls": 208,
+      "ms": 2790.853914
+    },
+    "append": {
+      "calls": 16,
+      "ms": 41.533916000000886
+    },
+    "read": {
+      "calls": 348,
+      "ms": 106.21509099999895
+    }
+  },
+  "failure": null,
+  "retention": {
+    "latest": {
+      "roots": 1,
+      "manifests": 37,
+      "blobFiles": 74,
+      "bytes": 23039
+    },
+    "checkpoints": {
+      "roots": 4,
+      "manifests": 46,
+      "blobFiles": 92,
+      "bytes": 35277
+    },
+    "diagnosticMs": 91.94166700000005,
+    "scope": "Format-aware reducer and codec tracing; no pins or reclamation; excluded from reduction timing"
+  }
+}

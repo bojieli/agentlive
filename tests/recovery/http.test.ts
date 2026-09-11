@@ -1,10 +1,14 @@
+import { RecordingSnapshotClient } from "../../packages/client/src/index.js";
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, rename } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { startServer } from "../../packages/server/src/http.js";
+import { exportRecording } from "../../packages/cli/src/export.js";
+import { importArchiveRecording } from "../../packages/cli/src/import-archive.js";
+import { openArchive } from "../../packages/storage/src/archive.js";
 import type { PublishedEvent } from "../../packages/protocol/src/index.js";
 const require = createRequire(
   new URL("../../packages/server/package.json", import.meta.url),
@@ -15,6 +19,121 @@ const ownerSecret = "b".repeat(64),
 const servers: Awaited<ReturnType<typeof startServer>>[] = [];
 const roots: string[] = [];
 const sockets: any[] = [];
+it("imports a live prefix privately under a new identity with portable attachment bytes", async () => {
+  const { server, base, streamId, revision } = await setup("public");
+  const bytes = Buffer.from("portable version bytes");
+  const hash = createHash("sha256").update(bytes).digest("hex");
+  const uploaded = await fetch(base + "/attachments", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${writeSecret}`,
+      "x-attachment-sha256": hash,
+      "x-attachment-bytes": String(bytes.length),
+    },
+    body: bytes,
+  });
+  expect(uploaded.status).toBe(201);
+  const pub = await publisher(server, streamId, revision, 1);
+  const available = event(streamId, 1);
+  available.content = {
+    kind: "attachment.available",
+    payload: {
+      attachment: {
+        artifactId: "portable",
+        version: 1,
+        hash,
+        byteSize: bytes.length,
+        filename: "portable.txt",
+        mediaType: "text/plain",
+      },
+    },
+  };
+  pub.send({
+    type: "batch",
+    protocolVersion: 1,
+    requestId: "portable",
+    events: [available],
+  });
+  expect((await pub.next()).type).toBe("ack");
+  const output = join(server.store.directory, "live-prefix.agentlive");
+  await exportRecording({
+    serverOrigin: server.url,
+    streamId,
+    output,
+    signal: AbortSignal.timeout(10000),
+  });
+  const imported = await importArchiveRecording({
+    source: output,
+    serverOrigin: server.url,
+    credential: ownerSecret,
+    signal: AbortSignal.timeout(10000),
+  });
+  expect(imported.streamId).not.toBe(streamId);
+  expect(imported.revision).not.toBe(revision);
+  expect(imported.lifecycle).toBe("ended");
+  const importedBase = `${server.url}/api/v1/streams/${imported.streamId}`;
+  expect((await fetch(importedBase)).status).toBe(403);
+  const headers = { authorization: `Bearer ${ownerSecret}` };
+  const downloaded = await fetch(`${importedBase}/attachments/${hash}`, {
+    headers,
+  });
+  expect(downloaded.status).toBe(200);
+  expect(Buffer.from(await downloaded.arrayBuffer())).toEqual(bytes);
+  expect((await (await fetch(base)).json()).lifecycle).toBe("open");
+  const restored = await server.store.get(imported.streamId);
+  try {
+    const events = [];
+    for await (const event of restored.history(0, restored.info.serverSeq))
+      events.push(event);
+    expect(events[1]!.content).toEqual(available.content);
+    expect(events.at(-1)!.content.kind).toBe("recording.ended");
+  } finally {
+    server.store.release(restored);
+  }
+});
+it("exports an authorized frozen recording that opens independently of the server", async () => {
+  const { server, streamId } = await setup("private");
+  const denied = await fetch(`${server.url}/api/v1/streams/${streamId}/export`);
+  expect(denied.status).toBe(403);
+  const output = join(server.store.directory, "portable.agentlive");
+  const result = await exportRecording({
+    serverOrigin: server.url,
+    streamId,
+    output,
+    credential: ownerSecret,
+    signal: AbortSignal.timeout(10000),
+  });
+  expect(result.throughServerSeq).toBe(1);
+  const archive = await openArchive(output);
+  try {
+    expect(archive.manifest.recording.streamId).toBe(streamId);
+    expect(JSON.stringify(archive.manifest)).not.toContain(ownerSecret);
+    expect(JSON.stringify(archive.manifest)).not.toContain(writeSecret);
+    const events = [];
+    for await (const event of archive.events()) events.push(event);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.content.kind).toBe("recording.created");
+  } finally {
+    await archive.close();
+  }
+});
+it("reports unavailable recording storage as unready without leaking paths", async () => {
+  const { server } = await setup();
+  const sessions = join(server.store.directory, "sessions");
+  const moved = join(server.store.directory, "sessions-offline");
+  expect((await fetch(server.url + "/readyz")).status).toBe(200);
+  await rename(sessions, moved);
+  try {
+    const response = await fetch(server.url + "/readyz");
+    expect(response.status).toBe(503);
+    expect(await response.json()).toEqual({ ready: false });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect((await fetch(server.url + "/healthz")).status).toBe(200);
+  } finally {
+    await rename(moved, sessions);
+  }
+  expect((await fetch(server.url + "/readyz")).status).toBe(200);
+});
 afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.terminate();
   for (const server of servers.splice(0)) await server.close();
@@ -304,6 +423,22 @@ it("uploads immutable attachments and serves them only after their event commits
   const download = await fetch(base + "/attachments/" + hash);
   expect(download.headers.get("content-disposition")).toContain("attachment");
   pub.ws.close();
+  // Public response authorization retains the session until bytes are drained.
+  const whileDownloading = await fetch(server.url + "/api/v1/streams", {
+    method: "POST",
+    headers: {
+      authorization: "Bearer " + ownerSecret,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ ...input, requestId: "evict-after-download-open" }),
+  });
+  expect(whileDownloading.status).toBe(503);
+  await whileDownloading.arrayBuffer();
+  expect(
+    createHash("sha256")
+      .update(Buffer.from(await download.arrayBuffer()))
+      .digest("hex"),
+  ).toBe(hash);
   await expect
     .poll(async () => {
       const response = await fetch(server.url + "/api/v1/streams", {
@@ -322,11 +457,6 @@ it("uploads immutable attachments and serves them only after their event commits
     })
     .toBe(201);
   expect(server.store.cacheSize).toBe(1);
-  expect(
-    createHash("sha256")
-      .update(Buffer.from(await download.arrayBuffer()))
-      .digest("hex"),
-  ).toBe(hash);
 });
 it("rejects malformed protocol messages and invalid history bounds", async () => {
   const { server, base, revision } = await setup();
@@ -799,6 +929,21 @@ it("publishes revision-bound snapshots and serves verified content only to autho
   });
   expect(created.status).toBe(201);
   const descriptor = (await created.json()).snapshot;
+  const blobUrl =
+    base +
+    `/snapshot-blobs/${descriptor.ref.hash}?${new URLSearchParams({ revision, byteSize: String(descriptor.ref.byteSize), units: String(descriptor.ref.units) })}`;
+  expect((await fetch(blobUrl)).status).toBe(403);
+  const wrongBlob = new URL(blobUrl);
+  wrongBlob.searchParams.set("revision", "other");
+  expect((await fetch(wrongBlob, { headers })).status).toBe(409);
+  const blobReply = await fetch(blobUrl, { headers });
+  expect(blobReply.status).toBe(200);
+  const bytes = Buffer.from((await blobReply.json()).base64, "base64");
+  expect(bytes.length).toBe(descriptor.ref.byteSize);
+  expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+    descriptor.ref.hash,
+  );
+
   const retry = await fetch(base + "/snapshots", {
     method: "POST",
     body,
@@ -926,7 +1071,7 @@ it("loads exact Unicode text ranges through the shared snapshot client", async (
       credential: writeSecret,
     });
     try {
-      const { reader } = await client.publish(
+      const { reader, descriptor } = await client.publish(
         session.info.serverSeq,
         AbortSignal.timeout(5000),
       );
@@ -939,6 +1084,73 @@ it("loads exact Unicode text ranges through the shared snapshot client", async (
       expect(await reader.text(contents, 16380, 9)).toBe(
         text.slice(16380, 16389),
       );
+      const { TextStore } = await import("../../packages/storage/src/index.js");
+      const { PagedReducer, ActivityIndex } =
+        await import("../../packages/playback/src/index.js");
+      const directory = await mkdtemp(
+        join(tmpdir(), "agentlive-http-disk-snapshot-"),
+      );
+      roots.push(directory);
+      let downloaded = 0;
+      let disk = await TextStore.open(
+        directory,
+        undefined,
+        async (ref, active) => {
+          downloaded++;
+          return client.readBlob(ref, active);
+        },
+      );
+      try {
+        const binding = { streamId, revision },
+          signal = AbortSignal.timeout(10000);
+        const reducer = new PagedReducer(disk),
+          index = new ActivityIndex(disk);
+        let state = await reducer.open(descriptor.ref, binding, signal);
+        let rows = await index.open(descriptor.activity!, binding, signal);
+        expect(await reducer.materialize(state, undefined, signal)).toEqual(
+          await reader.materialize(),
+        );
+        await session.append(lease, [
+          {
+            ...base,
+            producerSeq: 3,
+            elapsedMs: 2,
+            content: {
+              kind: "message.text.append",
+              payload: { messageId: "message", text: " suffix" },
+            },
+          },
+        ]);
+        for await (const event of session.history(
+          descriptor.serverSeq,
+          session.info.serverSeq,
+        )) {
+          state = await reducer.apply(state, event, signal);
+          rows = await index.apply(rows, event, state, reducer, signal);
+        }
+        const checkpoint = await reducer.checkpoint(state, binding, signal);
+        const activity = await index.checkpoint(rows, binding, signal);
+        const expected = await reducer.materialize(state, undefined, signal);
+        expect(expected.messages.get("message")!.text).toBe(text + " suffix");
+        expect(downloaded).toBeGreaterThan(0);
+        await disk.close();
+        client.close();
+        disk = await TextStore.open(directory);
+        const reopened = new PagedReducer(disk);
+        expect(
+          await reopened.materialize(
+            await reopened.open(checkpoint, binding, signal),
+            undefined,
+            signal,
+          ),
+        ).toEqual(expected);
+        expect(
+          (await new ActivityIndex(disk).open(activity, binding, signal))
+            .appliedSeq,
+        ).toBe(state.appliedSeq);
+      } finally {
+        await disk.close();
+      }
       client.close();
       await expect(reader.text(contents, 0, 1)).rejects.toThrow("closed");
     } finally {
@@ -947,4 +1159,125 @@ it("loads exact Unicode text ranges through the shared snapshot client", async (
   } finally {
     server.store.release(session);
   }
+});
+it("authorizes durable snapshot leases independently of their tokens and fences revision and release", async () => {
+  const { base, revision } = await setup("private");
+  const headers = {
+    authorization: `Bearer ${writeSecret}`,
+    "content-type": "application/json",
+  };
+  const acquire = (extraHeaders = headers, selectedRevision = revision) =>
+    fetch(base + "/snapshot-leases", {
+      method: "POST",
+      headers: extraHeaders,
+      body: JSON.stringify({ revision: selectedRevision, throughServerSeq: 0 }),
+    });
+  expect(
+    (await acquire({ "content-type": "application/json" } as typeof headers))
+      .status,
+  ).toBe(403);
+  const absent = await acquire();
+  expect(absent.status).toBe(201);
+  expect((await absent.json()).lease).toBeNull();
+  expect(
+    (
+      await fetch(base + "/snapshots", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ revision, throughServerSeq: 0 }),
+      })
+    ).status,
+  ).toBe(201);
+  const selected = await acquire();
+  expect(selected.status).toBe(201);
+  const envelope = await selected.json();
+  expect(envelope.revision).toBe(revision);
+  expect(envelope.lease.snapshot.activity).toBeDefined();
+  const leasedClient = new RecordingSnapshotClient({
+    serverOrigin: new URL(base).origin,
+    streamId: envelope.streamId,
+    revision,
+    credential: writeSecret,
+  });
+  try {
+    expect(
+      (await leasedClient.openLease(envelope.lease, AbortSignal.timeout(5000)))
+        .descriptor,
+    ).toEqual(envelope.lease.snapshot);
+  } finally {
+    leasedClient.close();
+  }
+  const root = envelope.lease.snapshot.ref;
+  const query = new URLSearchParams({
+    revision,
+    byteSize: String(root.byteSize),
+    units: String(root.units),
+    lease: envelope.lease.token,
+  });
+  const blobUrl = base + `/snapshot-blobs/${root.hash}?${query}`;
+  const rangeUrl =
+    base + `/snapshot-content/${root.hash}?${query}&offset=0&length=1`;
+  expect((await fetch(blobUrl, { headers })).status).toBe(200);
+  expect((await fetch(rangeUrl, { headers })).status).toBe(200);
+  expect((await fetch(blobUrl)).status).toBe(403);
+  const leasePath = base + "/snapshot-leases/" + envelope.lease.token;
+  const renew = (extraHeaders = headers, selectedRevision = revision) =>
+    fetch(leasePath + "/renew", {
+      method: "POST",
+      headers: extraHeaders,
+      body: JSON.stringify({ revision: selectedRevision }),
+    });
+  expect(
+    (await renew({ "content-type": "application/json" } as typeof headers))
+      .status,
+  ).toBe(403);
+  expect((await renew(headers, "wrong")).status).toBe(409);
+  const renewed = await renew();
+  expect(renewed.status).toBe(200);
+  expect((await renewed.json()).lease.snapshot).toEqual(
+    envelope.lease.snapshot,
+  );
+  expect(
+    (await fetch(leasePath + `?revision=${revision}`, { method: "DELETE" }))
+      .status,
+  ).toBe(403);
+  expect((await renew()).status).toBe(200);
+  for (let i = 0; i < 2; i++)
+    expect(
+      (
+        await fetch(leasePath + `?revision=${revision}`, {
+          method: "DELETE",
+          headers,
+        })
+      ).status,
+    ).toBe(204);
+  for (const url of [blobUrl, rangeUrl]) {
+    const read = await fetch(url, { headers });
+    expect(read.status).toBe(409);
+    expect((await read.json()).error.code).toBe("stale_lease");
+  }
+  const staleClient = new RecordingSnapshotClient({
+    serverOrigin: new URL(base).origin,
+    streamId: envelope.streamId,
+    revision,
+    credential: writeSecret,
+  });
+  try {
+    await expect(
+      staleClient.openLease(envelope.lease, AbortSignal.timeout(5000)),
+    ).rejects.toMatchObject({ code: "stale_lease" });
+    await expect(
+      staleClient.readBlob(
+        root,
+        AbortSignal.timeout(5000),
+        envelope.lease.token,
+      ),
+    ).rejects.toMatchObject({ code: "stale_lease" });
+  } finally {
+    staleClient.close();
+  }
+  const stale = await renew();
+  expect(stale.status).toBe(409);
+  expect((await stale.json()).error.code).toBe("stale_lease");
+  expect((await acquire(headers, "wrong")).status).toBe(409);
 });

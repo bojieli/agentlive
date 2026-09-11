@@ -1,4 +1,9 @@
 import {
+  changeTextPage,
+  type TextPageChoice,
+  type TextPosition,
+} from "./inspection-choices.js";
+import {
   readTextPage,
   findSourceText,
   sourcePageContaining,
@@ -14,7 +19,7 @@ import {
   type ReactNode,
 } from "react";
 import { pageContaining, textPage } from "./text-page.js";
-type Position = number | "latest";
+type Position = TextPosition;
 interface Reveal {
   query: string;
   generation: number;
@@ -26,6 +31,7 @@ const Pages = createContext<
       reveals: ReadonlyMap<string, Reveal>;
       handled: ReadonlyMap<string, number>;
       acknowledge: (choice: string, generation: number) => void;
+      followDefault: (choice: string) => void;
       set: (choice: string, page: Position) => void;
       reveal: (group: string, query: string) => void;
     }
@@ -34,9 +40,13 @@ const Pages = createContext<
 export function TextPagesProvider({
   children,
   following,
+  saved,
+  onChange,
 }: {
   children: ReactNode;
   following: boolean;
+  saved?: readonly TextPageChoice[] | undefined;
+  onChange?: ((key: string, page: TextPosition) => void) | undefined;
 }) {
   const [positions, setPositions] = useState<ReadonlyMap<string, Position>>(
     () => new Map(),
@@ -51,17 +61,26 @@ export function TextPagesProvider({
     <Pages.Provider
       value={{
         following,
-        positions,
+        positions: saved ? new Map([...positions, ...saved]) : positions,
         reveals,
         handled,
         acknowledge: (choice, generation) =>
           setHandled((previous) => new Map(previous).set(choice, generation)),
-        set: (choice, page) =>
+        followDefault: (choice) =>
           setPositions((previous) =>
-            previous.get(choice) === page
+            previous.has(choice)
               ? previous
-              : new Map(previous).set(choice, page),
+              : new Map(changeTextPage([...previous], choice, "latest")),
           ),
+        set: (choice, page) => {
+          if ((saved ? new Map(saved) : positions).get(choice) === page) return;
+          if (onChange) onChange(choice, page);
+          else
+            setPositions(
+              (previous) =>
+                new Map(changeTextPage([...previous], choice, page)),
+            );
+        },
         reveal: (group, query) =>
           setReveals((previous) =>
             new Map(previous).set(group, {
@@ -78,6 +97,23 @@ export function TextPagesProvider({
 export function useRevealText() {
   const pages = useContext(Pages);
   return (group: string, query: string) => pages?.reveal(group, query);
+}
+/** Numeric list positions share the bounded inspection-page catalog with text. */
+export function useInspectionOffset(
+  choice: string,
+): readonly [number, (offset: number) => void] {
+  const pages = useContext(Pages);
+  const [local, setLocal] = useState(0);
+  const selected = pages?.positions.get(choice);
+  return [
+    typeof selected === "number" ? selected : local,
+    (offset) => {
+      if (!Number.isSafeInteger(offset) || offset < 0)
+        throw new RangeError("Invalid inspection offset");
+      if (pages) pages.set(choice, offset);
+      else setLocal(offset);
+    },
+  ];
 }
 /** Each mounted text field contributes at most one bounded page to the DOM. */
 function MemoryText({
@@ -106,9 +142,8 @@ function MemoryText({
     else setLocal(page);
   };
   useLayoutEffect(() => {
-    if (pages?.following && !pages.positions.has(choice))
-      pages.set(choice, "latest");
-  }, [pages?.following, pages?.positions, choice]);
+    if (pages?.following) pages.followDefault(choice);
+  }, [pages?.following, choice]);
   useLayoutEffect(() => {
     if (!reveal || reveal.generation === handled) return;
     const offset = text.indexOf(reveal.query);
@@ -212,9 +247,8 @@ function StoredText({
   const reveal = pages?.reveals.get(group),
     handled = pages?.handled.get(choice);
   useLayoutEffect(() => {
-    if (pages?.following && !pages.positions.has(choice))
-      pages.set(choice, "latest");
-  }, [pages?.following, pages?.positions, choice]);
+    if (pages?.following) pages.followDefault(choice);
+  }, [pages?.following, choice]);
   useEffect(() => {
     const stop = new AbortController(),
       signal = AbortSignal.any([stop.signal, AbortSignal.timeout(10000)]);

@@ -103,10 +103,44 @@ export class OrderedContentMap {
   }
   private async hash(name: OrderedMapKey, signal?: AbortSignal) {
     signal?.throwIfAborted();
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(canonicalJson(name)),
-    );
+    // Native crypto can remain pending without active worker work. Bound the wait
+    // and observe late completion without letting it resume cancelled tracing.
+    const digest = await new Promise<ArrayBuffer>((resolve, reject) => {
+      const timer = setTimeout(
+        () =>
+          finish(
+            new ProtocolError("retry_later", "Ordered map digest timed out"),
+          ),
+        30000,
+      );
+      const abort = () => finish(signal!.reason);
+      let settled = false;
+      const finish = (error?: unknown, value?: ArrayBuffer) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+        if (value !== undefined) resolve(value);
+        else reject(error);
+      };
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) {
+        abort();
+        return;
+      }
+      Promise.resolve()
+        .then(() => {
+          signal?.throwIfAborted();
+          return crypto.subtle.digest(
+            "SHA-256",
+            new TextEncoder().encode(canonicalJson(name)),
+          );
+        })
+        .then(
+          (value) => finish(undefined, value),
+          (error) => finish(error),
+        );
+    });
     signal?.throwIfAborted();
     return Array.from(new Uint8Array(digest), (byte) =>
       byte.toString(16).padStart(2, "0"),
@@ -208,6 +242,54 @@ export class OrderedContentMap {
     }
     signal?.throwIfAborted();
     return result;
+  }
+  /** Trace both index trees and validated entries; application values remain opaque.
+   * Callbacks are provisional until success. Root pinning/collection belongs to the caller.
+   */
+  async trace(
+    input: OrderedMapRoot | null,
+    visit: (
+      item:
+        | { kind: "node" | "entry"; ref: ContentReference }
+        | { kind: "value"; key: OrderedMapKey; ref: ContentReference },
+    ) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const root = copyOrderedMapRoot(input);
+    for (const order of [false, true]) {
+      await this.index.trace(
+        order ? root.byOrder : root.byKey,
+        async (item) => {
+          if (item.kind === "node") {
+            await visit(item);
+            return;
+          }
+          const entry = await this.entry(item.ref, signal);
+          const hash = await this.hash(entry.key, signal);
+          if (
+            entry.ordinal >= root.nextOrdinal ||
+            item.key !== (order ? ordinal(entry.ordinal) : hash)
+          )
+            bad();
+          const paired = await this.index.get(
+            order ? root.byKey : root.byOrder,
+            order ? hash : ordinal(entry.ordinal),
+            signal,
+          );
+          if (!paired || !equal(paired, item.ref)) bad();
+          await visit({ kind: "entry", ref: { ...item.ref } });
+          signal?.throwIfAborted();
+          if (order)
+            await visit({
+              kind: "value",
+              key: entry.key,
+              ref: { ...entry.value },
+            });
+        },
+        signal,
+      );
+    }
+    signal?.throwIfAborted();
   }
   async set(
     input: OrderedMapRoot | null,

@@ -37,7 +37,6 @@ The test suite exercises actual local HTTP/WebSocket listeners and temporary fil
 
 These synthetic integration tests complement the live-agent transport probes. They do not establish production adapter normalization or native-session recovery, which still need the full live-agent scenario matrix.
 
-
 ## Large text replacement
 
 The native corpus contains source records larger than a publish batch. Normalizers split large appends and use `text.replacement.started`, ordered `text.replacement.chunk`, and `text.replacement.completed` for large final message text, tool input/output, and file patches. The replacement targets text fields only; it cannot introduce attachment references or server lifecycle operations. Each chunk has a durable event sequence and stable source-effect identity. The reducer preserves the previous value until every declared part is present, then switches to the reconstructed value. It rejects missing/out-of-order chunks and excessive pending replacement data. Subscriber checkpoints must include unfinished replacements alongside their receipt cursor.
@@ -51,6 +50,14 @@ The current reference reducer bounds unfinished replacement text to 32 Ã— 1024 Ã
 `object.visibility` addresses an existing message, tool, or attachment by object type and ID. Setting visibility false preserves its history and attachment versions while excluding it from current pending-work presentation. Setting it true restores the same object. Attachment updates preserve visibility. Legacy events without visibility fields remain visible by default.
 
 OpenCode capture records these transitions durably and reconstructs missing checkpoint state from its journal during upgrade. Source absence is distinct from session ending. Native revert metadata is not yet interpreted; these events currently reflect presence in reconciled snapshots.
+
+## Completeness notices
+
+`capture.completeness` records, in normal publisher history, that the recording contains work the native source never finished. Payload version 1 is `{ version: 1, reason: "frozen-native-source", unfinishedMessages, unfinishedTools, withheldTextMessages }`: bounded non-negative counts and a fixed reason, never content, identifiers or secret material. Native importers emit at most one, as the final imported event before the server ends the recording (see [converter-migrations.md](../converter-migrations.md#import-completeness-notices)).
+
+Both reducers keep the latest notice as optional `completeness` state with its server sequence (`at`). A later notice replaces it and `recording.reopened` clears it, because continued capture may finish or reconcile the counted work. States of recordings without the event have no `completeness` key, so their paged roots and checkpoints keep their previous canonical bytes. The activity index adds no row for the event.
+
+Terminal event/snapshot output and the browser feed render the persisted notice. Separately, at an ended boundary without a persisted notice, viewers derive an "incomplete activity" notice from visible messages that never completed and tools still running; the derivation is presentation-only and never appended to history. The reference and paged terminal renderers count every object. The browser paged view checks at most the 2,048 most recently inserted messages and tools each and reports a lower bound ("at least") when a map is larger. Open boundaries are still capturing, so they do not get derived notices.
 
 ## Independent terminal presentation
 

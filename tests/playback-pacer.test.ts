@@ -97,3 +97,155 @@ it("wakes timed waits for immediate catch-up while retaining pause semantics", a
   await waiting;
   expect(vi.getTimerCount()).toBe(0);
 });
+
+it("steps exactly one event across tied timestamps and stays paused across long gaps", async () => {
+  const abort = clock();
+  const pacer = new PlaybackPacer();
+  pacer.setPaused(true);
+  pacer.step();
+  expect(await pacer.waitUntil(60000, abort.signal)).toBe("step");
+  expect(pacer.paused).toBe(true);
+  const completed = vi.fn();
+  const tied = pacer.waitUntil(60000, abort.signal).then(completed);
+  await vi.advanceTimersByTimeAsync(100000);
+  expect(completed).not.toHaveBeenCalled();
+  pacer.step();
+  await tied;
+  expect(completed).toHaveBeenCalledWith("step");
+  pacer.setPaused(false);
+  const next = vi.fn();
+  const pending = pacer.waitUntil(61000, abort.signal).then(next);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(next).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await pending;
+  expect(next).toHaveBeenCalledWith("play");
+  expect(vi.getTimerCount()).toBe(0);
+});
+it("retains queued steps across source anchoring, discards them on seek/resume, and cancels waits", async () => {
+  const abort = clock();
+  const pacer = new PlaybackPacer();
+  pacer.step();
+  pacer.step();
+  pacer.reset(0);
+  expect(await pacer.waitUntil(0, abort.signal)).toBe("step");
+  expect(await pacer.waitUntil(0, abort.signal)).toBe("step");
+  pacer.step();
+  pacer.seek(0);
+  const rejected = expect(pacer.waitUntil(0, abort.signal)).rejects.toThrow(
+    "cancel step",
+  );
+  abort.abort(new Error("cancel step"));
+  await rejected;
+  pacer.step();
+  pacer.setPaused(false);
+  pacer.setPaused(true);
+  const second = new AbortController(),
+    finished = vi.fn();
+  const waiting = pacer.waitUntil(0, second.signal).then(finished);
+  await vi.advanceTimersByTimeAsync(0);
+  expect(finished).not.toHaveBeenCalled();
+  pacer.step();
+  await waiting;
+  expect(finished).toHaveBeenCalledWith("step");
+});
+
+it("caps each recorded idle gap before speed scaling while preserving short gaps and pause time", async () => {
+  const abort = clock();
+  const pacer = new PlaybackPacer(2);
+  pacer.setIdleCap(1000);
+  pacer.reset(100);
+  const finished = vi.fn();
+  const first = pacer.waitUntil(60100, abort.signal).then(finished);
+  await vi.advanceTimersByTimeAsync(200);
+  pacer.setPaused(true);
+  await vi.advanceTimersByTimeAsync(10000);
+  expect(finished).not.toHaveBeenCalled();
+  pacer.setPaused(false);
+  await vi.advanceTimersByTimeAsync(299);
+  expect(finished).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await first;
+  expect(finished).toHaveBeenCalledWith("play");
+  const short = vi.fn();
+  const next = pacer.waitUntil(60500, abort.signal).then(short);
+  await vi.advanceTimersByTimeAsync(199);
+  expect(short).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await next;
+  pacer.setPaused(true);
+  pacer.step();
+  expect(await pacer.waitUntil(120000, abort.signal)).toBe("step");
+  pacer.setPaused(false);
+  const afterStep = vi.fn();
+  const pending = pacer.waitUntil(240000, abort.signal).then(afterStep);
+  await vi.advanceTimersByTimeAsync(499);
+  expect(afterStep).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await pending;
+  expect(vi.getTimerCount()).toBe(0);
+});
+it("allows zero idle cap without dropping tied events and validates the cap", async () => {
+  const abort = clock();
+  const pacer = new PlaybackPacer();
+  expect(() => pacer.setIdleCap(-1)).toThrow("Idle cap");
+  expect(() => pacer.setIdleCap(Infinity)).toThrow("Idle cap");
+  pacer.setIdleCap(0);
+  for (const time of [0, 10000, 10000, 1e9])
+    expect(await pacer.waitUntil(time, abort.signal)).toBe("play");
+  pacer.setIdleCap(undefined);
+  pacer.reset(0);
+  const finished = vi.fn();
+  const pending = pacer.waitUntil(100, abort.signal).then(finished);
+  await vi.advanceTimersByTimeAsync(99);
+  expect(finished).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await pending;
+});
+
+it("updates a pending idle cap and removes skipped time on cancellation without altering a later reset", async () => {
+  const abort = clock();
+  const pacer = new PlaybackPacer();
+  const finished = vi.fn();
+  const pending = pacer.waitUntil(60000, abort.signal).then(finished);
+  await vi.advanceTimersByTimeAsync(200);
+  pacer.setIdleCap(1000);
+  await vi.advanceTimersByTimeAsync(799);
+  expect(finished).not.toHaveBeenCalled();
+  pacer.setIdleCap(undefined);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(finished).not.toHaveBeenCalled();
+  pacer.setIdleCap(500);
+  await vi.advanceTimersByTimeAsync(0);
+  await pending;
+  expect(finished).toHaveBeenCalledWith("play");
+  pacer.reset(0);
+  pacer.setPaused(true);
+  const cancelled = new AbortController();
+  const rejected = expect(
+    pacer.waitUntil(60000, cancelled.signal),
+  ).rejects.toThrow("cancel wait");
+  cancelled.abort(new Error("cancel wait"));
+  await rejected;
+  pacer.setIdleCap(undefined);
+  pacer.setPaused(false);
+  const next = vi.fn();
+  const short = pacer.waitUntil(100, abort.signal).then(next);
+  await vi.advanceTimersByTimeAsync(99);
+  expect(next).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(1);
+  await short;
+  pacer.setIdleCap(10);
+  pacer.setPaused(true);
+  const old = new AbortController();
+  const discarded = expect(pacer.waitUntil(60000, old.signal)).rejects.toThrow(
+    "seek",
+  );
+  pacer.reset(500);
+  old.abort(new Error("seek"));
+  await discarded;
+  pacer.setIdleCap(undefined);
+  pacer.setPaused(false);
+  expect(await pacer.waitUntil(500, abort.signal)).toBe("play");
+  expect(vi.getTimerCount()).toBe(0);
+});

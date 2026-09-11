@@ -10,6 +10,13 @@ import type {
 import type { FileArtifactResolver } from "./artifact-types.js";
 export interface OpenCodeArtifactResolvers {
   resolveArtifact: FileArtifactResolver;
+  resolveRemote?: (input: {
+    artifactId: string;
+    sourceKey: string;
+    url: string;
+    filename: string;
+    mediaType?: string;
+  }) => Promise<{ attachment: CapturedAttachment } | { reason: string }>;
   resolveInline: (input: InlineArtifactCapture) => Promise<CapturedAttachment>;
 }
 export function openCodeFileDescriptor(part: Record<string, unknown>) {
@@ -72,6 +79,19 @@ export async function openCodeFileEvents(options: {
       if (!attachment)
         reason =
           "OpenCode inline attachment has unsupported encoding, mismatched media type, or exceeds the size limit";
+    } else if (
+      /^https?:/.test(descriptor.url) &&
+      options.resolvers.resolveRemote
+    ) {
+      const result = await options.resolvers.resolveRemote({
+        artifactId: options.artifactId,
+        sourceKey,
+        url: descriptor.url,
+        filename: basename(descriptor.filename).slice(0, 255) || "attachment",
+        ...(descriptor.mime ? { mediaType: descriptor.mime } : {}),
+      });
+      if ("attachment" in result) attachment = result.attachment;
+      else reason = result.reason;
     } else
       reason =
         "OpenCode remote artifact URL requires an authenticated source resolver";

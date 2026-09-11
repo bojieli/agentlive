@@ -1,3 +1,4 @@
+import { changeExpansion } from "./inspection-choices.js";
 import {
   createContext,
   useContext,
@@ -13,20 +14,26 @@ const Expansion = createContext<
   | undefined
 >(undefined);
 /** Inspection choices survive virtual row unmounting, scoped to one viewer. */
-export function ExpansionProvider({ children }: { children: ReactNode }) {
-  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+export function ExpansionProvider({
+  children,
+  expanded,
+  onChange,
+}: {
+  children: ReactNode;
+  expanded?: readonly string[] | undefined;
+  onChange?: ((key: string, expanded: boolean) => void) | undefined;
+}) {
+  const [local, setLocal] = useState<readonly string[]>([]);
+  const open = new Set(expanded ?? local);
   return (
     <Expansion.Provider
       value={{
         open,
-        set: (id, expanded) =>
-          setOpen((previous) => {
-            if (previous.has(id) === expanded) return previous;
-            const next = new Set(previous);
-            if (expanded) next.add(id);
-            else next.delete(id);
-            return next;
-          }),
+        set: (id, value) => {
+          if (open.has(id) === value) return;
+          if (onChange) onChange(id, value);
+          else setLocal((previous) => changeExpansion(previous, id, value));
+        },
       }}
     >
       {children}

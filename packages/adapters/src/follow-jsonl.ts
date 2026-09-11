@@ -11,6 +11,9 @@ export interface FollowJsonlOptions {
   after?: SourceCursor;
   pollMs?: number;
   maxRecordBytes?: number;
+  /** Await related-source capture on every poll, including when this file is idle. */
+  onScan?: (finishing: boolean) => Promise<void>;
+  finishRequested?: () => boolean;
   /** Commit normalized effects and this source cursor durably before resolving. */
   commit(record: SourceRecord): Promise<void>;
   /** A fixed initial byte boundary has been read; an incomplete suffix remains deferred. */
@@ -34,6 +37,8 @@ export async function followJsonlSource(
   let caughtUp = false;
   while (true) {
     options.signal.throwIfAborted();
+    const finishing = options.finishRequested?.() ?? false;
+    await options.onScan?.(finishing);
     const info = await stat(path);
     if (!info.isFile()) throw new Error("Source is not a regular file");
     if (
@@ -81,6 +86,13 @@ export async function followJsonlSource(
         });
         caughtUp = true;
       }
+    }
+    if (finishing) {
+      if (cursor.offset !== info.size)
+        throw new Error(
+          "Native source has an incomplete final record; recovery required",
+        );
+      return;
     }
     await delay(pollMs, options.signal);
   }

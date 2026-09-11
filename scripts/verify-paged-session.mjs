@@ -27,9 +27,14 @@ export async function verifyPagedSession(
     });
   let viewer = await open();
   let checkedTextFields = 0;
+  const importedSnapshotEvents = viewer.snapshotEvents;
   try {
     if (!(viewer instanceof BrowserPagedSession))
       throw new Error("Production paged session was not selected");
+    if (importedSnapshotEvents !== events.length)
+      throw new Error(
+        "Production browser did not adopt the published server snapshot",
+      );
     while (
       viewer.received < events.length ||
       viewer.view.sequence < events.length
@@ -108,6 +113,7 @@ export async function verifyPagedSession(
     await verify();
     return {
       received: viewer.received,
+      importedSnapshotEvents,
       seekVerified: true,
       presentationRestored: true,
       checkedTextFields,

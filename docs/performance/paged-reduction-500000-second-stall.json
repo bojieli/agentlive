@@ -1,0 +1,29 @@
+{
+  "success": false,
+  "status": "stalled",
+  "requestedEvents": 500000,
+  "batchSize": 256,
+  "collect": true,
+  "lastReportedCompleted": 143360,
+  "lastReportedElapsedMs": 2615745.763708,
+  "lastReportedStoredBytes": 13240289,
+  "completedIsLowerBound": true,
+  "node": "26.8.1",
+  "pid": 16192,
+  "pendingOperation": "TextContent.manifest -> TextStore.loadLocal -> FileHandle.stat -> fsCall(fstat)",
+  "pendingHash": "624d5c47b1997093814250d539c40239b8181bc10f95e10280278d280feeda5b",
+  "evidence": [
+    "Native main thread waiting in kevent; all four libuv workers waiting on condition variables",
+    "Fresh in-process crypto.subtle.digest request did not settle within 2000ms",
+    "Memory sampler timers continued firing"
+  ],
+  "rootCause": "Unproven; stalled filesystem promise and diagnostic crypto promise in same process",
+  "preservedDirectory": "/private/var/folders/0l/vk1w1b5n2fxfwdlz3f_w25_w0000gp/T/agentlive-reduction-measure-L6agmn",
+  "localHeap": "/tmp/agentlive-current-stalled.heapsnapshot",
+  "acceptance": "No complete capacity, final collection, retained-union or seek result",
+  "termination": {
+    "signal": "SIGTERM",
+    "exitCode": 143,
+    "confirmed": true
+  }
+}

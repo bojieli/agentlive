@@ -24,6 +24,8 @@ export interface OpenCodeObserveOptions {
   fetch?: typeof fetch;
   pollMs?: number;
   retryMs?: number;
+  /** Finish after a snapshot whose fetch begins after this request is observed. */
+  finishRequested?: () => boolean;
 }
 class CaptureFailure extends Error {
   constructor(override readonly cause: unknown) {
@@ -178,7 +180,12 @@ export async function observeOpenCodeSession(
         let committed = 0;
         let nextPoll = 0;
         while (!signal.aborted) {
-          if (generation !== committed || performance.now() >= nextPoll) {
+          const finishing = options.finishRequested?.() ?? false;
+          if (
+            finishing ||
+            generation !== committed ||
+            performance.now() >= nextPoll
+          ) {
             const boundary = generation;
             const info = JSON.parse(
               (
@@ -210,6 +217,7 @@ export async function observeOpenCodeSession(
             } catch (error) {
               throw new CaptureFailure(error);
             }
+            if (finishing) return;
             committed = boundary;
             nextPoll = performance.now() + pollMs;
             report("observing");

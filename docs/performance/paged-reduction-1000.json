@@ -1,0 +1,30 @@
+{
+  "workload": "paged reducer; one message per 64 events, 48-byte text deltas, 8-hour simulated timeline",
+  "runtime": "v26.8.1",
+  "platform": "darwin",
+  "requestedEvents": 1000,
+  "completed": 1000,
+  "elapsedMs": 64095.187333,
+  "eventsPerSecond": 15.601795417253438,
+  "eventP50Ms": 62.029823,
+  "eventP95Ms": 76.087295,
+  "peakHeap": 30394616,
+  "peakRss": 100352000,
+  "storedBytes": 3785369,
+  "blobFiles": 8133,
+  "operations": {
+    "put": {
+      "calls": 4020,
+      "ms": 59644.081163000024
+    },
+    "append": {
+      "calls": 969,
+      "ms": 1975.9458769999424
+    },
+    "read": {
+      "calls": 8925,
+      "ms": 2029.9812360000415
+    }
+  },
+  "failure": null
+}

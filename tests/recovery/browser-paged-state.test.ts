@@ -663,3 +663,203 @@ it("cancels historical seek publication without moving receipt or retaining a pa
     await store.close();
   }
 });
+
+it("uses remote seek roots without changing receipt and rejects inconsistent adoption", async () => {
+  const factory = new IDBFactory();
+  let state = await BrowserPagedState.open(factory, binding, signal());
+  const events = [
+    started(),
+    event(2, {
+      kind: "message.text.append",
+      payload: { messageId: "m", text: "remote" },
+    }),
+    event(3, {
+      kind: "message.text.append",
+      payload: { messageId: "m", text: " suffix" },
+    }),
+    event(4, { kind: "message.completed", payload: { messageId: "m" } }),
+  ];
+  try {
+    await state.apply(events.slice(0, 2), signal());
+    const remote = state.checkpoint!;
+    await state.apply(events.slice(2), signal());
+    await state.close();
+    state = await BrowserPagedState.open(factory, binding, signal());
+    // Model a fresh cache with receipt content but no eligible local seek landmark.
+    const localCatalog = vi
+      .spyOn(BrowserContentStore.prototype, "loadCheckpointBefore")
+      .mockResolvedValue(null);
+    const requests: number[][] = [];
+    const view = await state.select(
+      3,
+      (after, through) => {
+        requests.push([after, through]);
+        return history(...events.slice(after, through));
+      },
+      signal(),
+      undefined,
+      true,
+      async (time, through) => {
+        expect([time, through]).toEqual([3, 4]);
+        return remote;
+      },
+    );
+    localCatalog.mockRestore();
+    expect(requests).toEqual([[2, 4]]);
+    expect(view.sequence).toBe(3);
+    expect(state.checkpoint!.serverSeq).toBe(4);
+    await expect(
+      state.adoptSnapshot({ ...remote, timelineMs: 99 }, signal()),
+    ).rejects.toMatchObject({ code: "corrupt_storage" });
+    expect(state.checkpoint!.serverSeq).toBe(4);
+    const row = (await view.rows(0, 1, signal()))[0]!;
+    const text = (await view.load(row, signal()))!.texts.text!;
+    expect(await text.read(0, text.units, signal())).toBe("remote suffix");
+  } finally {
+    vi.restoreAllMocks();
+    await state.close();
+  }
+});
+
+it("reconstructs a seek once from history after stale remote retention without moving receipt", async () => {
+  const { ProtocolError } =
+    await import("../../packages/protocol/dist/index.js");
+  const state = await BrowserPagedState.open(
+    new IDBFactory(),
+    binding,
+    signal(),
+  );
+  const events = [
+    started(),
+    event(2, {
+      kind: "message.text.append",
+      payload: { messageId: "m", text: "prefix" },
+    }),
+    event(3, {
+      kind: "message.text.append",
+      payload: { messageId: "m", text: " suffix" },
+    }),
+  ];
+  try {
+    await state.apply(events, signal());
+    const head = state.checkpoint;
+    const calls: number[] = [];
+    const history = async function* (after: number, through: number) {
+      calls.push(after);
+      yield* events.filter(
+        (item) => item.serverSeq > after && item.serverSeq <= through,
+      );
+    };
+    const remote = vi.fn(async () => {
+      throw new ProtocolError("stale_lease", "expired");
+    });
+    const view = await state.select(2, history, signal(), 2, false, remote);
+    expect(remote).toHaveBeenCalledTimes(1);
+    expect(calls).toEqual([0]);
+    expect(view.sequence).toBe(2);
+    expect(state.checkpoint).toEqual(head);
+    expect(state.state.appliedSeq).toBe(3);
+    const rows = await view.rows(0, 10, signal());
+    const card = await view.load(rows[0]!, signal());
+    expect(await card!.texts.text!.read(0, 6, signal())).toBe("prefix");
+    const loading = vi.spyOn(BrowserContentStore.prototype, "read");
+    try {
+      for (const operation of [
+        () => view.rows(0, 10, signal()),
+        () => view.load(rows[0]!, signal()),
+        () => card!.texts.text!.read(0, 6, signal()),
+      ]) {
+        calls.length = 0;
+        loading.mockRejectedValueOnce(
+          new ProtocolError("stale_lease", "expired lazy read"),
+        );
+        await operation();
+        expect(calls).toEqual([0]);
+        expect(view.sequence).toBe(2);
+        expect(state.state.appliedSeq).toBe(3);
+        expect(state.checkpoint).toEqual(head);
+      }
+    } finally {
+      loading.mockRestore();
+    }
+    await expect(
+      state.select(1, history, signal(), 1, false, async () => {
+        throw new ProtocolError("forbidden", "denied");
+      }),
+    ).rejects.toMatchObject({ code: "forbidden" });
+  } finally {
+    await state.close();
+  }
+});
+it("rebuilds stale receipt under its queue before committing incoming batches and preserves a paused view", async () => {
+  const { ProtocolError } =
+    await import("../../packages/protocol/dist/index.js");
+  const state = await BrowserPagedState.open(
+    new IDBFactory(),
+    binding,
+    signal(),
+  );
+  const events = [
+    started(),
+    event(2, {
+      kind: "message.text.append",
+      payload: { messageId: "m", text: "prefix" },
+    }),
+    event(3, {
+      kind: "message.text.append",
+      payload: { messageId: "m", text: " suffix" },
+    }),
+    event(4, { kind: "message.completed", payload: { messageId: "m" } }),
+  ];
+  let finish!: () => void, entered!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let loading: ReturnType<typeof vi.spyOn> | undefined;
+  try {
+    await state.apply(events.slice(0, 2), signal());
+    const paused = await state.select(
+      1,
+      async function* () {
+        yield* events.slice(0, 1);
+      },
+      signal(),
+      1,
+    );
+    const head = state.checkpoint;
+    loading = vi
+      .spyOn(BrowserContentStore.prototype, "read")
+      .mockRejectedValueOnce(
+        new ProtocolError("stale_lease", "expired receipt"),
+      );
+    const rebuilding = state.apply(
+      [events[2]!],
+      signal(),
+      async function* (after, through) {
+        expect([after, through]).toEqual([0, 2]);
+        entered();
+        await gate;
+        yield* events.slice(0, 2);
+      },
+    );
+    await ready;
+    const queued = state.apply([events[3]!], signal());
+    expect(state.checkpoint).toEqual(head);
+    finish();
+    await rebuilding;
+    await queued;
+    expect(state.state.appliedSeq).toBe(4);
+    expect(paused.sequence).toBe(1);
+    const message = await state.get("messages", "m", signal());
+    expect(
+      await state.text(message!.text, 0, message!.text.units, signal()),
+    ).toBe("prefix suffix");
+  } finally {
+    finish?.();
+    loading?.mockRestore();
+    await state.close();
+  }
+});

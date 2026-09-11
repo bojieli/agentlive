@@ -1,0 +1,180 @@
+{
+  "success": false,
+  "runtime": "v26.8.1",
+  "platform": "darwin/arm64",
+  "count": 100000,
+  "completed": 49920,
+  "phase": "complete",
+  "collections": [
+    {
+      "through": 4352,
+      "elapsedMs": 108.34975000000003,
+      "removedBytes": 3867802,
+      "removedEntries": 3581,
+      "bytes": 434704,
+      "entries": 1342
+    },
+    {
+      "through": 7680,
+      "elapsedMs": 249.41891700000008,
+      "removedBytes": 3891691,
+      "removedEntries": 2853,
+      "bytes": 846186,
+      "entries": 2334
+    },
+    {
+      "through": 10496,
+      "elapsedMs": 486.1767500000001,
+      "removedBytes": 3903825,
+      "removedEntries": 2401,
+      "bytes": 1232237,
+      "entries": 3186
+    },
+    {
+      "through": 13056,
+      "elapsedMs": 695.5501670000003,
+      "removedBytes": 3989838,
+      "removedEntries": 2175,
+      "bytes": 1617162,
+      "entries": 3968
+    },
+    {
+      "through": 15360,
+      "elapsedMs": 983.5787920000002,
+      "removedBytes": 3986875,
+      "removedEntries": 1951,
+      "bytes": 1978593,
+      "entries": 4680
+    },
+    {
+      "through": 17664,
+      "elapsedMs": 1383.66975,
+      "removedBytes": 4061893,
+      "removedEntries": 2107,
+      "bytes": 2423564,
+      "entries": 5434
+    },
+    {
+      "through": 19968,
+      "elapsedMs": 1697.714833,
+      "removedBytes": 4000504,
+      "removedEntries": 2505,
+      "bytes": 2812771,
+      "entries": 6172
+    },
+    {
+      "through": 22016,
+      "elapsedMs": 2062.0516660000003,
+      "removedBytes": 3882177,
+      "removedEntries": 2211,
+      "bytes": 3183737,
+      "entries": 6838
+    },
+    {
+      "through": 24320,
+      "elapsedMs": 2488.4438329999994,
+      "removedBytes": 4269132,
+      "removedEntries": 2695,
+      "bytes": 3624640,
+      "entries": 7594
+    },
+    {
+      "through": 26624,
+      "elapsedMs": 2864.417583999999,
+      "removedBytes": 3884655,
+      "removedEntries": 2761,
+      "bytes": 4087623,
+      "entries": 8366
+    },
+    {
+      "through": 28928,
+      "elapsedMs": 3631.461707999999,
+      "removedBytes": 3872883,
+      "removedEntries": 2729,
+      "bytes": 4591971,
+      "entries": 9164
+    },
+    {
+      "through": 31232,
+      "elapsedMs": 4159.601792000001,
+      "removedBytes": 4168345,
+      "removedEntries": 2753,
+      "bytes": 5075641,
+      "entries": 9938
+    },
+    {
+      "through": 33280,
+      "elapsedMs": 4676.614999999998,
+      "removedBytes": 3822694,
+      "removedEntries": 2445,
+      "bytes": 5502812,
+      "entries": 10624
+    },
+    {
+      "through": 35584,
+      "elapsedMs": 5238.1964579999985,
+      "removedBytes": 3980271,
+      "removedEntries": 2753,
+      "bytes": 5988213,
+      "entries": 11396
+    },
+    {
+      "through": 37632,
+      "elapsedMs": 6025.140874999997,
+      "removedBytes": 3794052,
+      "removedEntries": 2439,
+      "bytes": 6431774,
+      "entries": 12102
+    },
+    {
+      "through": 39680,
+      "elapsedMs": 6771.719166999996,
+      "removedBytes": 4078643,
+      "removedEntries": 2437,
+      "bytes": 6876815,
+      "entries": 12800
+    },
+    {
+      "through": 41728,
+      "elapsedMs": 7421.168541000006,
+      "removedBytes": 4126929,
+      "removedEntries": 2441,
+      "bytes": 7308394,
+      "entries": 13494
+    },
+    {
+      "through": 43776,
+      "elapsedMs": 8075.581458000001,
+      "removedBytes": 3778808,
+      "removedEntries": 2437,
+      "bytes": 7765463,
+      "entries": 14198
+    },
+    {
+      "through": 45824,
+      "elapsedMs": 8903.298082999994,
+      "removedBytes": 3769522,
+      "removedEntries": 2433,
+      "bytes": 8222388,
+      "entries": 14896
+    },
+    {
+      "through": 47872,
+      "elapsedMs": 9898.180083,
+      "removedBytes": 3981559,
+      "removedEntries": 2423,
+      "bytes": 8706925,
+      "entries": 15608
+    }
+  ],
+  "peakHeap": 89936760,
+  "peakRss": 253755392,
+  "peakBytes": 13291512,
+  "peakEntries": 18745,
+  "failure": "TimeoutError: Operation timed out\n    at new DOMException (node:internal/per_context/domexception:79:18)\n    at Timeout.<anonymous> (file://<repo>/apps/web/dist/operation-signal.js:12:53)\n    at listOnTimeout (node:internal/timers:685:17)\n    at process.processTimers (node:internal/timers:618:7)",
+  "afterClose": {
+    "bytes": 0,
+    "entries": 0
+  },
+  "elapsedMs": 93633.470333
+}

@@ -12,13 +12,16 @@ import {
 } from "@agentlive/protocol";
 import { PublisherJournal, StreamingRedactor } from "@agentlive/publisher";
 import { chunkContent } from "./chunks.js";
+import { openCodeLineage } from "./opencode-lineage.js";
 const object = z.record(z.string(), z.unknown());
 const timeSchema = z.object({
   created: z.number().int().nonnegative(),
   completed: z.number().int().nonnegative().optional(),
 });
 const exportSchema = z.object({
-  info: z.object({ id: idSchema, time: timeSchema }).passthrough(),
+  info: z
+    .object({ id: idSchema, parentID: idSchema.optional(), time: timeSchema })
+    .passthrough(),
   messages: z.array(
     z.object({
       info: z
@@ -47,6 +50,8 @@ const hash = (value: string | Uint8Array) =>
 /** Validate ownership and uniqueness for either native exports or server snapshots. */
 export function parseOpenCodeSnapshot(input: unknown) {
   const data = exportSchema.parse(input);
+  if (data.info.parentID === data.info.id)
+    throw new Error("OpenCode session cannot be its own parent");
   const ids = new Set<string>();
   for (const message of data.messages) {
     if (message.info.sessionID !== data.info.id || ids.has(message.info.id))
@@ -65,6 +70,33 @@ export function parseOpenCodeSnapshot(input: unknown) {
   return data;
 }
 export type OpenCodeSnapshot = ReturnType<typeof parseOpenCodeSnapshot>;
+/** OpenCode 1.18.30 SessionRevert.cleanup boundary semantics, applied without
+ * changing the retained native snapshot or its historical capture identities. */
+export function visibleOpenCodeSnapshot(
+  snapshot: OpenCodeSnapshot,
+): OpenCodeSnapshot {
+  if (snapshot.info.revert === undefined || snapshot.info.revert === null)
+    return snapshot;
+  const revert = z
+    .object({ messageID: idSchema, partID: idSchema.optional() })
+    .parse(snapshot.info.revert);
+  const index = snapshot.messages.findIndex(
+    (message) => message.info.id === revert.messageID,
+  );
+  if (index < 0)
+    throw new Error("OpenCode revert message is absent from snapshot");
+  const messages = snapshot.messages.slice(0, index);
+  if (revert.partID !== undefined) {
+    const target = snapshot.messages[index]!;
+    const partIndex = target.parts.findIndex(
+      (part) => part.id === revert.partID,
+    );
+    if (partIndex < 0)
+      throw new Error("OpenCode revert part is absent from target message");
+    messages.push({ ...target, parts: target.parts.slice(0, partIndex) });
+  }
+  return { ...snapshot, messages };
+}
 async function readExport(path: string, signal?: AbortSignal) {
   const file = await open(path, "r");
   try {
@@ -106,6 +138,7 @@ async function readExport(path: string, signal?: AbortSignal) {
 }
 export interface OpenCodeHistoryManifest {
   nativeSessionId: string;
+  parentNativeSessionId?: string;
   createdAt: string;
   boundary: { offset: number; prefixHash: string };
   records: number;
@@ -117,6 +150,9 @@ export async function inspectOpenCodeHistory(
   const { data, boundary } = await readExport(path, signal);
   return {
     nativeSessionId: data.info.id,
+    ...(data.info.parentID
+      ? { parentNativeSessionId: data.info.parentID }
+      : {}),
     createdAt: new Date(data.info.time.created).toISOString(),
     boundary,
     records: data.messages.length,
@@ -214,6 +250,12 @@ export async function captureOpenCodeHistory(
     ],
     data.info.time.created,
   );
+  if (data.info.parentID)
+    await emit(
+      "session-lineage",
+      openCodeLineage(data.info.id, data.info.parentID),
+      data.info.time.created,
+    );
   for (const message of data.messages) {
     const messageId = hash(message.info.id),
       time = message.info.time.created;

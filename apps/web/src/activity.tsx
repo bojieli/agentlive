@@ -8,7 +8,7 @@ import {
   workflowKinds,
   type WorkflowKind,
 } from "./workflow-card.js";
-import { PagedText } from "./paged-text.js";
+import { PagedText, useInspectionOffset } from "./paged-text.js";
 import { Disclosure } from "./disclosure.js";
 export type ActivityKind =
   WorkflowKind | "messages" | "tools" | "changes" | "artifacts" | "gaps";
@@ -71,6 +71,9 @@ export function ActivityCard({
   };
 }) {
   const { kind, id } = row;
+  const [versionOffset, setVersionOffset] = useInspectionOffset(
+    `${row.key}/versions`,
+  );
   switch (kind) {
     case "messages": {
       const message = state.messages.get(id)!;
@@ -137,6 +140,19 @@ export function ActivityCard({
     }
     case "artifacts": {
       const artifact = state.artifacts.get(id)!;
+      const total = artifact.versions.size;
+      const offset = Math.min(
+        Math.floor(versionOffset / 32) * 32,
+        Math.max(0, Math.floor((total - 1) / 32) * 32),
+      );
+      const versions: Attachment[] = [];
+      let index = 0;
+      for (const version of artifact.versions.values()) {
+        if (artifactPage || index >= offset) versions.push(version);
+        if (versions.length === 32) break;
+        index++;
+      }
+      const page = artifactPage ?? { offset, total, select: setVersionOffset };
       return (
         <section className="card" id={row.anchor}>
           <strong>{artifact.filename}</strong>
@@ -144,38 +160,32 @@ export function ActivityCard({
             {artifact.reason ??
               (artifact.pending
                 ? "Preparing attachment…"
-                : `${artifactPage?.total ?? artifact.versions.size} saved version(s)`)}
+                : `${page.total ?? artifact.versions.size} saved version(s)`)}
           </p>
-          {artifactPage && artifactPage.total > 32 && (
+          {page.total > 32 && (
             <div
               className="text-navigation"
               aria-label="Attachment version pages"
             >
               <span>
-                Versions {artifactPage.offset + 1}–
-                {artifactPage.offset + artifact.versions.size} of{" "}
-                {artifactPage.total}
+                Versions {page.offset + 1}–{page.offset + versions.length} of{" "}
+                {page.total}
               </span>
               <button
-                disabled={artifactPage.offset === 0}
-                onClick={() =>
-                  artifactPage.select(Math.max(0, artifactPage.offset - 32))
-                }
+                disabled={page.offset === 0}
+                onClick={() => page.select(Math.max(0, page.offset - 32))}
               >
                 Previous versions
               </button>
               <button
-                disabled={
-                  artifactPage.offset + artifact.versions.size >=
-                  artifactPage.total
-                }
-                onClick={() => artifactPage.select(artifactPage.offset + 32)}
+                disabled={page.offset + versions.length >= page.total}
+                onClick={() => page.select(page.offset + 32)}
               >
                 Next versions
               </button>
             </div>
           )}
-          {[...artifact.versions.values()].map((version) => (
+          {versions.map((version) => (
             <button key={version.version} onClick={() => onAttachment(version)}>
               Open version {version.version}
             </button>

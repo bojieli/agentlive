@@ -18,6 +18,36 @@ const message = (text: string) => ({
     },
   ],
 });
+it("finishes only after fetching and committing a snapshot after the finish request", async () => {
+  let finish = false;
+  let reads = 0;
+  const seen: string[] = [];
+  await observeOpenCodeSession({
+    serverOrigin: "http://localhost:9999",
+    nativeSessionId: info.id,
+    signal: new AbortController().signal,
+    finishRequested: () => finish,
+    fetch: (async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/event")
+        return new Response(new ReadableStream(), {
+          headers: { "content-type": "text/event-stream" },
+        });
+      if (path.endsWith("/message")) {
+        reads++;
+        return Response.json([
+          message(reads === 1 ? "before exit" : "after exit"),
+        ]);
+      }
+      return Response.json(info);
+    }) as typeof fetch,
+    commit: async (snapshot) => {
+      seen.push(String(snapshot.messages[0]!.parts[0]!.text));
+      finish = true;
+    },
+  });
+  expect(seen).toEqual(["before exit", "after exit"]);
+});
 it("subscribes before backfill and reconciles updates occurring during commit or without notifications", async () => {
   const abort = new AbortController();
   let stream!: ReadableStreamDefaultController<Uint8Array>;

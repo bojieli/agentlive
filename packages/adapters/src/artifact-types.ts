@@ -6,3 +6,12 @@ export type FileArtifactResolver = (request: {
   historical: boolean;
   expectedSourceHash?: string;
 }) => Promise<{ attachment: CapturedAttachment } | { reason: string }>;
+
+export type RemoteArtifactResolver = (request: {
+  artifactId: string;
+  sourceKey: string;
+  url: string;
+  filename: string;
+  mediaType?: string;
+  expectedSourceHash?: string;
+}) => Promise<{ attachment: CapturedAttachment } | { reason: string }>;

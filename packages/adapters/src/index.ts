@@ -78,6 +78,27 @@ export {
 } from "./opencode-history.js";
 export { OpenCodeCapture } from "./opencode-capture.js";
 export {
+  discoverNativeSessions,
+  selectNativeSession,
+  type NativeSessionCandidate,
+  type DiscoveryAgent,
+} from "./discovery.js";
+export {
   publishOpenCodeRecording,
   type OpenCodePublishOptions,
 } from "./publish-opencode.js";
+export type { NativePublishOptions } from "./publish-native.js";
+
+export {
+  validateRemoteArtifactPolicy,
+  type RemoteArtifactPolicy,
+} from "./remote-artifacts.js";
+
+export {
+  captureArtifactBundle,
+  type BundleSource,
+  type BundleLoadResult,
+} from "./artifact-bundle.js";
+
+export { createBundleLoader } from "./bundle-loader.js";
+export { verifyCodexFamilySources } from "./codex-family.js";

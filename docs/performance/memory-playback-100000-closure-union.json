@@ -1,0 +1,406 @@
+{
+  "success": true,
+  "runtime": "v26.8.1",
+  "platform": "darwin/arm64",
+  "count": 100000,
+  "completed": 100000,
+  "phase": "complete",
+  "collections": [
+    {
+      "through": 4352,
+      "elapsedMs": 118.62237499999998,
+      "removedBytes": 3867802,
+      "removedEntries": 3581,
+      "bytes": 434704,
+      "entries": 1342
+    },
+    {
+      "through": 7680,
+      "elapsedMs": 202.6293330000001,
+      "removedBytes": 3891691,
+      "removedEntries": 2853,
+      "bytes": 846186,
+      "entries": 2334
+    },
+    {
+      "through": 10496,
+      "elapsedMs": 310.90541699999994,
+      "removedBytes": 3903825,
+      "removedEntries": 2401,
+      "bytes": 1232237,
+      "entries": 3186
+    },
+    {
+      "through": 13056,
+      "elapsedMs": 333.998208,
+      "removedBytes": 3989838,
+      "removedEntries": 2175,
+      "bytes": 1617162,
+      "entries": 3968
+    },
+    {
+      "through": 15360,
+      "elapsedMs": 454.3001669999999,
+      "removedBytes": 3986875,
+      "removedEntries": 1951,
+      "bytes": 1978593,
+      "entries": 4680
+    },
+    {
+      "through": 17664,
+      "elapsedMs": 484.0805419999997,
+      "removedBytes": 4061893,
+      "removedEntries": 2107,
+      "bytes": 2423564,
+      "entries": 5434
+    },
+    {
+      "through": 19968,
+      "elapsedMs": 530.1098340000003,
+      "removedBytes": 4000504,
+      "removedEntries": 2505,
+      "bytes": 2812771,
+      "entries": 6172
+    },
+    {
+      "through": 22016,
+      "elapsedMs": 589.9807499999997,
+      "removedBytes": 3882177,
+      "removedEntries": 2211,
+      "bytes": 3183737,
+      "entries": 6838
+    },
+    {
+      "through": 24320,
+      "elapsedMs": 675.2609590000002,
+      "removedBytes": 4269132,
+      "removedEntries": 2695,
+      "bytes": 3624640,
+      "entries": 7594
+    },
+    {
+      "through": 26624,
+      "elapsedMs": 715.1827910000002,
+      "removedBytes": 3884655,
+      "removedEntries": 2761,
+      "bytes": 4087623,
+      "entries": 8366
+    },
+    {
+      "through": 28928,
+      "elapsedMs": 773.3661669999992,
+      "removedBytes": 3872883,
+      "removedEntries": 2729,
+      "bytes": 4591971,
+      "entries": 9164
+    },
+    {
+      "through": 31232,
+      "elapsedMs": 840.107,
+      "removedBytes": 4168345,
+      "removedEntries": 2753,
+      "bytes": 5075641,
+      "entries": 9938
+    },
+    {
+      "through": 33280,
+      "elapsedMs": 923.5900419999998,
+      "removedBytes": 3822694,
+      "removedEntries": 2445,
+      "bytes": 5502812,
+      "entries": 10624
+    },
+    {
+      "through": 35584,
+      "elapsedMs": 953.9737920000007,
+      "removedBytes": 3980271,
+      "removedEntries": 2753,
+      "bytes": 5988213,
+      "entries": 11396
+    },
+    {
+      "through": 37632,
+      "elapsedMs": 1018.5178749999995,
+      "removedBytes": 3794052,
+      "removedEntries": 2439,
+      "bytes": 6431774,
+      "entries": 12102
+    },
+    {
+      "through": 39680,
+      "elapsedMs": 1102.4079999999994,
+      "removedBytes": 4078643,
+      "removedEntries": 2437,
+      "bytes": 6876815,
+      "entries": 12800
+    },
+    {
+      "through": 41728,
+      "elapsedMs": 1215.069875000001,
+      "removedBytes": 4126929,
+      "removedEntries": 2441,
+      "bytes": 7308394,
+      "entries": 13494
+    },
+    {
+      "through": 43776,
+      "elapsedMs": 1257.6602089999997,
+      "removedBytes": 3778808,
+      "removedEntries": 2437,
+      "bytes": 7765463,
+      "entries": 14198
+    },
+    {
+      "through": 45824,
+      "elapsedMs": 1325.1712079999998,
+      "removedBytes": 3769522,
+      "removedEntries": 2433,
+      "bytes": 8222388,
+      "entries": 14896
+    },
+    {
+      "through": 47872,
+      "elapsedMs": 1440.5748329999988,
+      "removedBytes": 3981559,
+      "removedEntries": 2423,
+      "bytes": 8706925,
+      "entries": 15608
+    },
+    {
+      "through": 49920,
+      "elapsedMs": 1483.3698330000007,
+      "removedBytes": 4123568,
+      "removedEntries": 2437,
+      "bytes": 9167944,
+      "entries": 16308
+    },
+    {
+      "through": 51968,
+      "elapsedMs": 1607.9917920000007,
+      "removedBytes": 3791121,
+      "removedEntries": 2441,
+      "bytes": 9613833,
+      "entries": 17000
+    },
+    {
+      "through": 54016,
+      "elapsedMs": 1648.3480420000014,
+      "removedBytes": 3739590,
+      "removedEntries": 2431,
+      "bytes": 10083523,
+      "entries": 17708
+    },
+    {
+      "through": 56064,
+      "elapsedMs": 1634.465874999998,
+      "removedBytes": 3896697,
+      "removedEntries": 2427,
+      "bytes": 10552129,
+      "entries": 18414
+    },
+    {
+      "through": 58112,
+      "elapsedMs": 1749.1522079999995,
+      "removedBytes": 3945372,
+      "removedEntries": 2411,
+      "bytes": 11073973,
+      "entries": 19144
+    },
+    {
+      "through": 60416,
+      "elapsedMs": 1801.9434580000016,
+      "removedBytes": 4062823,
+      "removedEntries": 2731,
+      "bytes": 11601479,
+      "entries": 19940
+    },
+    {
+      "through": 62464,
+      "elapsedMs": 1271.4957920000015,
+      "removedBytes": 3872451,
+      "removedEntries": 2431,
+      "bytes": 12071658,
+      "entries": 20648
+    },
+    {
+      "through": 64512,
+      "elapsedMs": 1321.6158750000031,
+      "removedBytes": 4062989,
+      "removedEntries": 2417,
+      "bytes": 12572421,
+      "entries": 21364
+    },
+    {
+      "through": 66560,
+      "elapsedMs": 1395.2001249999958,
+      "removedBytes": 4095599,
+      "removedEntries": 2417,
+      "bytes": 13085365,
+      "entries": 22086
+    },
+    {
+      "through": 68608,
+      "elapsedMs": 1418.5633329999982,
+      "removedBytes": 3829215,
+      "removedEntries": 2427,
+      "bytes": 13568065,
+      "entries": 22798
+    },
+    {
+      "through": 70656,
+      "elapsedMs": 1455.5301659999968,
+      "removedBytes": 4001823,
+      "removedEntries": 2423,
+      "bytes": 14056889,
+      "entries": 23508
+    },
+    {
+      "through": 72704,
+      "elapsedMs": 1485.5380409999998,
+      "removedBytes": 4216193,
+      "removedEntries": 2419,
+      "bytes": 14562612,
+      "entries": 24224
+    },
+    {
+      "through": 74496,
+      "elapsedMs": 1522.328250000006,
+      "removedBytes": 3722598,
+      "removedEntries": 2103,
+      "bytes": 15051052,
+      "entries": 24872
+    },
+    {
+      "through": 76544,
+      "elapsedMs": 2279.2266670000026,
+      "removedBytes": 3988296,
+      "removedEntries": 2421,
+      "bytes": 15543738,
+      "entries": 25582
+    },
+    {
+      "through": 78592,
+      "elapsedMs": 2377.897167000003,
+      "removedBytes": 4110443,
+      "removedEntries": 2415,
+      "bytes": 16053759,
+      "entries": 26302
+    },
+    {
+      "through": 80384,
+      "elapsedMs": 2424.862208999999,
+      "removedBytes": 3746519,
+      "removedEntries": 2105,
+      "bytes": 16521524,
+      "entries": 26938
+    },
+    {
+      "through": 82176,
+      "elapsedMs": 2564.494666999999,
+      "removedBytes": 3934267,
+      "removedEntries": 2103,
+      "bytes": 17014423,
+      "entries": 27576
+    },
+    {
+      "through": 84224,
+      "elapsedMs": 2619.164875000002,
+      "removedBytes": 4007548,
+      "removedEntries": 2423,
+      "bytes": 17515045,
+      "entries": 28294
+    },
+    {
+      "through": 86272,
+      "elapsedMs": 2609.109166999995,
+      "removedBytes": 3936749,
+      "removedEntries": 2401,
+      "bytes": 18058839,
+      "entries": 29032
+    },
+    {
+      "through": 88320,
+      "elapsedMs": 2713.3761659999946,
+      "removedBytes": 4110090,
+      "removedEntries": 2407,
+      "bytes": 18571699,
+      "entries": 29758
+    },
+    {
+      "through": 90112,
+      "elapsedMs": 1911.1471249999959,
+      "removedBytes": 3814548,
+      "removedEntries": 2129,
+      "bytes": 18998943,
+      "entries": 30372
+    },
+    {
+      "through": 92160,
+      "elapsedMs": 1911.5645420000073,
+      "removedBytes": 4100294,
+      "removedEntries": 2419,
+      "bytes": 19508451,
+      "entries": 31086
+    },
+    {
+      "through": 94208,
+      "elapsedMs": 2005.8156670000026,
+      "removedBytes": 4102630,
+      "removedEntries": 2413,
+      "bytes": 20041856,
+      "entries": 31810
+    },
+    {
+      "through": 96256,
+      "elapsedMs": 2037.9060000000027,
+      "removedBytes": 4199887,
+      "removedEntries": 2411,
+      "bytes": 20579045,
+      "entries": 32534
+    },
+    {
+      "through": 98048,
+      "elapsedMs": 2067.5718750000087,
+      "removedBytes": 3726053,
+      "removedEntries": 2091,
+      "bytes": 21089386,
+      "entries": 33184
+    },
+    {
+      "through": 100000,
+      "elapsedMs": 3583.917750000008,
+      "removedBytes": 4506613,
+      "removedEntries": 2677,
+      "bytes": 21646087,
+      "entries": 33858
+    }
+  ],
+  "peakHeap": 127575384,
+  "peakRss": 295043072,
+  "peakBytes": 26152700,
+  "peakEntries": 36535,
+  "receiptMs": 74853.45829200001,
+  "seeks": [
+    {
+      "through": 50000,
+      "elapsedMs": 3670.2861669999984
+    },
+    {
+      "through": 1,
+      "elapsedMs": 1.3372079999971902
+    },
+    {
+      "through": 100000,
+      "elapsedMs": 5.980125000001863
+    }
+  ],
+  "finalUsage": {
+    "bytes": 21649974,
+    "entries": 33875
+  },
+  "afterClose": {
+    "bytes": 0,
+    "entries": 0
+  },
+  "elapsedMs": 78532.021792
+}

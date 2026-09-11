@@ -1,6 +1,11 @@
+import type { RemoteArtifactResolver } from "./artifact-types.js";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { canonicalJson, type EventContent } from "@agentlive/protocol";
+import {
+  canonicalJson,
+  idSchema,
+  type EventContent,
+} from "@agentlive/protocol";
 import {
   PublisherJournal,
   StreamingRedactor,
@@ -15,8 +20,6 @@ import {
 import { claudeMonitors } from "./claude-monitors.js";
 import { claudeFileAttachment } from "./claude-file-attachments.js";
 import { chunkContent } from "./chunks.js";
-const hash = (value: string) =>
-  createHash("sha256").update(value).digest("hex");
 const rowSchema = z
   .object({
     type: z.string(),
@@ -82,6 +85,10 @@ export async function captureClaudeHistory(
   secrets: readonly string[] = [],
   signal?: AbortSignal,
   resolveInline?: (input: InlineArtifactCapture) => Promise<CapturedAttachment>,
+  options: {
+    childAgentId?: string;
+    resolveRemote?: RemoteArtifactResolver;
+  } = {},
 ) {
   const validate = async () => {
     for await (const _ of readJsonlSource(path, {
@@ -97,6 +104,7 @@ export async function captureClaudeHistory(
     sink,
     secrets,
     resolveInline,
+    options,
   );
   for await (const record of readJsonlSource(path, {
     through: manifest.boundary.offset,
@@ -112,7 +120,22 @@ export async function createClaudeHistoryConsumer(
   sink: ClaudeCaptureSink,
   secrets: readonly string[] = [],
   resolveInline?: (input: InlineArtifactCapture) => Promise<CapturedAttachment>,
+  options: {
+    childAgentId?: string;
+    resolveRemote?: RemoteArtifactResolver;
+  } = {},
 ) {
+  const childAgentId = options.childAgentId;
+  if (childAgentId) idSchema.parse(childAgentId);
+  const hash = (value: string) =>
+    createHash("sha256")
+      .update(
+        childAgentId
+          ? `claude-child/${manifest.nativeSessionId}/${childAgentId}/${value}`
+          : value,
+      )
+      .digest("hex");
+  const ownerId = hash("agent");
   if (
     sink.identity.nativeAgent !== "claude" ||
     sink.identity.nativeSessionId !== manifest.nativeSessionId
@@ -146,8 +169,19 @@ export async function createClaudeHistoryConsumer(
     const parts = content.flatMap(chunkContent);
     for (let index = 0; index < parts.length; index++)
       await sink.capture({
-        sourceKey: `claude/${sourceKey}/${index}`,
-        content: [parts[index]!],
+        sourceKey: childAgentId
+          ? `claude-child/${hash(childAgentId)}/${sourceKey}/${index}`
+          : `claude/${sourceKey}/${index}`,
+        content: [
+          childAgentId &&
+          (parts[index]!.kind === "message.started" ||
+            parts[index]!.kind === "tool.started")
+            ? ({
+                ...parts[index]!,
+                payload: { ...parts[index]!.payload, agentId: ownerId },
+              } as EventContent)
+            : parts[index]!,
+        ],
         observedAt: timestamp,
         clockSegmentId: `history_${hash(manifest.nativeSessionId)}`,
         elapsedMs,
@@ -173,20 +207,39 @@ export async function createClaudeHistoryConsumer(
   };
   await emit(
     "session",
-    [
-      {
-        kind: "session.started",
-        payload: {
-          agent: "claude",
-          nativeSessionId: manifest.nativeSessionId,
-          title: "Claude Code session",
-        },
-      },
-    ],
+    childAgentId
+      ? [
+          {
+            kind: "agent.updated",
+            payload: {
+              agentId: ownerId,
+              nativeSessionId: manifest.nativeSessionId,
+              name: filter(childAgentId),
+              status: "unknown",
+            },
+          },
+        ]
+      : [
+          {
+            kind: "session.started",
+            payload: {
+              agent: "claude",
+              nativeSessionId: manifest.nativeSessionId,
+              title: "Claude Code session",
+            },
+          },
+        ],
     manifest.createdAt,
   );
   const accept = async (record: SourceRecord) => {
     const row = rowSchema.parse(record.value);
+    if (
+      childAgentId &&
+      (row.agentId !== childAgentId ||
+        row.isSidechain !== true ||
+        row.sessionId !== manifest.nativeSessionId)
+    )
+      throw new Error("Claude subagent record has conflicting ownership");
     if (row.sessionId && row.sessionId !== manifest.nativeSessionId)
       throw new Error("Claude source contains multiple session identities");
     report.records++;
@@ -373,6 +426,20 @@ export async function createClaudeHistoryConsumer(
                 });
             }
           }
+          if (
+            options.resolveRemote &&
+            nativeSource.type === "url" &&
+            typeof nativeSource.url === "string"
+          ) {
+            const result = await options.resolveRemote({
+              artifactId: messageId,
+              sourceKey: `claude/${blockKey}`,
+              url: nativeSource.url,
+              filename: `${String(block.type)}${extensions[mediaType] ? "." + extensions[mediaType] : ""}`,
+              ...(mediaType ? { mediaType } : {}),
+            });
+            if ("attachment" in result) attachment = result.attachment;
+          }
           const content: EventContent[] = [
             {
               kind: "attachment.pending",
@@ -427,7 +494,17 @@ export async function createClaudeHistoryConsumer(
         for (const observation of observations) {
           await emit(
             key + "/" + observation.key,
-            [observation.content],
+            [
+              childAgentId && observation.content.kind === "monitor.updated"
+                ? {
+                    ...observation.content,
+                    payload: {
+                      ...observation.content.payload,
+                      monitorId: hash(observation.content.payload.monitorId),
+                    },
+                  }
+                : observation.content,
+            ],
             observation.timestamp,
           );
           report.monitors++;

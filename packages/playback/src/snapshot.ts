@@ -335,6 +335,14 @@ export class SnapshotReader {
       ...mapFields,
     ].sort();
     const root = await reader.entries(manifest.state, 0, 32, signal);
+    // A persisted completeness notice is the only optional state field.
+    if (root.some(([key]) => key === "completeness")) {
+      expected.push("completeness");
+      expected.sort();
+      const notice = root.find(([key]) => key === "completeness")![1];
+      if (!notice || typeof notice !== "object" || notice.kind !== "object")
+        bad("Invalid snapshot completeness notice");
+    }
     if (
       !("count" in manifest.state) ||
       manifest.state.count !== expected.length ||

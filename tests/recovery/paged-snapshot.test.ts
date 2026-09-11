@@ -264,3 +264,51 @@ it("preserves first mention order across a server snapshot before a referenced a
     await rm(directory, { recursive: true, force: true });
   }
 });
+it("serves published metadata and blobs while another snapshot is being built", async () => {
+  const directory = await mkdtemp(
+    join(tmpdir(), "agentlive-snapshot-readers-"),
+  );
+  const snapshots = new RecordingSnapshots(directory, binding);
+  let release!: () => void, entered!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const ready = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let building: Promise<unknown> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const first = await snapshots.build(1, async function* () {
+      yield events[0]!;
+    });
+    building = snapshots.build(2, async function* (after) {
+      expect(after).toBe(1);
+      entered();
+      await gate;
+      yield events[1]!;
+    });
+    await ready;
+    await Promise.race([
+      (async () => {
+        expect(await snapshots.select(1)).toEqual(first);
+        expect((await snapshots.readBlob(first.ref)).length).toBe(
+          first.ref.byteSize,
+        );
+      })(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () =>
+            reject(new Error("Published reads waited for an unrelated build")),
+          5000,
+        );
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    release();
+    await building;
+    await snapshots.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

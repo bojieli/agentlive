@@ -1,0 +1,50 @@
+{
+  "success": true,
+  "runtime": "v26.8.1",
+  "platform": "darwin/arm64",
+  "hardware": {
+    "cpu": "Apple M2 Max",
+    "logicalCpus": 12,
+    "memoryBytes": 103079215104
+  },
+  "count": 1000,
+  "durationMs": 28800000,
+  "validation": "boundary-text-v1",
+  "storeOptions": {},
+  "completed": 1000,
+  "phase": "complete",
+  "collections": [],
+  "peakHeap": 20908136,
+  "peakRss": 83116032,
+  "peakBytes": 593307,
+  "peakEntries": 799,
+  "receiptMs": 102.84179100000001,
+  "seeks": [
+    {
+      "through": 500,
+      "elapsedMs": 21.40745899999999
+    },
+    {
+      "through": 1,
+      "elapsedMs": 1.828125
+    },
+    {
+      "through": 1000,
+      "elapsedMs": 4.420000000000016
+    }
+  ],
+  "finalUsage": {
+    "bytes": 595189,
+    "entries": 803
+  },
+  "headAudit": {
+    "through": 1000,
+    "entries": 268,
+    "bytes": 64671
+  },
+  "afterClose": {
+    "bytes": 0,
+    "entries": 0
+  },
+  "elapsedMs": 149.355208
+}

@@ -1,3 +1,8 @@
+import { OperatorReports } from "./operator-reports.js";
+import { ReportRecording } from "./report.js";
+import { Sharing } from "./sharing.js";
+import { AccountControls } from "./account.js";
+import { accountFetch } from "./account-transport.js";
 import { BrowserContentStore } from "./content-store.js";
 import { BrowserSnapshotCache } from "./snapshot-cache.js";
 import { useEffect, useRef, useState } from "react";
@@ -17,6 +22,7 @@ function App() {
     new URLSearchParams(location.search).get("stream") ?? "",
   );
   const [key, setKey] = useState("");
+  const [signedIn, setSignedIn] = useState(false);
   const [session, setSession] = useState<ViewerSession>();
   const [cachePlatform] = useState(browserCachePlatform);
   const [cacheHistory, setCacheHistory] = useState(!!cachePlatform);
@@ -32,7 +38,10 @@ function App() {
     Awaited<ReturnType<typeof listRecordings>>["recordings"]
   >([]);
   const [next, setNext] = useState<string | null>(null);
+  const [publicListing, setPublicListing] = useState(false);
+  const recoveryAttempted = useRef(false);
   const request = useRef<AbortController | undefined>(undefined);
+  const listing = useRef<AbortController | undefined>(undefined);
   const closing = useRef<Promise<void>>(Promise.resolve());
   function closeSession(current: ViewerSession | undefined) {
     closing.current = Promise.all([closing.current, current?.close()]).then(
@@ -45,6 +54,7 @@ function App() {
     if (session) return bindPageLifecycle(session, document, window, clock);
   }, [session, clock]);
   useEffect(() => () => request.current?.abort(), []);
+  useEffect(() => () => listing.current?.abort(), []);
   useEffect(() => {
     if (!session || !playing) return;
     clock.reset();
@@ -60,8 +70,36 @@ function App() {
     }, 50);
     return () => clearInterval(interval);
   }, [session, playing, speed, clock]);
-  async function join(id = stream) {
+  const recoveryView =
+    session instanceof BrowserPagedSession
+      ? session.recoveryPresentation
+      : undefined;
+  useEffect(() => {
+    if (
+      !session ||
+      !recoveryView ||
+      recoveryAttempted.current ||
+      busy ||
+      clearing
+    )
+      return;
+    recoveryAttempted.current = true;
+    void join(session.streamId, {
+      view: recoveryView,
+      credential: session.credential,
+      cache: session.cacheStatus === "saved",
+    });
+  }, [session, session?.error, busy, clearing]);
+  async function join(
+    id = stream,
+    recovery?: {
+      view: NonNullable<BrowserPagedSession["recoveryPresentation"]>;
+      credential: string;
+      cache: boolean;
+    },
+  ) {
     if (clearing) return;
+    if (!recovery) recoveryAttempted.current = false;
     request.current?.abort();
     closeSession(session);
     setSession(undefined);
@@ -76,17 +114,22 @@ function App() {
       abort.signal.throwIfAborted();
       const joined = await BrowserPagedSession.open(
         id,
-        key,
+        recovery?.credential ?? key,
         abort.signal,
         () => refresh((value) => value + 1),
         location.origin,
-        { cache: cacheHistory },
+        {
+          cache: recovery ? recovery.cache : cacheHistory,
+          ...(recovery ? { resumeView: recovery.view } : {}),
+        },
       );
       if (abort.signal.aborted) {
         await closeSession(joined);
         return;
       }
       setSession(joined);
+      if (joined instanceof BrowserPagedSession)
+        setAttachment(joined.selectedAttachment);
       setStream(id);
       const fragment =
         new URLSearchParams(location.search).get("stream") === id
@@ -122,27 +165,35 @@ function App() {
         cachePlatform.indexedDB,
         AbortSignal.timeout(10000),
       );
-      setCacheNotice("Saved histories cleared from this device.");
+      setCacheNotice("Playback cache cleared from this device.");
     } catch {
       setError(
-        "Unable to clear saved history. Close other AgentLive tabs and try again.",
+        "Unable to clear playback cache. Close other AgentLive tabs and try again.",
       );
     } finally {
       setClearing(false);
     }
   }
-  async function browse(after?: string) {
+  async function browse(after?: string, publicOnly = false) {
+    listing.current?.abort();
+    const stop = new AbortController();
+    listing.current = stop;
     setError("");
     try {
       const page = await listRecordings({
+        fetch: accountFetch,
         serverOrigin: location.origin,
         credential: key,
-        signal: AbortSignal.timeout(30000),
+        public: publicOnly,
+        signal: AbortSignal.any([stop.signal, AbortSignal.timeout(30000)]),
         ...(after ? { after } : {}),
       });
+      if (stop.signal.aborted) return;
       setRecordings(page.recordings);
+      setPublicListing(publicOnly);
       setNext(page.nextAfter);
     } catch (error) {
+      if (stop.signal.aborted) return;
       setError(
         error instanceof Error ? error.message : "Unable to list recordings",
       );
@@ -152,8 +203,14 @@ function App() {
   const [checkedAttachment, setCheckedAttachment] = useState<{
     view: NonNullable<ViewerSession["view"]>;
     attachment: Attachment;
+    resolved: Attachment;
   }>();
   const view = session?.view;
+  function chooseAttachment(value: Attachment | undefined) {
+    setAttachment(value);
+    if (session instanceof BrowserPagedSession)
+      session.setAttachmentChoice(value);
+  }
   const available =
     attachment &&
     (view
@@ -166,7 +223,7 @@ function App() {
   useEffect(() => {
     if (!attachment) return;
     if (!view) {
-      if (!available) setAttachment(undefined);
+      if (!available) chooseAttachment(undefined);
       return;
     }
     const abort = new AbortController();
@@ -176,8 +233,8 @@ function App() {
       .then((value) => {
         if (signal.aborted) return;
         if (value?.hash === attachment.hash)
-          setCheckedAttachment({ view, attachment });
-        else setAttachment(undefined);
+          setCheckedAttachment({ view, attachment, resolved: value });
+        else chooseAttachment(undefined);
       })
       .catch((error) => {
         if (!abort.signal.aborted)
@@ -195,6 +252,19 @@ function App() {
         </a>
         <span className="tag">Shared coding sessions</span>
       </header>
+      <AccountControls
+        changed={setSignedIn}
+        leave={async () => {
+          request.current?.abort();
+          listing.current?.abort();
+          setSession(undefined);
+          setAttachment(undefined);
+          setRecordings([]);
+          setNext(null);
+          setKey("");
+          await closeSession(session);
+        }}
+      />
       <aside>
         <p className="eyebrow">YOUR RECORDINGS</p>
         <h1>
@@ -239,7 +309,7 @@ function App() {
                 setCacheHistory(event.target.checked);
               }}
             />
-            Save history on this device
+            Cache playback on this device
           </label>
           <button className="primary" disabled={busy || clearing || !stream}>
             {busy ? "Joining…" : "Join recording"}
@@ -248,22 +318,29 @@ function App() {
         <button
           className="secondary"
           onClick={() => void browse()}
-          disabled={!key}
+          disabled={!key && !signedIn}
         >
           Browse my recordings
+        </button>
+        <button
+          className="secondary"
+          onClick={() => void browse(undefined, true)}
+        >
+          Browse public recordings
         </button>
         <button
           className="secondary"
           disabled={!cachePlatform || busy || clearing}
           onClick={() => void forgetHistory()}
         >
-          {clearing ? "Clearing…" : "Clear saved histories"}
+          {clearing ? "Clearing…" : "Clear playback cache"}
         </button>
         {cacheNotice && (
           <p className="muted" role="status">
             {cacheNotice}
           </p>
         )}
+        <OperatorReports key={key} credential={key} />
         <div className="recordings">
           {recordings.map((recording) => (
             <button key={recording.id} onClick={() => void join(recording.id)}>
@@ -275,7 +352,9 @@ function App() {
             </button>
           ))}
           {next && (
-            <button onClick={() => void browse(next)}>More recordings</button>
+            <button onClick={() => void browse(next, publicListing)}>
+              More recordings
+            </button>
           )}
         </div>
       </aside>
@@ -339,6 +418,22 @@ function App() {
                 >
                   Follow live
                 </button>
+                <button
+                  disabled={session.state.appliedSeq === 0}
+                  onClick={() => {
+                    void session.step(-1);
+                  }}
+                >
+                  Previous event
+                </button>
+                <button
+                  disabled={session.state.appliedSeq >= session.received}
+                  onClick={() => {
+                    void session.step(1);
+                  }}
+                >
+                  Next event
+                </button>
                 <label className="speed">
                   Speed
                   <select
@@ -353,6 +448,38 @@ function App() {
                       .map((value) => (
                         <option key={value} value={value}>
                           {value}×
+                        </option>
+                      ))}
+                  </select>
+                </label>
+                <label className="speed">
+                  Idle gaps
+                  <select
+                    aria-label="Idle gap cap"
+                    value={session.idleCapMs ?? "off"}
+                    onChange={(event) =>
+                      session.setIdleCap(
+                        event.target.value === "off"
+                          ? undefined
+                          : Number(event.target.value),
+                      )
+                    }
+                  >
+                    <option value="off">Original timing</option>
+                    {[
+                      ...new Set([
+                        0,
+                        1000,
+                        5000,
+                        ...(session.idleCapMs === undefined
+                          ? []
+                          : [session.idleCapMs]),
+                      ]),
+                    ]
+                      .sort((a, b) => a - b)
+                      .map((cap) => (
+                        <option key={cap} value={cap}>
+                          {cap === 0 ? "Skip gaps" : `At most ${cap / 1000}s`}
                         </option>
                       ))}
                   </select>
@@ -381,31 +508,67 @@ function App() {
             </section>
             <p className="muted" role="status">
               {session.cacheStatus === "saved"
-                ? "History is being saved on this device."
-                : "History is kept for this visit only."}
+                ? "Loaded playback data is cached on this device."
+                : "Playback data is kept for this visit only."}
             </p>
+            <ReportRecording
+              key={session.streamId + session.credential}
+              streamId={session.streamId}
+              credential={session.credential}
+            />
+            <Sharing
+              key={session.streamId}
+              streamId={session.streamId}
+              credential={session.credential}
+            />
             {session.error && (
               <div className="error" role="alert">
                 {session.error}
+                {recoveryView && (
+                  <button
+                    onClick={() =>
+                      void join(session.streamId, {
+                        view: recoveryView,
+                        credential: session.credential,
+                        cache: session.cacheStatus === "saved",
+                      })
+                    }
+                    disabled={busy || clearing}
+                  >
+                    Reopen playback
+                  </button>
+                )}
               </div>
             )}
             {attachment && available && (
               <AttachmentViewer
                 key={`${session.streamId}/${attachment.hash}`}
-                attachment={attachment}
+                attachment={view ? checkedAttachment!.resolved : attachment}
                 streamId={session.streamId}
                 credential={session.credential}
-                onClose={() => setAttachment(undefined)}
+                onClose={() => chooseAttachment(undefined)}
               />
             )}
             <ActivityFeed
               key={session.streamId}
               state={state!}
               {...(view ? { view } : {})}
+              {...(session instanceof BrowserPagedSession
+                ? {
+                    textPages: session.textPages,
+                    onTextPage: (
+                      key: string,
+                      page: import("./inspection-choices.js").TextPosition,
+                    ) => session.setTextPage(key, page),
+                    expandedDisclosures: session.expandedDisclosures,
+                    onDisclosure: (key: string, expanded: boolean) =>
+                      session.setDisclosure(key, expanded),
+                  }
+                : {})}
               following={session.follow}
               onPause={() => session.setPlaying(false)}
               order={(key) => session.order(key)}
-              onAttachment={setAttachment}
+              onAttachment={chooseAttachment}
             />
           </>
         )}

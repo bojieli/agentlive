@@ -1,0 +1,191 @@
+{
+  "success": false,
+  "runtime": "v26.8.1",
+  "platform": "darwin/arm64",
+  "count": 10000,
+  "validation": "boundary-text-v1",
+  "storeOptions": {
+    "maxEntries": 4096
+  },
+  "completed": 10000,
+  "phase": "complete",
+  "collections": [
+    {
+      "through": 512,
+      "elapsedMs": 10.69274999999999,
+      "removedBytes": 295333,
+      "removedEntries": 373,
+      "bytes": 56658,
+      "entries": 216
+    },
+    {
+      "through": 1024,
+      "elapsedMs": 12.553916000000015,
+      "removedBytes": 409893,
+      "removedEntries": 353,
+      "bytes": 91475,
+      "entries": 360
+    },
+    {
+      "through": 1536,
+      "elapsedMs": 15.937958000000009,
+      "removedBytes": 430938,
+      "removedEntries": 435,
+      "bytes": 146822,
+      "entries": 516
+    },
+    {
+      "through": 2048,
+      "elapsedMs": 18.93074999999999,
+      "removedBytes": 476975,
+      "removedEntries": 457,
+      "bytes": 180706,
+      "entries": 654
+    },
+    {
+      "through": 2560,
+      "elapsedMs": 22.320834000000048,
+      "removedBytes": 450244,
+      "removedEntries": 431,
+      "bytes": 244058,
+      "entries": 814
+    },
+    {
+      "through": 3072,
+      "elapsedMs": 26.02320800000001,
+      "removedBytes": 515318,
+      "removedEntries": 455,
+      "bytes": 279767,
+      "entries": 952
+    },
+    {
+      "through": 3584,
+      "elapsedMs": 33.54308400000002,
+      "removedBytes": 493717,
+      "removedEntries": 429,
+      "bytes": 350730,
+      "entries": 1116
+    },
+    {
+      "through": 4096,
+      "elapsedMs": 36.31849999999997,
+      "removedBytes": 550477,
+      "removedEntries": 457,
+      "bytes": 384244,
+      "entries": 1252
+    },
+    {
+      "through": 4608,
+      "elapsedMs": 42.13612499999999,
+      "removedBytes": 531870,
+      "removedEntries": 429,
+      "bytes": 454910,
+      "entries": 1414
+    },
+    {
+      "through": 5120,
+      "elapsedMs": 45.98591699999997,
+      "removedBytes": 569265,
+      "removedEntries": 453,
+      "bytes": 496266,
+      "entries": 1554
+    },
+    {
+      "through": 5632,
+      "elapsedMs": 52.29266700000005,
+      "removedBytes": 551196,
+      "removedEntries": 423,
+      "bytes": 582294,
+      "entries": 1722
+    },
+    {
+      "through": 6144,
+      "elapsedMs": 57.78545800000006,
+      "removedBytes": 627233,
+      "removedEntries": 457,
+      "bytes": 615326,
+      "entries": 1856
+    },
+    {
+      "through": 6656,
+      "elapsedMs": 62.534666000000016,
+      "removedBytes": 592242,
+      "removedEntries": 425,
+      "bytes": 703105,
+      "entries": 2022
+    },
+    {
+      "through": 7168,
+      "elapsedMs": 65.13754199999994,
+      "removedBytes": 772633,
+      "removedEntries": 537,
+      "bytes": 630914,
+      "entries": 2076
+    },
+    {
+      "through": 7680,
+      "elapsedMs": 70.69741700000009,
+      "removedBytes": 703014,
+      "removedEntries": 483,
+      "bytes": 640575,
+      "entries": 2188
+    },
+    {
+      "through": 8192,
+      "elapsedMs": 75.93187499999999,
+      "removedBytes": 739873,
+      "removedEntries": 491,
+      "bytes": 626343,
+      "entries": 2290
+    },
+    {
+      "through": 8704,
+      "elapsedMs": 81.2813329999999,
+      "removedBytes": 719805,
+      "removedEntries": 455,
+      "bytes": 661408,
+      "entries": 2428
+    },
+    {
+      "through": 9216,
+      "elapsedMs": 88.70679199999995,
+      "removedBytes": 810137,
+      "removedEntries": 495,
+      "bytes": 624492,
+      "entries": 2524
+    },
+    {
+      "through": 9728,
+      "elapsedMs": 88.11529199999995,
+      "removedBytes": 690467,
+      "removedEntries": 419,
+      "bytes": 732309,
+      "entries": 2700
+    },
+    {
+      "through": 10000,
+      "elapsedMs": 94.01025000000027,
+      "removedBytes": 1501649,
+      "removedEntries": 1387,
+      "bytes": 734112,
+      "entries": 2708
+    }
+  ],
+  "peakHeap": 64598928,
+  "peakRss": 179011584,
+  "peakBytes": 2235761,
+  "peakEntries": 4095,
+  "receiptMs": 1869.4816250000001,
+  "seeks": [],
+  "failure": "ProtocolError: Memory content quota exceeded\n    at install (file://<repo>/apps/web/dist/memory-content.js:72:27)\n    at Object.save (file://<repo>/apps/web/dist/memory-content.js:109:21)\n    at async TextContent.write (file://<repo>/packages/protocol/dist/text-content.js:111:28)\n    at async file://<repo>/apps/web/dist/memory-content.js:134:25\n    at async file://<repo>/apps/web/dist/memory-content.js:116:28",
+  "headAudit": {
+    "through": 10000,
+    "entries": 2658,
+    "bytes": 652949
+  },
+  "afterClose": {
+    "bytes": 0,
+    "entries": 0
+  },
+  "elapsedMs": 2225.034584
+}

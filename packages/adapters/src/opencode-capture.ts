@@ -1,3 +1,4 @@
+import { visibleOpenCodeSnapshot } from "./opencode-history.js";
 import {
   openCodeFileEvents,
   openCodeFileDescriptor,
@@ -9,6 +10,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import {
   canonicalJson,
+  idSchema,
   contentSchema,
   type EventContent,
 } from "@agentlive/protocol";
@@ -19,6 +21,7 @@ import {
   type OpenCodeSnapshot,
 } from "./opencode-history.js";
 import { chunkContent } from "./chunks.js";
+import { openCodeLineage, openCodeAgentId } from "./opencode-lineage.js";
 const hash = (value: unknown) =>
   createHash("sha256").update(canonicalJson(value)).digest("hex");
 const entitySchema = z.strictObject({
@@ -66,18 +69,37 @@ export class OpenCodeCapture {
     private state: z.infer<typeof stateSchema>,
     private readonly secrets: readonly string[],
     private readonly artifacts?: OpenCodeArtifactResolvers,
+    private readonly child?: {
+      nativeSessionId: string;
+      parentNativeSessionId: string;
+    },
   ) {}
   static async open(
     journal: PublisherJournal,
     secrets: readonly string[] = [],
     artifacts?: OpenCodeArtifactResolvers,
+    child?: { nativeSessionId: string; parentNativeSessionId: string },
   ) {
     if (
       journal.identity.nativeAgent !== "opencode" ||
       !journal.identity.streamId
     )
       throw new Error("OpenCode capture requires a bound OpenCode publisher");
-    const directory = join(journal.directory, "opencode-live");
+    if (child) {
+      idSchema.parse(child.nativeSessionId);
+      idSchema.parse(child.parentNativeSessionId);
+      if (
+        child.nativeSessionId === journal.identity.nativeSessionId ||
+        child.nativeSessionId === child.parentNativeSessionId
+      )
+        throw new Error("Invalid OpenCode child capture identity");
+      child = { ...child };
+    }
+    const nativeSessionId =
+      child?.nativeSessionId ?? journal.identity.nativeSessionId;
+    const directory = child
+      ? join(journal.directory, "opencode-children", hash(nativeSessionId))
+      : join(journal.directory, "opencode-live");
     await mkdir(directory, { recursive: true, mode: 0o700 });
     const lock = await FileLock.acquire(join(directory, "capture.lock"));
     try {
@@ -89,16 +111,28 @@ export class OpenCodeCapture {
         );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        if (journal.capturedThrough > 0)
-          throw new Error(
-            "OpenCode capture state is missing for an existing publisher",
-          );
+        if (journal.capturedThrough > 0) {
+          let captured = !child;
+          if (child)
+            for await (const event of journal.pending(0)) {
+              if (
+                event.clockSegmentId === `opencode_${hash(nativeSessionId)}`
+              ) {
+                captured = true;
+                break;
+              }
+            }
+          if (captured)
+            throw new Error(
+              "OpenCode capture state is missing for an existing publisher",
+            );
+        }
         state = {
           version: 1,
           lifecycleVersion: 1,
           presentationVersion: 1,
           attachmentEncodingVersion: 2,
-          nativeSessionId: journal.identity.nativeSessionId,
+          nativeSessionId,
           filterHash,
           elapsedMs: 0,
           entities: {},
@@ -106,7 +140,7 @@ export class OpenCodeCapture {
         await atomicJson(join(directory, "state.json"), state);
       }
       if (
-        state.nativeSessionId !== journal.identity.nativeSessionId ||
+        state.nativeSessionId !== nativeSessionId ||
         state.filterHash !== filterHash
       )
         throw new Error(
@@ -119,6 +153,7 @@ export class OpenCodeCapture {
         state,
         [...secrets],
         artifacts,
+        child,
       );
       await capture.recover();
       await capture.upgradeLifecycle();
@@ -370,7 +405,9 @@ export class OpenCodeCapture {
       return Promise.reject(
         new Error("OpenCode snapshot exceeds capture limit"),
       );
-    const snapshot = parseOpenCodeSnapshot(JSON.parse(serialized));
+    const snapshot = visibleOpenCodeSnapshot(
+      parseOpenCodeSnapshot(JSON.parse(serialized)),
+    );
     const work = this.tail.then(async () => {
       if (this.failed || this.closed)
         throw new Error("OpenCode capture requires reopening");
@@ -390,7 +427,16 @@ export class OpenCodeCapture {
   }
   private async convert(snapshot: OpenCodeSnapshot, signal?: AbortSignal) {
     signal?.throwIfAborted();
-    const sessionId = hash("session");
+    if (
+      this.child &&
+      snapshot.info.parentID !== this.child.parentNativeSessionId
+    )
+      throw new Error("OpenCode child does not belong to the selected parent");
+    const entityId = (value: unknown) =>
+      this.child
+        ? hash({ child: this.child.nativeSessionId, entity: value })
+        : hash(value);
+    const sessionId = entityId("session");
     const seen = new Set([sessionId]);
     const gap = (reason: string): EventContent => ({
       kind: "capture.gap",
@@ -401,20 +447,61 @@ export class OpenCodeCapture {
       "session",
       false,
       snapshot.info.time.created,
-      () => [
-        {
-          kind: "session.started",
-          payload: {
-            agent: "opencode",
-            nativeSessionId: snapshot.info.id,
-            title: "OpenCode session",
-          },
-        },
-      ],
+      () =>
+        this.child
+          ? []
+          : [
+              {
+                kind: "session.started",
+                payload: {
+                  agent: "opencode",
+                  nativeSessionId: snapshot.info.id,
+                  title: "OpenCode session",
+                },
+              },
+            ],
     );
+    const lineageId = entityId("session-lineage");
+    if (snapshot.info.parentID) {
+      seen.add(lineageId);
+      await this.revise(
+        lineageId,
+        snapshot.info.parentID,
+        false,
+        snapshot.info.time.created,
+        async () => {
+          const lineage = openCodeLineage(
+            snapshot.info.id,
+            snapshot.info.parentID!,
+          );
+          const parent = lineage[0]!;
+          if (parent.kind !== "agent.updated")
+            throw new Error("Invalid parent lineage event");
+          // A placeholder must not replace a captured parent's richer lineage.
+          // Consult the shared durable journal because child converters have
+          // separate state and may be opened after their parent was captured.
+          for await (const event of this.journal.pending(0)) {
+            signal?.throwIfAborted();
+            if (
+              event.content.kind === "agent.updated" &&
+              event.content.payload.agentId === parent.payload.agentId
+            )
+              return lineage.slice(1);
+          }
+          return lineage;
+        },
+        true,
+        hash({
+          nativeSessionId: snapshot.info.id,
+          parentID: snapshot.info.parentID,
+        }),
+      );
+    } else if (this.state.entities[lineageId]) {
+      throw new Error("OpenCode session parent identity disappeared");
+    }
     for (const message of snapshot.messages) {
       signal?.throwIfAborted();
-      const id = hash(message.info.id);
+      const id = entityId(message.info.id);
       seen.add(id);
       const complete =
         message.info.role === "user" ||
@@ -450,7 +537,13 @@ export class OpenCodeCapture {
             ? [
                 {
                   kind: "message.started",
-                  payload: { messageId: id, role: message.info.role },
+                  payload: {
+                    messageId: id,
+                    role: message.info.role,
+                    ...(this.child
+                      ? { agentId: openCodeAgentId(snapshot.info.id) }
+                      : {}),
+                  },
                 } as EventContent,
               ]
             : []),
@@ -481,7 +574,7 @@ export class OpenCodeCapture {
           ["text", "reasoning", "step-start", "step-finish"].includes(part.type)
         )
           continue;
-        const partId = hash(part.id);
+        const partId = entityId(part.id);
         seen.add(partId);
         if (part.type === "tool") {
           const native = z.record(z.string(), z.unknown()).parse(part.state);
@@ -518,7 +611,14 @@ export class OpenCodeCapture {
                 ? [
                     {
                       kind: "tool.started",
-                      payload: { toolId: partId, name, input },
+                      payload: {
+                        toolId: partId,
+                        name,
+                        input,
+                        ...(this.child
+                          ? { agentId: openCodeAgentId(snapshot.info.id) }
+                          : {}),
+                      },
                     } as EventContent,
                   ]
                 : [
@@ -564,7 +664,7 @@ export class OpenCodeCapture {
                 throw new Error(
                   "OpenCode tool attachment has conflicting ownership",
                 );
-              const attachmentId = hash({
+              const attachmentId = entityId({
                 tool: part.id,
                 attachment:
                   typeof attachment.id === "string" ? attachment.id : index,

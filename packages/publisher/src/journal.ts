@@ -1,5 +1,5 @@
-import { mkdir, readFile, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, stat, realpath } from "node:fs/promises";
+import { join, dirname, basename } from "node:path";
 import { randomUUID, randomBytes, createHash } from "node:crypto";
 import {
   canonicalJson,
@@ -26,6 +26,12 @@ export interface PublisherBinding {
   sharingEnabled: boolean;
   acknowledgedSeq: number;
   connectionAttempt: number;
+  pendingCredentialRotation?: {
+    operationId: string;
+    revision: string;
+    expectedVersion: number;
+    replacementSecret: string;
+  };
 }
 interface CapturedSource {
   sourceKey: string;
@@ -100,6 +106,18 @@ const parseBinding = (raw: unknown): PublisherBinding => {
   if (!Number.isFinite(Date.parse(binding.creationTime)))
     throw new Error("Invalid creation time");
   new URL(binding.serverOrigin);
+  if (binding.pendingCredentialRotation) {
+    const pending = binding.pendingCredentialRotation;
+    idSchema.parse(pending.operationId);
+    idSchema.parse(pending.revision);
+    if (
+      pending.revision !== binding.revision ||
+      !Number.isSafeInteger(pending.expectedVersion) ||
+      pending.expectedVersion < 0 ||
+      !/^[a-f0-9]{64}$/.test(pending.replacementSecret)
+    )
+      throw new Error("Invalid pending credential rotation");
+  }
   return binding;
 };
 
@@ -224,6 +242,94 @@ export class PublisherJournal {
       throw error;
     }
   }
+  /** Open an existing exact binding directory without inventing a new identity. */
+  static async openExisting(directory: string): Promise<PublisherJournal> {
+    directory = await realpath(directory);
+    const binding = parseBinding(
+      JSON.parse(await readFile(join(directory, "binding.json"), "utf8")),
+    );
+    const key = createHash("sha256")
+      .update(
+        canonicalJson({
+          serverOrigin: new URL(binding.serverOrigin).origin,
+          agent: binding.nativeAgent,
+          nativeSessionId: binding.nativeSessionId,
+        }),
+      )
+      .digest("hex");
+    if (basename(directory) !== key)
+      throw new Error("Publisher directory identity differs");
+    return PublisherJournal.open(dirname(directory), {
+      serverOrigin: binding.serverOrigin,
+      agent: binding.nativeAgent,
+      nativeSessionId: binding.nativeSessionId,
+    });
+  }
+  /** Persist the replacement before attempting its remote installation. */
+  prepareCredentialRotation(expectedVersion: number, restart = false) {
+    return this.serial(async () => {
+      if (
+        !this.binding.streamId ||
+        !this.binding.revision ||
+        !Number.isSafeInteger(expectedVersion) ||
+        expectedVersion < 0
+      )
+        throw new Error("Invalid credential rotation binding");
+      if (restart || !this.binding.pendingCredentialRotation) {
+        await this.save({
+          ...this.binding,
+          pendingCredentialRotation: {
+            operationId: randomUUID(),
+            revision: this.binding.revision,
+            expectedVersion,
+            replacementSecret: randomBytes(32).toString("hex"),
+          },
+        });
+      }
+      return { ...this.binding.pendingCredentialRotation! };
+    });
+  }
+  confirmCredentialRotation(operationId: string) {
+    return this.serial(async () => {
+      const { pendingCredentialRotation: pending, ...binding } = this.binding;
+      if (!pending || pending.operationId !== operationId)
+        throw new Error("Pending credential rotation differs");
+      await this.save({ ...binding, writeSecret: pending.replacementSecret });
+    });
+  }
+  /** Only use after comparing the restored server's entire publisher prefix. */
+  recoverRevision(
+    previousRevision: string,
+    revision: string,
+    through: number,
+  ): Promise<void> {
+    return this.serial(async () => {
+      if (this.binding.pendingCredentialRotation)
+        throw new Error(
+          "Complete pending credential rotation before revision recovery",
+        );
+      idSchema.parse(revision);
+      if (
+        !this.binding.streamId ||
+        this.binding.revision !== previousRevision ||
+        previousRevision === revision
+      )
+        throw new ProtocolError(
+          "revision_changed",
+          "Publisher recovery revision differs",
+        );
+      if (
+        !Number.isSafeInteger(through) ||
+        through < 0 ||
+        through >= this.nextSequence
+      )
+        throw new ProtocolError(
+          "sequence_gap",
+          "Restored prefix exceeds captured history",
+        );
+      await this.save({ ...this.binding, revision, acknowledgedSeq: through });
+    });
+  }
   private sourceBits(key: string): number[] {
     const hash = createHash("sha256").update(key).digest();
     return [0, 4, 8, 12].map(
@@ -241,7 +347,16 @@ export class PublisherJournal {
     );
   }
   get identity(): PublisherBinding {
-    return { ...this.binding };
+    return {
+      ...this.binding,
+      ...(this.binding.pendingCredentialRotation
+        ? {
+            pendingCredentialRotation: {
+              ...this.binding.pendingCredentialRotation,
+            },
+          }
+        : {}),
+    };
   }
   get capturedThrough(): number {
     return this.nextSequence - 1;

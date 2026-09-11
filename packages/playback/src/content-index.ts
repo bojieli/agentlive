@@ -337,6 +337,46 @@ export class ContentIndex {
     signal?.throwIfAborted();
     return output;
   }
+  /** Visit validated index nodes and opaque leaf values with bounded traversal memory.
+   * Callbacks are provisional until this resolves; failures/cancellation invalidate the trace.
+   * Callers own root pins and must not reclaim content during traversal.
+   */
+  async trace(
+    input: IndexRoot | null,
+    visit: (
+      item:
+        | { kind: "node"; ref: ContentReference }
+        | { kind: "value"; key: string; ref: ContentReference },
+    ) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<{ nodes: number; values: number }> {
+    const root = input === null ? null : copyIndexRoot(input);
+    const counts = { nodes: 0, values: 0 };
+    const walk = async (span: IndexRoot, depth: number): Promise<void> => {
+      signal?.throwIfAborted();
+      if (depth > 64) corrupt();
+      const node = await this.load(span, signal);
+      signal?.throwIfAborted();
+      await visit({ kind: "node", ref: { ...span.ref } });
+      signal?.throwIfAborted();
+      counts.nodes++;
+      if (node.kind === "branch") {
+        for (const child of node.children) await walk(child, depth + 1);
+      } else {
+        for (const [key, ref] of node.entries) {
+          signal?.throwIfAborted();
+          await visit({ kind: "value", key, ref: { ...ref } });
+          signal?.throwIfAborted();
+          counts.values++;
+        }
+      }
+    };
+    signal?.throwIfAborted();
+    if (root) await walk(root, 0);
+    signal?.throwIfAborted();
+    if (counts.values !== (root?.count ?? 0)) corrupt();
+    return counts;
+  }
   async set(
     input: IndexRoot | null,
     name: string,

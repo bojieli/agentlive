@@ -1,3 +1,9 @@
+import { assertPublisherNotFinished } from "@agentlive/publisher";
+import {
+  validateRemoteArtifactPolicy,
+  remoteArtifactSecrets,
+  type RemoteArtifactPolicy,
+} from "./remote-artifacts.js";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve, join } from "node:path";
 import { createHash } from "node:crypto";
@@ -5,9 +11,31 @@ import { z } from "zod";
 import { PublisherJournal, PublisherNetwork } from "@agentlive/publisher";
 import { atomicJson } from "@agentlive/storage";
 import { request, delay } from "@agentlive/client/transport";
-import { canonicalJson, cursorSchema } from "@agentlive/protocol";
+import {
+  canonicalJson,
+  cursorSchema,
+  type CompletenessNotice,
+} from "@agentlive/protocol";
 import { localArtifactResolver } from "./local-artifacts.js";
 export interface NativeImportOptions {
+  /** Migration orchestration runs after policy construction, before remote creation. */
+  beforeImport?: (
+    identity: {
+      converterVersion: string;
+      filterFingerprint: string;
+      nativeSessionId: string;
+      sourcePrefix: string;
+      sourceBytes: number;
+      familySources?: readonly {
+        sourcePath: string;
+        nativeAgent: string;
+        boundary: { prefixHash: string; offset: number };
+      }[];
+    },
+    directory: string,
+  ) => Promise<void>;
+  artifactBundles?: boolean;
+  remoteArtifacts?: RemoteArtifactPolicy;
   artifactRoots?: readonly string[];
   artifactBaseDirectory?: string;
   sourcePath: string;
@@ -29,13 +57,41 @@ export async function importNativeRecording<Report>(
       nativeSessionId: string;
       boundary: { prefixHash: string; offset: number };
     };
+    familySources?: readonly {
+      sourcePath: string;
+      nativeAgent: string;
+      boundary: { prefixHash: string; offset: number };
+    }[];
     capture(
       journal: PublisherJournal,
       secrets: readonly string[],
       artifacts: Awaited<ReturnType<typeof localArtifactResolver>>,
     ): Promise<Report>;
+    /** Messages whose redaction tail is withheld at the frozen boundary (counts only). */
+    withheldTextMessages?(report: Report): number;
   },
 ) {
+  if (options.remoteArtifacts) {
+    const remoteArtifacts = validateRemoteArtifactPolicy(
+      options.remoteArtifacts,
+    );
+    options = {
+      ...options,
+      remoteArtifacts,
+      secrets: [
+        ...(options.secrets ?? []),
+        ...remoteArtifactSecrets(remoteArtifacts),
+      ],
+    };
+  }
+  if (options.artifactBundles)
+    options = {
+      ...options,
+      secrets: [
+        ...(options.secrets ?? []),
+        "agentlive-artifact-bundle-policy-v2",
+      ],
+    };
   const source = adapter.source;
   const journal = await PublisherJournal.open(options.publisherRoot, {
     serverOrigin: options.serverOrigin,
@@ -44,6 +100,7 @@ export async function importNativeRecording<Report>(
   });
   let artifacts: Awaited<ReturnType<typeof localArtifactResolver>> | undefined;
   try {
+    await assertPublisherNotFinished(journal.directory);
     for (const file of ["publish.json", "resume-import.json"]) {
       try {
         await readFile(join(journal.directory, file));
@@ -60,6 +117,21 @@ export async function importNativeRecording<Report>(
     const artifactRoots = (options.artifactRoots ?? [artifactBaseDirectory])
       .map((root) => resolve(root))
       .sort();
+    const checkpoint = join(journal.directory, "import.json");
+    let previous: Record<string, unknown> | undefined;
+    try {
+      previous = JSON.parse(await readFile(checkpoint, "utf8"));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    // Bindings created before completeness notices keep their original output on retry.
+    const legacy =
+      previous !== undefined &&
+      !(
+        typeof previous === "object" &&
+        previous !== null &&
+        "completenessNotice" in previous
+      );
     const identity = {
       version: 1,
       converterVersion: adapter.converterVersion,
@@ -68,23 +140,23 @@ export async function importNativeRecording<Report>(
       filterFingerprint: createHash("sha256")
         .update(canonicalJson([...new Set(options.secrets ?? [])].sort()))
         .digest("hex"),
+      ...(adapter.familySources
+        ? { familySources: adapter.familySources }
+        : {}),
       sourcePrefix: source.boundary.prefixHash,
       sourceBytes: source.boundary.offset,
       nativeSessionId: source.nativeSessionId,
       title: options.title,
       visibility: options.visibility,
+      ...(legacy ? {} : { completenessNotice: 1 }),
     };
-    const checkpoint = join(journal.directory, "import.json");
-    try {
-      const previous = JSON.parse(await readFile(checkpoint, "utf8"));
+    await options.beforeImport?.(identity, journal.directory);
+    if (previous !== undefined) {
       if (canonicalJson(previous) !== canonicalJson(identity))
         throw new Error(
           "Import source or options changed; explicitly select a new import or resume the existing recording",
         );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      await atomicJson(checkpoint, identity);
-    }
+    } else await atomicJson(checkpoint, identity);
     let resumed = false;
     const network = new PublisherNetwork({
       journal,
@@ -97,6 +169,10 @@ export async function importNativeRecording<Report>(
     });
     await network.ensureRemote(options.signal);
     artifacts = await localArtifactResolver({
+      ...(options.artifactBundles ? { artifactBundles: true } : {}),
+      ...(options.remoteArtifacts
+        ? { remoteArtifacts: options.remoteArtifacts }
+        : {}),
       directory: join(journal.directory, "artifacts"),
       roots: artifactRoots,
       baseDirectory: artifactBaseDirectory,
@@ -119,6 +195,12 @@ export async function importNativeRecording<Report>(
       ],
       artifacts,
     );
+    if (!legacy)
+      await captureCompletenessNotice(
+        journal,
+        adapter.withheldTextMessages?.(report) ?? 0,
+        options.signal,
+      );
     const base = `${journal.identity.serverOrigin}/api/v1/streams/${journal.identity.streamId}`;
     const remoteBefore = z
       .object({
@@ -251,4 +333,91 @@ export async function importNativeRecording<Report>(
       await journal.close();
     }
   }
+}
+
+/** Stable journal source key; one frozen-boundary notice per import binding. */
+export const IMPORT_COMPLETENESS_SOURCE_KEY = "agentlive-import-completeness-1";
+/** Append a content-free completeness notice after the converter output and before the
+ * import ends. Counts are recomputed from the durable normalized prefix, so a retry
+ * resolves to the same journal record instead of adding an event. */
+export async function captureCompletenessNotice(
+  journal: PublisherJournal,
+  withheldTextMessages: number,
+  signal: AbortSignal,
+): Promise<CompletenessNotice | undefined> {
+  cursorSchema.parse(withheldTextMessages);
+  const messages = new Map<string, { open: boolean; visible: boolean }>(),
+    tools = new Map<string, { open: boolean; visible: boolean }>();
+  let last:
+    | { observedAt: string; clockSegmentId: string; elapsedMs: number }
+    | undefined;
+  for await (const event of journal.pending(0)) {
+    signal.throwIfAborted();
+    if (event.source.eventId === IMPORT_COMPLETENESS_SOURCE_KEY) continue;
+    last = event;
+    const content = event.content;
+    const set = (
+      map: typeof messages,
+      id: string,
+      change: Partial<{ open: boolean; visible: boolean }>,
+    ) => {
+      const current = map.get(id) ?? { open: false, visible: true };
+      map.set(id, { ...current, ...change });
+    };
+    switch (content.kind) {
+      case "message.started":
+        messages.set(content.payload.messageId, { open: true, visible: true });
+        break;
+      case "message.completed":
+      case "message.reopened":
+        set(messages, content.payload.messageId, {
+          open: content.kind === "message.reopened",
+        });
+        break;
+      case "tool.started":
+        tools.set(content.payload.toolId, { open: true, visible: true });
+        break;
+      case "tool.completed":
+      case "tool.reopened":
+        set(tools, content.payload.toolId, {
+          open: content.kind === "tool.reopened",
+        });
+        break;
+      case "object.visibility":
+        if (content.payload.objectType !== "attachment")
+          set(
+            content.payload.objectType === "message" ? messages : tools,
+            content.payload.objectId,
+            { visible: content.payload.visible },
+          );
+        break;
+    }
+  }
+  const unfinished = (map: typeof messages) =>
+    [...map.values()].filter((item) => item.open && item.visible).length;
+  const notice: CompletenessNotice = {
+    version: 1,
+    reason: "frozen-native-source",
+    unfinishedMessages: unfinished(messages),
+    unfinishedTools: unfinished(tools),
+    withheldTextMessages,
+  };
+  if (
+    !last ||
+    (!notice.unfinishedMessages &&
+      !notice.unfinishedTools &&
+      !notice.withheldTextMessages)
+  )
+    return undefined;
+  // Share the last imported event's clock so the notice sits at the frozen boundary.
+  await journal.capture({
+    sourceKey: IMPORT_COMPLETENESS_SOURCE_KEY,
+    content: [{ kind: "capture.completeness", payload: notice }],
+    observedAt: last.observedAt,
+    clockSegmentId: last.clockSegmentId,
+    elapsedMs: last.elapsedMs,
+    fidelity: "reconstructed",
+    adapterState: journal.checkpoint,
+  });
+  return notice;
 }

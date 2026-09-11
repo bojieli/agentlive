@@ -1,8 +1,14 @@
+import { SnapshotLeases, type SnapshotLease } from "./snapshot-leases.js";
 import { open } from "node:fs/promises";
 import { constants } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
-import { TextStore, atomicJson, syncDirectory } from "@agentlive/storage";
+import {
+  ContentPins,
+  TextStore,
+  atomicJson,
+  syncDirectory,
+} from "@agentlive/storage";
 import {
   ProtocolError,
   idSchema,
@@ -33,8 +39,12 @@ export class RecordingSnapshots {
   private pending = 0;
   private closing: Promise<void> | undefined;
   private content: TextStore | undefined;
+  private opening: Promise<TextStore> | undefined;
+  private readonly readers = new Set<Promise<unknown>>();
   private readonly stop = new AbortController();
+  private readonly pins = new ContentPins(32, 2);
   private readonly binding: SnapshotBinding;
+  private readonly leases: SnapshotLeases;
   constructor(
     private readonly directory: string,
     binding: SnapshotBinding,
@@ -43,6 +53,7 @@ export class RecordingSnapshots {
       streamId: idSchema.parse(binding.streamId),
       revision: idSchema.parse(binding.revision),
     };
+    this.leases = new SnapshotLeases(directory, this.binding);
   }
   private run<T>(operation: () => Promise<T>): Promise<T> {
     if (this.closing)
@@ -63,18 +74,36 @@ export class RecordingSnapshots {
     );
     return task;
   }
-  private async store() {
+  private reading<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.closing)
+      return Promise.reject(
+        new ProtocolError("storage_failed", "Snapshots are closing"),
+      );
+    if (this.readers.size >= 16)
+      return Promise.reject(
+        new ProtocolError("retry_later", "Snapshot reads are at capacity"),
+      );
+    const task = Promise.resolve().then(operation);
+    this.readers.add(task);
+    void task.finally(() => this.readers.delete(task)).catch(() => {});
+    return task;
+  }
+  private async store(): Promise<TextStore> {
     if (this.content) return this.content;
-    const content = await TextStore.open(this.directory);
-    try {
-      // Persist the lazily created snapshots directory in its recording parent.
-      await syncDirectory(dirname(this.directory));
-      this.content = content;
-      return content;
-    } catch (error) {
-      await content.close();
-      throw error;
-    }
+    this.opening ??= (async () => {
+      let content: TextStore | undefined;
+      try {
+        content = await TextStore.open(this.directory);
+        await syncDirectory(dirname(this.directory));
+        this.content = content;
+        return content;
+      } catch (error) {
+        await content?.close();
+        this.opening = undefined;
+        throw error;
+      }
+    })();
+    return this.opening;
   }
   private async catalog(): Promise<SnapshotDescriptor[]> {
     let file;
@@ -154,14 +183,68 @@ export class RecordingSnapshots {
   select(
     through: number,
     signal?: AbortSignal,
+    timelineMs?: number,
   ): Promise<SnapshotDescriptor | null> {
     cursorSchema.parse(through);
-    return this.run(async () => {
-      signal?.throwIfAborted();
+    if (
+      timelineMs !== undefined &&
+      (!Number.isFinite(timelineMs) || timelineMs < 0)
+    )
+      throw new RangeError("Invalid snapshot time");
+    const active = signal
+      ? AbortSignal.any([signal, this.stop.signal])
+      : this.stop.signal;
+    return this.reading(async () => {
+      active.throwIfAborted();
       const entries = await this.catalog();
-      const entry = entries.findLast((item) => item.serverSeq <= through);
-      return entry ? this.verify(entry, signal) : null;
+      active.throwIfAborted();
+      const entry = entries.findLast(
+        (item) =>
+          item.serverSeq <= through &&
+          (timelineMs === undefined || item.timelineMs <= timelineMs),
+      );
+      return entry ? this.verify(entry, active) : null;
     });
+  }
+  /** Select and durably retain paired roots under the publication queue. */
+  selectLeased(
+    through: number,
+    signal?: AbortSignal,
+    timelineMs?: number,
+  ): Promise<SnapshotLease | null> {
+    cursorSchema.parse(through);
+    if (
+      timelineMs !== undefined &&
+      (!Number.isFinite(timelineMs) || timelineMs < 0)
+    )
+      throw new RangeError("Invalid snapshot time");
+    const active = signal
+      ? AbortSignal.any([signal, this.stop.signal])
+      : this.stop.signal;
+    return this.run(async () => {
+      active.throwIfAborted();
+      const entries = await this.catalog();
+      const entry = entries.findLast(
+        (item) =>
+          item.serverSeq <= through &&
+          (timelineMs === undefined || item.timelineMs <= timelineMs),
+      );
+      if (!entry) return null;
+      await this.verify(entry, active);
+      return this.leases.acquire(entry, active);
+    });
+  }
+  renewLease(token: string, signal?: AbortSignal): Promise<SnapshotLease> {
+    const active = signal
+      ? AbortSignal.any([signal, this.stop.signal])
+      : this.stop.signal;
+    return this.run(() => this.leases.renew(token, active));
+  }
+  releaseLease(token: string, signal?: AbortSignal): Promise<void> {
+    const active = signal
+      ? AbortSignal.any([signal, this.stop.signal])
+      : this.stop.signal;
+    return this.run(() => this.leases.release(token, active));
   }
   build(
     through: number,
@@ -197,19 +280,44 @@ export class RecordingSnapshots {
           combined,
         );
       }
+      let batch: StoredEvent[] = [],
+        bytes = 2,
+        received = state.appliedSeq;
+      const flush = async () => {
+        state = await reducer.applyBatch(
+          state,
+          batch,
+          combined,
+          async (reduced, group) => {
+            rows =
+              group.length > 1
+                ? activityIndex.advanceAppends(rows, group, reduced)
+                : await activityIndex.apply(
+                    rows,
+                    group[0]!,
+                    reduced,
+                    reducer,
+                    combined,
+                  );
+          },
+        );
+        batch = [];
+        bytes = 2;
+      };
       for await (const event of history(state.appliedSeq)) {
         combined.throwIfAborted();
-        if (
-          event.serverSeq !== state.appliedSeq + 1 ||
-          event.serverSeq > through
-        )
+        if (event.serverSeq !== ++received || event.serverSeq > through)
           throw new ProtocolError(
             "corrupt_storage",
             "Snapshot history is not the requested contiguous suffix",
           );
-        state = await reducer.apply(state, event, combined);
-        rows = await activityIndex.apply(rows, event, state, reducer, combined);
+        const size = Buffer.byteLength(JSON.stringify(event)) + 1;
+        if (batch.length && (batch.length === 256 || bytes + size > 1048576))
+          await flush();
+        batch.push(event);
+        bytes += size;
       }
+      if (batch.length) await flush();
       if (state.appliedSeq !== through)
         throw new ProtocolError(
           "corrupt_storage",
@@ -242,17 +350,46 @@ export class RecordingSnapshots {
     offset: number,
     length: number,
     signal?: AbortSignal,
+    lease?: string,
   ) {
-    return this.run(async () => {
-      signal?.throwIfAborted();
-      return (await this.store()).read(ref, offset, length, signal);
-    });
+    ref = { ...ref };
+    const active = signal
+      ? AbortSignal.any([signal, this.stop.signal])
+      : this.stop.signal;
+    const operation = async () => {
+      active.throwIfAborted();
+      if (lease !== undefined) await this.leases.validate(lease, active);
+      const pin = this.pins.pin([ref]);
+      try {
+        return await (await this.store()).read(ref, offset, length, active);
+      } finally {
+        pin.release();
+      }
+    };
+    return lease === undefined ? this.reading(operation) : this.run(operation);
+  }
+  readBlob(ref: ContentReference, signal?: AbortSignal, lease?: string) {
+    ref = { ...ref };
+    const active = signal
+      ? AbortSignal.any([signal, this.stop.signal])
+      : this.stop.signal;
+    const operation = async () => {
+      active.throwIfAborted();
+      if (lease !== undefined) await this.leases.validate(lease, active);
+      const pin = this.pins.pin([ref], "blob");
+      try {
+        return await (await this.store()).readBlob(ref, active);
+      } finally {
+        pin.release();
+      }
+    };
+    return lease === undefined ? this.reading(operation) : this.run(operation);
   }
   close(): Promise<void> {
     if (this.closing) return this.closing;
     this.stop.abort(new Error("Snapshot store is closing"));
     this.closing = (async () => {
-      await this.tail;
+      await Promise.allSettled([this.tail, ...this.readers]);
       await this.content?.close();
     })();
     return this.closing;

@@ -16,13 +16,20 @@ export interface PlaybackPreferences {
   speed: number;
   paused: boolean;
   immediate: boolean;
+  idleCapMs?: number;
 }
 function playbackPreferences(value: unknown): PlaybackPreferences {
   if (!value || typeof value !== "object")
     throw new Error("Invalid playback preferences");
   const input = value as Record<string, unknown>;
   if (
-    Object.keys(input).sort().join(",") !== "immediate,paused,speed" ||
+    !["immediate,paused,speed", "idleCapMs,immediate,paused,speed"].includes(
+      Object.keys(input).sort().join(","),
+    ) ||
+    ("idleCapMs" in input &&
+      (typeof input.idleCapMs !== "number" ||
+        !Number.isFinite(input.idleCapMs) ||
+        input.idleCapMs < 0)) ||
     typeof input.speed !== "number" ||
     !Number.isFinite(input.speed) ||
     input.speed <= 0 ||
@@ -35,6 +42,9 @@ function playbackPreferences(value: unknown): PlaybackPreferences {
     speed: input.speed,
     paused: input.paused,
     immediate: input.immediate,
+    ...(input.idleCapMs === undefined
+      ? {}
+      : { idleCapMs: input.idleCapMs as number }),
   };
 }
 /** The durable event prefix is the receipt cursor; no separately updated cursor file. */
@@ -56,6 +66,10 @@ export class SubscriberCache {
     private readonly maxBytes: number,
     private readonly directory: string,
   ) {}
+  /** Derivative content shares this cache ownership lifetime. */
+  get contentDirectory() {
+    return join(this.directory, "content");
+  }
   static async open(
     root: string,
     options: {

@@ -1,5 +1,7 @@
 import {
   ProtocolError,
+  reduceCompletenessNotice,
+  type ReducedCompletenessNotice,
   type StoredEvent,
   type EventContent,
   type PublishedEvent,
@@ -81,6 +83,8 @@ export interface RecordingState {
     }
   >;
   gaps: Array<{ at: number; reason: string; recoveredState: boolean }>;
+  /** Persisted frozen-source notice; absent for recordings that never carried one. */
+  completeness?: ReducedCompletenessNotice;
 }
 export function initialState(): RecordingState {
   return {
@@ -141,6 +145,7 @@ export function apply(
       break;
     case "recording.reopened":
       next.lifecycle = "open";
+      delete next.completeness;
       break;
     case "agent.updated":
       next.agents = new Map(state.agents).set(content.payload.agentId, {
@@ -436,6 +441,9 @@ export function apply(
     case "capture.gap":
       next.gaps = [...state.gaps, { at: event.serverSeq, ...content.payload }];
       break;
+    case "capture.completeness":
+      next.completeness = reduceCompletenessNotice(state.completeness, event)!;
+      break;
     case "session.ended":
     case "turn.started":
     case "turn.ended":
@@ -500,6 +508,20 @@ export function mapCaptureTime(
       )
     : previousTimeline;
 }
+/** Replay-time notice for an ended boundary whose visible messages/tools never completed.
+ * It is derived from reduced state only and never appended to history. */
+export function unfinishedActivity(state: RecordingState): {
+  unfinishedMessages: number;
+  unfinishedTools: number;
+} {
+  let unfinishedMessages = 0,
+    unfinishedTools = 0;
+  for (const message of state.messages.values())
+    if (!message.completed && message.visible !== false) unfinishedMessages++;
+  for (const tool of state.tools.values())
+    if (tool.status === "running" && tool.visible !== false) unfinishedTools++;
+  return { unfinishedMessages, unfinishedTools };
+}
 export {
   terminalText,
   renderTerminalEvent,
@@ -507,6 +529,11 @@ export {
   renderTerminalSnapshot,
 } from "./terminal.js";
 export { PlaybackPacer } from "./pacer.js";
+export {
+  completenessSummary,
+  completenessText,
+  type CompletenessSummary,
+} from "./completeness.js";
 export { createSnapshot, SnapshotReader } from "./snapshot.js";
 export type {
   ContentReference,
@@ -547,3 +574,6 @@ export {
   type ActivityIdentity,
   type IndexedActivityKind,
 } from "./activity-index.js";
+
+export { PagedTerminalRenderer } from "./paged-terminal.js";
+export { tracePairedSnapshot } from "./trace-snapshot.js";

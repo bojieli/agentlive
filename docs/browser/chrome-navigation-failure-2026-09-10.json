@@ -1,0 +1,89 @@
+{
+  "success": false,
+  "checks": [
+    "cached private join",
+    "fresh IndexedDB imports server snapshot blobs",
+    "exact tied previous event",
+    "idle cap control",
+    "live receipt preserves paused prefix",
+    "IndexedDB survives page reload with exact selection",
+    "renderer crash preserves committed cached selection",
+    "keyboard next event",
+    "follow live",
+    "activity keyboard navigation retains row focus",
+    "desktop viewport has no document overflow",
+    "mobile viewport has no document overflow",
+    "paged activity search",
+    "clear persistent playback cache",
+    "uncached fallback joins and steps"
+  ],
+  "errors": [],
+  "browser": "152.0.7977.83",
+  "accessibility": {
+    "desktop": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    },
+    "mobile": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    }
+  },
+  "navigationFailure": {
+    "cached": true,
+    "key": "ArrowUp",
+    "expected": 64,
+    "geometry": {
+      "position": "64",
+      "row": {
+        "x": 19,
+        "y": 6118.21875,
+        "width": 352,
+        "height": 363.09375,
+        "top": 6118.21875,
+        "right": 371,
+        "bottom": 6481.3125,
+        "left": 19
+      },
+      "viewport": {
+        "x": 16,
+        "y": 271.21875,
+        "width": 358,
+        "height": 548.59375,
+        "top": 271.21875,
+        "right": 374,
+        "bottom": 819.8125,
+        "left": 16
+      },
+      "scrollTop": 8043,
+      "scrollHeight": 14328
+    }
+  },
+  "failure": "page.waitForFunction: Timeout 15000ms exceeded.\n    at <repo>/scripts/probe-browser.mjs:413:22\n    at async check (<repo>/scripts/probe-browser.mjs:94:5)\n    at async file://<repo>/scripts/probe-browser.mjs:333:3"
+}

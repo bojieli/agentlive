@@ -10,7 +10,13 @@ import {
   useState,
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import type { RecordingState } from "@agentlive/playback";
+import {
+  completenessSummary,
+  unfinishedActivity,
+  type CompletenessSummary,
+  type RecordingState,
+} from "@agentlive/playback";
+import { CompletenessNotice } from "./completeness-notice.js";
 import type { Attachment } from "./attachments.js";
 import { ActivityCard, activityRows, type ActivityRow } from "./activity.js";
 import { TextPagesProvider, useRevealText } from "./paged-text.js";
@@ -20,14 +26,28 @@ import { ExpansionProvider, useRevealDisclosure } from "./disclosure.js";
 export function ActivityFeed(props: {
   state: RecordingState;
   view?: PagedActivityView;
+  textPages?: readonly import("./inspection-choices.js").TextPageChoice[];
+  onTextPage?: (
+    key: string,
+    page: import("./inspection-choices.js").TextPosition,
+  ) => void;
+  expandedDisclosures?: readonly string[];
+  onDisclosure?: (key: string, expanded: boolean) => void;
   following: boolean;
   onPause: () => void;
   order: (key: string) => number;
   onAttachment: (attachment: Attachment) => void;
 }) {
   return (
-    <ExpansionProvider>
-      <TextPagesProvider following={props.following}>
+    <ExpansionProvider
+      expanded={props.expandedDisclosures}
+      onChange={props.onDisclosure}
+    >
+      <TextPagesProvider
+        following={props.following}
+        saved={props.textPages}
+        onChange={props.onTextPage}
+      >
         {props.view && props.view.sequence !== props.state.appliedSeq ? (
           <p role="alert">
             Activity view does not match the selected playback position.
@@ -56,6 +76,7 @@ function VirtualActivity({
   const parent = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState<string>();
   const [pending, setPending] = useState<string>();
+  const navigationTarget = useRef<string | undefined>(undefined);
   const [pagedFocus, setPagedFocus] = useState(-1);
   const [loaded, setLoaded] = useState<{
     view: PagedActivityView;
@@ -63,6 +84,32 @@ function VirtualActivity({
   }>();
   const [loadError, setLoadError] = useState("");
   const [attempt, setAttempt] = useState(0);
+  const [pagedCompleteness, setPagedCompleteness] = useState<{
+    view: PagedActivityView;
+    summary: CompletenessSummary | undefined;
+  }>();
+  useEffect(() => {
+    if (!view) return;
+    const abort = new AbortController();
+    const signal = AbortSignal.any([abort.signal, AbortSignal.timeout(10000)]);
+    void view
+      .completeness(signal)
+      .then((summary) => {
+        if (!signal.aborted) setPagedCompleteness({ view, summary });
+      })
+      // The persisted notice remains available from the view summary.
+      .catch(() => {});
+    return () => abort.abort();
+  }, [view]);
+  const completeness = useMemo(
+    () =>
+      view
+        ? pagedCompleteness?.view === view
+          ? pagedCompleteness.summary
+          : completenessSummary(view.summary)
+        : completenessSummary(state, unfinishedActivity(state)),
+    [view, pagedCompleteness, state, state.appliedSeq],
+  );
   const count = view ? view.rowCount : rows.length;
   const rowAt = useCallback(
     (index: number) =>
@@ -78,10 +125,8 @@ function VirtualActivity({
     : rows.findIndex((row) => row.key === focused);
   const getItemKey = useCallback(
     (index: number) =>
-      view
-        ? (loaded?.rows.get(index)?.key ?? `pending:${index}`)
-        : rows[index]!.key,
-    [view, loaded, rows],
+      view ? `paged:${view.sequence}:${index}` : rows[index]!.key,
+    [view, rows],
   );
   const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
     count,
@@ -170,6 +215,7 @@ function VirtualActivity({
           revealDisclosure(`${row.key}/recorded-data`);
         }
         setFocused(row.key);
+        navigationTarget.current = row.key;
         if (view) setPagedFocus(index);
         setPending(row.key);
         virtualizer.scrollToIndex(index, { align: "start" });
@@ -250,6 +296,24 @@ function VirtualActivity({
       setPending(undefined);
     }
   }, [pending, rows, view, pagedFocus, rowAt, virtualizer, items]);
+  // Async card measurements can shift an explicit navigation target after the
+  // virtualizer considers its initial scroll settled. Use committed geometry
+  // until the user takes over scrolling or moves focus away.
+  useLayoutEffect(() => {
+    if (!focused || navigationTarget.current !== focused) return;
+    const viewport = parent.current;
+    const element = viewport?.querySelector<HTMLElement>(
+      `[data-index="${focusedIndex}"]`,
+    );
+    if (!viewport || !element || !element.contains(document.activeElement))
+      return;
+    const row = element.getBoundingClientRect();
+    const frame = viewport.getBoundingClientRect();
+    if (row.bottom <= frame.top || row.top >= frame.bottom)
+      virtualizer.scrollToOffset(viewport.scrollTop + row.top - frame.top, {
+        align: "start",
+      });
+  }, [focused, focusedIndex, items, virtualizer]);
   // A seek may remove the focused object; return focus to the activity region.
   useLayoutEffect(() => {
     if (!view && focused && focusedIndex < 0) {
@@ -267,6 +331,7 @@ function VirtualActivity({
         onSelect={(index, query) => navigate(index, query)}
         onPause={onPause}
       />
+      <CompletenessNotice summary={completeness} />
       {loadError && (
         <p role="alert">
           {loadError}{" "}
@@ -290,6 +355,15 @@ function VirtualActivity({
         role="region"
         aria-label="Scrollable session activity; use arrow keys to move between items"
         tabIndex={0}
+        onWheel={() => {
+          navigationTarget.current = undefined;
+        }}
+        onTouchStart={() => {
+          navigationTarget.current = undefined;
+        }}
+        onPointerDown={() => {
+          navigationTarget.current = undefined;
+        }}
         onFocusCapture={(event) => {
           const item = (event.target as Element).closest<HTMLElement>(
             "[data-index]",
@@ -304,8 +378,12 @@ function VirtualActivity({
           }
         }}
         onBlurCapture={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+          if (
+            !event.currentTarget.contains(event.relatedTarget as Node | null)
+          ) {
+            navigationTarget.current = undefined;
             setFocused(undefined);
+          }
         }}
         onClick={(event) => {
           const link = (event.target as Element).closest<HTMLAnchorElement>(

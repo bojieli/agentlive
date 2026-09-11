@@ -241,3 +241,182 @@ it("cancels a stalled cache lookup without waiting for its implementation", asyn
   client.close();
   await expect(task).rejects.toThrow("closed");
 });
+it("verifies transferred codec bytes and rejects valid-length corrupt responses", async () => {
+  const { createHash } = await import("node:crypto");
+  const bytes = Buffer.from("{}");
+  const ref = {
+    hash: createHash("sha256").update(bytes).digest("hex"),
+    byteSize: bytes.length,
+    units: 0,
+  };
+  for (const base64 of [bytes.toString("base64"), "AAAA", "!!!!", ""]) {
+    const client = new RecordingSnapshotClient({
+      ...options,
+      fetch: async (url, init) => {
+        expect(String(url)).toContain("/snapshot-blobs/");
+        expect(init?.credentials).toBe("omit");
+        expect(init?.redirect).toBe("error");
+        return Response.json({ base64 });
+      },
+    });
+    try {
+      if (base64 === bytes.toString("base64"))
+        expect(await client.readBlob(ref, AbortSignal.timeout(5000))).toEqual(
+          new Uint8Array(bytes),
+        );
+      else
+        await expect(
+          client.readBlob(ref, AbortSignal.timeout(5000)),
+        ).rejects.toMatchObject({ code: "corrupt_storage" });
+    } finally {
+      client.close();
+    }
+  }
+});
+
+it("rejects a snapshot past the requested time before loading its content", async () => {
+  let calls = 0;
+  const client = new RecordingSnapshotClient({
+    ...options,
+    fetch: async (url) => {
+      calls++;
+      expect(new URL(String(url)).searchParams.get("timelineMs")).toBe("0.5");
+      return Response.json({
+        ...envelope,
+        snapshot: { ...descriptor, timelineMs: 1 },
+      });
+    },
+  });
+  try {
+    await expect(
+      client.select(1, AbortSignal.timeout(2000), 0.5),
+    ).rejects.toMatchObject({ code: "sequence_gap" });
+    expect(calls).toBe(1);
+  } finally {
+    client.close();
+  }
+});
+const leaseFixture = {
+  token: "c".repeat(64),
+  expiresAt: 1000,
+  snapshot: {
+    ...descriptor,
+    format: "agentlive.paged-state" as const,
+    activity: { ...descriptor.ref, hash: "b".repeat(64) },
+  },
+};
+const leaseEnvelope = {
+  streamId: options.streamId,
+  revision: options.revision,
+  lease: leaseFixture,
+};
+it("acquires immutable lease provenance and validates renewal identity, roots and expiry", async () => {
+  let reply: unknown = leaseEnvelope;
+  const requests: { url: string; init?: RequestInit }[] = [];
+  const client = new RecordingSnapshotClient({
+    ...options,
+    fetch: async (url, init) => {
+      requests.push({ url: String(url), init });
+      return init?.method === "DELETE"
+        ? new Response(null, { status: 204 })
+        : Response.json(reply);
+    },
+  });
+  const signal = AbortSignal.timeout(5000);
+  try {
+    const lease = (await client.acquireLease(1, signal, 0))!;
+    expect(Object.isFrozen(lease.snapshot.ref)).toBe(true);
+    expect(Object.isFrozen(lease.snapshot.activity)).toBe(true);
+    expect(Object.isFrozen(lease)).toBe(true);
+    expect(JSON.parse(requests[0]!.init!.body as string)).toEqual({
+      revision: options.revision,
+      throughServerSeq: 1,
+      timelineMs: 0,
+    });
+    reply = { ...leaseEnvelope, lease: { ...leaseFixture, expiresAt: 2000 } };
+    expect((await client.renewLease(lease, signal)).expiresAt).toBe(2000);
+    for (const changed of [
+      null,
+      { ...leaseFixture, token: "d".repeat(64) },
+      { ...leaseFixture, expiresAt: 999 },
+      {
+        ...leaseFixture,
+        snapshot: { ...leaseFixture.snapshot, activity: { ...descriptor.ref } },
+      },
+    ]) {
+      reply = { ...leaseEnvelope, lease: changed };
+      await expect(client.renewLease(lease, signal)).rejects.toMatchObject({
+        code: "invalid_request",
+      });
+    }
+    await client.releaseLease(lease, signal);
+    expect(requests.at(-1)!.url).toContain(
+      `/snapshot-leases/${lease.token}?revision=revision`,
+    );
+    expect(
+      new Headers(requests.at(-1)!.init!.headers).get("authorization"),
+    ).toBe(`Bearer ${options.credential}`);
+  } finally {
+    client.close();
+  }
+});
+it("rejects wrong lease binding and selection boundaries and propagates stale renewal", async () => {
+  for (const [reply, code] of [
+    [{ ...leaseEnvelope, revision: "other" }, "revision_changed"],
+    [
+      {
+        ...leaseEnvelope,
+        lease: {
+          ...leaseFixture,
+          snapshot: { ...leaseFixture.snapshot, serverSeq: 2 },
+        },
+      },
+      "sequence_gap",
+    ],
+    [
+      {
+        ...leaseEnvelope,
+        lease: {
+          ...leaseFixture,
+          snapshot: { ...leaseFixture.snapshot, timelineMs: 1 },
+        },
+      },
+      "sequence_gap",
+    ],
+    [
+      { ...leaseEnvelope, lease: { ...leaseFixture, snapshot: descriptor } },
+      "invalid_request",
+    ],
+  ] as const) {
+    const client = new RecordingSnapshotClient({
+      ...options,
+      fetch: async () => Response.json(reply),
+    });
+    try {
+      await expect(
+        client.acquireLease(1, AbortSignal.timeout(2000), 0),
+      ).rejects.toMatchObject({ code });
+    } finally {
+      client.close();
+    }
+  }
+  let calls = 0;
+  const client = new RecordingSnapshotClient({
+    ...options,
+    fetch: async () => {
+      calls++;
+      return Response.json(
+        { error: { code: "stale_lease", message: "expired" } },
+        { status: 409 },
+      );
+    },
+  });
+  await expect(
+    client.renewLease(leaseFixture, AbortSignal.timeout(2000)),
+  ).rejects.toMatchObject({ code: "stale_lease" });
+  client.close();
+  await expect(
+    client.acquireLease(1, AbortSignal.timeout(2000)),
+  ).rejects.toThrow("closed");
+  expect(calls).toBe(1);
+});

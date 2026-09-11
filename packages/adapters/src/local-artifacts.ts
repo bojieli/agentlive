@@ -1,3 +1,12 @@
+import { captureArtifactBundle } from "./artifact-bundle.js";
+import { createBundleLoader } from "./bundle-loader.js";
+import { ARTIFACT_BUNDLE_MEDIA_TYPE } from "@agentlive/protocol";
+import { pathToFileURL } from "node:url";
+import { basename } from "node:path";
+import {
+  fetchRemoteArtifact,
+  type RemoteArtifactPolicy,
+} from "./remote-artifacts.js";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, realpath } from "node:fs/promises";
@@ -13,6 +22,7 @@ import {
 import { atomicJson, syncDirectory } from "@agentlive/storage";
 import {
   ArtifactSpool,
+  StreamingRedactor,
   uploadArtifact,
   type InlineArtifactCapture,
 } from "@agentlive/publisher";
@@ -38,6 +48,8 @@ const hash = (value: unknown) =>
 /** Outcome checkpoint preserves unavailable representations as well as captured versions. */
 export async function localArtifactResolver(options: {
   directory: string;
+  artifactBundles?: boolean;
+  remoteArtifacts?: RemoteArtifactPolicy;
   roots: readonly string[];
   baseDirectory: string;
   secrets: readonly string[];
@@ -47,7 +59,17 @@ export async function localArtifactResolver(options: {
   signal: AbortSignal;
 }) {
   const roots = await Promise.all(options.roots.map((root) => realpath(root)));
-  const secrets = [...new Set(options.secrets)].sort();
+  const secrets = [
+    ...new Set([
+      ...options.secrets,
+      ...(options.artifactBundles
+        ? ["agentlive-artifact-bundle-policy-v2"]
+        : []),
+      ...(options.remoteArtifacts?.origins.flatMap((entry) =>
+        entry.authorization ? [entry.authorization] : [],
+      ) ?? []),
+    ]),
+  ].sort();
   const baseDirectory = resolve(options.baseDirectory);
   const spool = await ArtifactSpool.open(join(options.directory, "capture"), {
     allowedRoots: roots,
@@ -61,6 +83,66 @@ export async function localArtifactResolver(options: {
     await spool.close();
     throw error;
   }
+  const captureBundle = async (
+    input: {
+      artifactId: string;
+      sourceKey: string;
+      url: string;
+      filename: string;
+      expectedSourceHash?: string;
+    },
+    entry?: { bytes: Uint8Array; mediaType: string },
+  ) => {
+    const load = await createBundleLoader({
+      roots,
+      ...(options.remoteArtifacts
+        ? { remoteArtifacts: options.remoteArtifacts }
+        : {}),
+    });
+    const captured = await captureArtifactBundle({
+      entrypoint: input.url,
+      signal: options.signal,
+      load: async (url, signal) => {
+        const source =
+          url === input.url && entry ? entry : await load(url, signal);
+        if (url === input.url && "unavailable" in source)
+          throw new ProtocolError(
+            "precondition_failed",
+            "Artifact bundle entrypoint is missing, inaccessible or outside capture scope",
+          );
+        if (
+          url === input.url &&
+          input.expectedSourceHash &&
+          !("unavailable" in source) &&
+          createHash("sha256").update(source.bytes).digest("hex") !==
+            input.expectedSourceHash
+        )
+          throw new ProtocolError(
+            "precondition_failed",
+            "Artifact bundle entrypoint source hash changed",
+          );
+        return source;
+      },
+      filter: (text) => {
+        const redactor = new StreamingRedactor(secrets);
+        return redactor.push(text) + redactor.finish();
+      },
+    });
+    return spool.captureInline(
+      {
+        artifactId: input.artifactId,
+        sourceKey: input.sourceKey,
+        bytes: captured.bytes,
+        filename:
+          (input.filename.slice(0, 220) || "artifact") +
+          ".agentlive-bundle.json",
+        mediaType: ARTIFACT_BUNDLE_MEDIA_TYPE,
+        text: false,
+        historical: false,
+      },
+      options.signal,
+    );
+  };
   const resolveLocked: FileArtifactResolver = async (input) => {
     options.signal.throwIfAborted();
     const key = createHash("sha256").update(input.sourceKey).digest("hex");
@@ -163,7 +245,22 @@ export async function localArtifactResolver(options: {
     if (!result) {
       try {
         result = {
-          attachment: await spool.capture(captureRequest, options.signal),
+          attachment:
+            options.artifactBundles && mediaType === "text/html"
+              ? await captureBundle({
+                  artifactId: input.artifactId,
+                  sourceKey: input.sourceKey,
+                  url: pathToFileURL(
+                    captureRequest.path.startsWith("file:")
+                      ? fileURLToPath(captureRequest.path)
+                      : captureRequest.path,
+                  ).href,
+                  filename: basename(captureRequest.path),
+                  ...(input.expectedSourceHash
+                    ? { expectedSourceHash: input.expectedSourceHash }
+                    : {}),
+                })
+              : await spool.capture(captureRequest, options.signal),
         };
       } catch (error) {
         if (options.signal.aborted) throw error;
@@ -201,14 +298,146 @@ export async function localArtifactResolver(options: {
     queue = operation.catch(() => {});
     return operation;
   };
-  const resolveInline = async (input: InlineArtifactCapture) => {
-    const attachment = await spool.captureInline(input, options.signal);
-    await uploadArtifact(spool, attachment, options);
-    return attachment;
+  let queuedInlineBytes = 0;
+  const resolveInline = (input: InlineArtifactCapture) => {
+    if (closed) return Promise.reject(new Error("Artifact resolver is closed"));
+    const inputBytes = input.bytes.byteLength;
+    if (inputBytes + queuedInlineBytes > 24 * 1024 * 1024)
+      return Promise.reject(
+        new Error("Inline artifact queue exceeds byte limit"),
+      );
+    input = { ...input, bytes: Buffer.from(input.bytes) };
+    queuedInlineBytes += inputBytes;
+    const operation = queue.then(async () => {
+      if (!options.artifactBundles || input.mediaType !== "text/html") {
+        const attachment = await spool.captureInline(input, options.signal);
+        await uploadArtifact(spool, attachment, options);
+        return attachment;
+      }
+      const checkpoint = join(
+        results,
+        `inline-bundle-${hash(input.sourceKey)}.json`,
+      );
+      const { bytes, ...metadata } = input;
+      const requestHash = hash({
+        metadata,
+        sourceHash: createHash("sha256").update(bytes).digest("hex"),
+        roots,
+        baseDirectory,
+        filter: hash(secrets),
+        policy: options.remoteArtifacts ?? null,
+      });
+      let attachment;
+      try {
+        const saved = checkpointSchema.parse(
+          JSON.parse(await readFile(checkpoint, "utf8")),
+        );
+        if (
+          saved.requestHash !== requestHash ||
+          !("attachment" in saved.result)
+        )
+          throw new Error("Inline bundle source or capture policy changed");
+        attachment = saved.result.attachment;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (!attachment) {
+        attachment = await captureBundle(
+          {
+            artifactId: input.artifactId,
+            sourceKey: input.sourceKey,
+            url: pathToFileURL(join(baseDirectory, basename(input.filename)))
+              .href,
+            filename: input.filename,
+          },
+          input,
+        );
+        await atomicJson(checkpoint, {
+          version: 1,
+          requestHash,
+          result: { attachment },
+        });
+      }
+      await uploadArtifact(spool, attachment, options);
+      return attachment;
+    });
+    const settled = operation.finally(() => {
+      queuedInlineBytes -= inputBytes;
+    });
+    queue = settled.catch(() => {});
+    return settled;
+  };
+  const resolveRemote = (input: {
+    artifactId: string;
+    sourceKey: string;
+    url: string;
+    filename: string;
+    mediaType?: string;
+    expectedSourceHash?: string;
+  }) => {
+    if (closed) return Promise.reject(new Error("Artifact resolver is closed"));
+    const operation = queue.then(async () => {
+      if (!options.remoteArtifacts)
+        return {
+          reason: "Remote artifact capture has no configured origin policy",
+        };
+      idSchema.parse(input.artifactId);
+      if (!input.sourceKey || input.sourceKey.length > 1024)
+        throw new Error("Invalid remote artifact source key");
+      const checkpoint = join(results, `remote-${hash(input.sourceKey)}.json`);
+      const requestHash = hash({
+        input,
+        policy: options.remoteArtifacts,
+        filter: hash(secrets),
+      });
+      let attachment;
+      try {
+        const saved = checkpointSchema.parse(
+          JSON.parse(await readFile(checkpoint, "utf8")),
+        );
+        if (
+          saved.requestHash !== requestHash ||
+          !("attachment" in saved.result)
+        )
+          throw new Error("Remote artifact capture policy or identity changed");
+        attachment = saved.result.attachment;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (!attachment) {
+        const captured = await fetchRemoteArtifact(
+          input,
+          options.remoteArtifacts,
+          options.signal,
+        );
+        attachment =
+          options.artifactBundles && captured.mediaType === "text/html"
+            ? await captureBundle(input, captured)
+            : await spool.captureInline(
+                {
+                  ...captured,
+                  artifactId: input.artifactId,
+                  sourceKey: input.sourceKey,
+                  filename: input.filename,
+                },
+                options.signal,
+              );
+        await atomicJson(checkpoint, {
+          version: 1,
+          requestHash,
+          result: { attachment },
+        });
+      }
+      await uploadArtifact(spool, attachment, options);
+      return { attachment };
+    });
+    queue = operation.catch(() => {});
+    return operation;
   };
   return {
     resolveArtifact,
     resolveInline,
+    ...(options.remoteArtifacts ? { resolveRemote } : {}),
     close: async () => {
       closed = true;
       await queue;

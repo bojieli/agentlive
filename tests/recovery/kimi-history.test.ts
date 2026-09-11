@@ -1,11 +1,159 @@
 import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, mkdir, appendFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { importKimiRecording } from "../../packages/adapters/src/index.js";
+import {
+  importKimiRecording,
+  publishKimiRecording,
+} from "../../packages/adapters/src/index.js";
 import { startServer } from "../../packages/server/src/http.js";
 import { initialState, apply } from "../../packages/playback/src/index.js";
+it("captures Kimi sibling logs, follows idle-main updates and deduplicates restart", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-kimi-family-"));
+  const ownerCredential = "b".repeat(64);
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: ownerCredential,
+    port: 0,
+  });
+  const session = join(root, "session_family");
+  const time = Date.parse("2026-09-01T00:00:00Z");
+  const row = (text: string) =>
+    JSON.stringify({
+      type: "context.append_message",
+      time,
+      message: { role: "user", content: [{ type: "text", text }] },
+    }) + "\n";
+  const create = async (agent: string, text: string) => {
+    const directory = join(session, "agents", agent);
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, "wire.jsonl");
+    await writeFile(
+      path,
+      JSON.stringify({
+        type: "metadata",
+        protocol_version: "1.5",
+        created_at: time,
+      }) +
+        "\n" +
+        row(text),
+    );
+    return path;
+  };
+  try {
+    const sourcePath = await create("main", "main message");
+    const child = await create("worker", "worker message");
+    let streamId = "",
+      baseline = 0;
+    const settings = {
+      sourcePath,
+      publisherRoot: join(root, "publisher"),
+      serverOrigin: server.url,
+      ownerCredential,
+      title: "Kimi family",
+      visibility: "private" as const,
+      includeChildren: true,
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const abort = new AbortController();
+      let failure: unknown;
+      const running = publishKimiRecording({
+        ...settings,
+        signal: abort.signal,
+        onReady: (recording) => {
+          if (streamId) expect(recording.streamId).toBe(streamId);
+          streamId = recording.streamId;
+        },
+      }).catch((error) => {
+        failure = error;
+      });
+      const until = async (expected: string[]) => {
+        let state = initialState(),
+          sequence = 0;
+        await expect
+          .poll(
+            async () => {
+              if (failure) throw failure;
+              if (!streamId) return [];
+              const recording = await server.store.get(streamId);
+              state = initialState();
+              let starts = 0;
+              try {
+                sequence = recording.boundary.sequence;
+                for await (const event of recording.history(0, sequence)) {
+                  state = apply(state, event);
+                  if (event.content.kind === "session.started") starts++;
+                }
+              } finally {
+                server.store.release(recording);
+              }
+              expect(starts).toBeLessThanOrEqual(1);
+              return [...state.messages.values()]
+                .map((message) => message.text)
+                .sort();
+            },
+            { timeout: 10000 },
+          )
+          .toEqual([...expected].sort());
+        return { state, sequence };
+      };
+      try {
+        const expected = [
+          "main message",
+          "worker message",
+          ...(attempt ? ["worker later", "new agent"] : []),
+        ];
+        const initial = await until(expected);
+        if (attempt) expect(initial.sequence).toBe(baseline);
+        else {
+          await appendFile(child, row("worker later"));
+          await create("later", "new agent");
+          const result = await until([
+            ...expected,
+            "worker later",
+            "new agent",
+          ]);
+          baseline = result.sequence;
+          expect(result.state.agents.size).toBe(3);
+          expect(
+            new Set(
+              [...result.state.messages.values()].map(
+                (message) => message.agentId,
+              ),
+            ).size,
+          ).toBe(3);
+        }
+      } finally {
+        abort.abort();
+        await running;
+      }
+    }
+    await expect(
+      publishKimiRecording({
+        ...settings,
+        includeChildren: false,
+        signal: AbortSignal.timeout(5000),
+      }),
+    ).rejects.toThrow("options changed");
+    await writeFile(
+      child,
+      JSON.stringify({
+        type: "metadata",
+        protocol_version: "1.5",
+        created_at: time,
+      }) +
+        "\n" +
+        row("changed history"),
+    );
+    await expect(
+      publishKimiRecording({ ...settings, signal: AbortSignal.timeout(5000) }),
+    ).rejects.toThrow(/prefix changed|truncated/);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 it("imports Kimi wire text and failed tools with agent identity, filtering and stable retry", async () => {
   const root = await mkdtemp(join(tmpdir(), "agentlive-kimi-test-"));
   const ownerCredential = "b".repeat(64);
@@ -463,3 +611,96 @@ it("preserves Kimi goal, task and approval state across live publisher restart",
     await rm(root, { recursive: true, force: true });
   }
 }, 30000);
+
+it("imports a frozen Kimi family once and rejects changed child history or scope", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-kimi-family-import-"));
+  const ownerCredential = "d".repeat(64);
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: ownerCredential,
+    port: 0,
+  });
+  const row = (text: string) =>
+    JSON.stringify({
+      type: "context.append_message",
+      time: 2,
+      message: { role: "user", content: [{ type: "text", text }] },
+    }) + "\n";
+  const paths = new Map<string, string>();
+  try {
+    for (const agent of ["main", "worker", "other"]) {
+      const directory = join(root, "session_import_family", "agents", agent);
+      await mkdir(directory, { recursive: true });
+      const path = join(directory, "wire.jsonl");
+      paths.set(agent, path);
+      await writeFile(
+        path,
+        JSON.stringify({
+          type: "metadata",
+          protocol_version: "1.5",
+          created_at: 1,
+        }) +
+          "\n" +
+          row(agent),
+      );
+    }
+    const options = {
+      sourcePath: paths.get("main")!,
+      publisherRoot: join(root, "publisher"),
+      serverOrigin: server.url,
+      ownerCredential,
+      title: "Kimi family import",
+      visibility: "private" as const,
+      includeChildren: true,
+      signal: AbortSignal.timeout(15000),
+    };
+    const first = await importKimiRecording(options);
+    const second = await importKimiRecording(options);
+    expect(second.streamId).toBe(first.streamId);
+    expect(second.producerEvents).toBe(first.producerEvents);
+    const recording = await server.store.get(first.streamId);
+    try {
+      let state = initialState(),
+        starts = 0,
+        ends = 0;
+      for await (const event of recording.history(
+        0,
+        recording.boundary.sequence,
+      )) {
+        state = apply(state, event);
+        if (event.content.kind === "session.started") starts++;
+        if (event.content.kind === "recording.ended") ends++;
+      }
+      expect(starts).toBe(1);
+      expect(ends).toBe(1);
+      expect(
+        [...state.messages.values()].map((message) => message.text).sort(),
+      ).toEqual(["main", "other", "worker"]);
+      expect(
+        new Set([...state.messages.values()].map((message) => message.agentId))
+          .size,
+      ).toBe(3);
+    } finally {
+      server.store.release(recording);
+    }
+    await expect(
+      importKimiRecording({ ...options, includeChildren: false }),
+    ).rejects.toThrow("Import source or options changed");
+    await appendFile(paths.get("worker")!, row("later child"));
+    await expect(importKimiRecording(options)).rejects.toThrow(
+      "Import source or options changed",
+    );
+    let finish = false;
+    await publishKimiRecording({
+      ...options,
+      resumeImport: true,
+      onCaughtUp: async () => {
+        finish = true;
+      },
+      finishRequested: () => finish,
+    });
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

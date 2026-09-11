@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { idSchema } from "@agentlive/protocol";
 import {
   readJsonlSource,
   type SourceCursor,
@@ -16,11 +17,13 @@ const rowSchema = z.object({
 export interface CodexHistoryManifest {
   nativeSessionId: string;
   nativeThreadIds: string[];
+  nativeThreadParents?: Record<string, string>;
   createdAt: string;
   cliVersion: string;
   boundary: SourceCursor;
   records: number;
   structuredItems: number;
+  legacyRecords?: number;
 }
 /** Preflight a frozen prefix without publishing vendor instructions or raw envelopes. */
 export async function inspectCodexHistory(
@@ -29,30 +32,40 @@ export async function inspectCodexHistory(
   tail: "parse" | "defer" = "parse",
 ): Promise<CodexHistoryManifest> {
   const nativeThreadIds = new Set<string>();
+  const parents = new Map<string, string | undefined>();
   let logicalSessionId: string | undefined;
   let firstTimestamp: string | undefined;
   let metadata:
     { id: string; timestamp: string; cli_version: string } | undefined;
   let boundary: SourceCursor | undefined,
     records = 0,
-    structuredItems = 0;
+    structuredItems = 0,
+    legacyRecords = 0;
   for await (const record of readJsonlSource(path, {
     tail,
     ...(signal ? { signal } : {}),
   })) {
     const row = rowSchema.parse(record.value);
     records++;
+    if (row.type === "response_item") legacyRecords++;
     boundary = record.cursor;
     if (row.type === "session_meta") {
       const current = z
         .object({
-          id: z.string(),
-          session_id: z.string().optional(),
+          id: idSchema,
+          session_id: idSchema.optional(),
+          parent_thread_id: idSchema.nullish(),
           timestamp: z.iso.datetime(),
           cli_version: z.string(),
         })
         .parse(row.payload);
       const logical = current.session_id ?? current.id;
+      if (current.parent_thread_id === current.id)
+        throw new Error("Codex thread cannot be its own parent");
+      const parent = current.parent_thread_id ?? undefined;
+      if (parents.has(current.id) && parents.get(current.id) !== parent)
+        throw new Error("Codex thread parent identity changed");
+      parents.set(current.id, parent);
       nativeThreadIds.add(current.id);
       if (logicalSessionId && logicalSessionId !== logical)
         throw new Error("Source contains multiple native session identities");
@@ -71,11 +84,17 @@ export async function inspectCodexHistory(
   return {
     nativeSessionId: logicalSessionId!,
     nativeThreadIds: [...nativeThreadIds],
+    nativeThreadParents: Object.fromEntries(
+      [...parents].filter(
+        (entry): entry is [string, string] => entry[1] !== undefined,
+      ),
+    ),
     createdAt: firstTimestamp!,
     cliVersion: metadata.cli_version,
     boundary,
     records,
     structuredItems,
+    legacyRecords,
   };
 }
 const textParts = (raw: unknown) =>
@@ -191,6 +210,7 @@ export async function captureCodexHistory(
   manifest: CodexHistoryManifest,
   capture: CodexCapture,
   signal?: AbortSignal,
+  options: { childThreadId?: string } = {},
 ): Promise<CodexHistoryReport> {
   // Verify the preflight prefix before emitting any effect. A replaced source cannot be silently adopted.
   for await (const _ of readJsonlSource(path, {
@@ -199,7 +219,7 @@ export async function captureCodexHistory(
     ...(signal ? { signal } : {}),
   }))
     void _;
-  const consumer = await createCodexHistoryConsumer(manifest, capture);
+  const consumer = await createCodexHistoryConsumer(manifest, capture, options);
   for await (const record of readJsonlSource(path, {
     through: manifest.boundary.offset,
     tail: "parse",
@@ -218,6 +238,7 @@ export async function captureCodexHistory(
 export async function createCodexHistoryConsumer(
   manifest: CodexHistoryManifest,
   capture: CodexCapture,
+  options: { childThreadId?: string } = {},
 ) {
   const report: CodexHistoryReport = {
     records: 0,
@@ -229,6 +250,15 @@ export async function createCodexHistoryConsumer(
     boundary: manifest.boundary,
   };
   const legacyCalls = new Map<string, Record<string, unknown>>();
+  const threadParents = new Map(
+    manifest.nativeThreadIds.map((thread) => [
+      thread,
+      manifest.nativeThreadParents &&
+      Object.hasOwn(manifest.nativeThreadParents, thread)
+        ? manifest.nativeThreadParents[thread]
+        : undefined,
+    ]),
+  );
   let activeTurnId: unknown;
   await capture.acceptHistorical(
     { method: "session/begin", params: {} },
@@ -244,6 +274,36 @@ export async function createCodexHistoryConsumer(
     report.records++;
     report.boundary = { ...record.cursor };
     const p = row.payload;
+    if (
+      row.type === "session_meta" &&
+      options.childThreadId &&
+      p.id !== options.childThreadId
+    ) {
+      if (
+        !manifest.nativeThreadIds.includes(String(p.id)) ||
+        manifest.nativeThreadParents?.[String(p.id)] !==
+          (p.parent_thread_id ?? undefined)
+      )
+        throw new Error("Codex child inherited metadata changed");
+      report.omittedInternalRecords++;
+      return;
+    }
+    if (row.type === "session_meta") {
+      const thread = idSchema.parse(p.id),
+        parent =
+          p.parent_thread_id == null
+            ? undefined
+            : idSchema.parse(p.parent_thread_id);
+      if (parent === thread)
+        throw new Error("Codex thread cannot be its own parent");
+      if (
+        manifest.nativeThreadParents &&
+        threadParents.has(thread) &&
+        threadParents.get(thread) !== parent
+      )
+        throw new Error("Codex thread lineage changed since inspection");
+      threadParents.set(thread, parent);
+    }
     let notification: RpcNotification | undefined;
     if (row.type === "session_meta")
       notification = {
@@ -288,7 +348,11 @@ export async function createCodexHistoryConsumer(
           for (const part of z
             .array(z.object({ type: z.string() }))
             .parse(item.content))
-            if (!["text", "local_image", "localImage"].includes(part.type)) {
+            if (
+              !["text", "local_image", "localImage", "image"].includes(
+                part.type,
+              )
+            ) {
               const type = `userMessage/content/${part.type}`;
               report.unsupportedItemTypes[type] =
                 (report.unsupportedItemTypes[type] ?? 0) + 1;
@@ -328,24 +392,36 @@ export async function createCodexHistoryConsumer(
           typeof p.id === "string"
             ? p.id
             : `legacy_${createHash("sha256").update(record.cursor.prefixHash).digest("hex")}`;
-        const parts = z
-          .array(z.object({ type: z.string(), text: z.string().optional() }))
-          .parse(p.content)
-          .filter(
-            (part) =>
-              part.type === "input_text" ||
-              part.type === "output_text" ||
-              part.type === "text",
-          );
+        const allParts = z
+          .array(
+            z.object({
+              type: z.string(),
+              text: z.string().optional(),
+              image_url: z.string().optional(),
+            }),
+          )
+          .parse(p.content);
+        const parts = allParts.filter((part) =>
+          ["input_text", "output_text", "text"].includes(part.type),
+        );
         const item =
           p.role === "user"
             ? {
                 id: itemId,
                 type: "userMessage",
-                content: parts.map((part) => ({
-                  type: "text",
-                  text: part.text ?? "",
-                })),
+                content: allParts.flatMap((part) =>
+                  part.type === "input_image" &&
+                  typeof part.image_url === "string"
+                    ? [
+                        { type: "image", url: part.image_url } as Record<
+                          string,
+                          unknown
+                        >,
+                      ]
+                    : ["input_text", "output_text", "text"].includes(part.type)
+                      ? [{ type: "text", text: part.text ?? "" }]
+                      : [],
+                ),
               }
             : {
                 id: itemId,

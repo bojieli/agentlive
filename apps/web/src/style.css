@@ -114,7 +114,7 @@ h2 {
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.5px;
-  color: #6c7f6c;
+  color: #566b56;
 }
 .muted {
   font-size: 14px;
@@ -184,6 +184,13 @@ main {
   gap: 20px;
   margin-bottom: 26px;
   overflow-wrap: anywhere;
+}
+.session-heading > div {
+  min-width: 0;
+}
+.session-heading > button {
+  flex: none;
+  white-space: nowrap;
 }
 .session-heading h2 {
   max-width: 850px;
@@ -289,6 +296,20 @@ h4 {
 }
 .card button {
   margin: 5px;
+}
+.completeness-notice {
+  padding: 12px 18px;
+  background: #fff7e0;
+  border: 1px solid #d9b95c;
+  border-left: 4px solid #b58a12;
+  border-radius: 8px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  margin-bottom: 15px;
+}
+.completeness-notice ul {
+  margin: 6px 0 0;
+  padding-left: 20px;
 }
 .error,
 .gap {
@@ -565,4 +586,45 @@ dialog.attachment-viewer::backdrop {
   gap: 8px;
   margin: 8px 0;
   font-size: 13px;
+}
+
+.bundle-viewer select {
+  max-width: 100%;
+}
+.bundle-viewer iframe {
+  width: 100%;
+  height: 28rem;
+  border: 1px solid #aaa;
+  background: white;
+}
+.bundle-viewer li {
+  overflow-wrap: anywhere;
+}
+
+.sharing {
+  margin: 1rem 0;
+}
+.sharing form,
+.sharing [aria-label="Viewing access"] {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+}
+.sharing label {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.sharing input {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+.sharing li {
+  margin-bottom: 0.75rem;
+  overflow-wrap: anywhere;
+}
+.sharing button {
+  max-width: 100%;
+  white-space: normal;
 }

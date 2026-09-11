@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import {
   BlobStore,
+  ContentMarks,
   type BlobLimits,
 } from "../../packages/storage/src/index.js";
 const roots: string[] = [];
@@ -144,4 +145,101 @@ it("collects expired unreferenced blobs and preserves all pinned hashes", async 
     code: "precondition_failed",
   });
   expect(store.usage.storedBytes).toBe(4);
+});
+
+it("streaming collection stops on mark failure and preserves accounting across reopen", async () => {
+  const store = await setup();
+  const payloads = [
+    Buffer.from("one"),
+    Buffer.from("two"),
+    Buffer.from("three"),
+  ];
+  for (const bytes of payloads) {
+    await store.install(await store.stage(descriptor(bytes), source(bytes)));
+    await utimes(
+      join(store.directory, descriptor(bytes).hash),
+      new Date(0),
+      new Date(0),
+    );
+  }
+  const stagedBytes = Buffer.from("pending");
+  const staged = await store.stage(
+    descriptor(stagedBytes),
+    source(stagedBytes),
+  );
+  let lookups = 0;
+  await expect(
+    store.collectMarked(async () => {
+      if (++lookups === 2) throw new Error("mark storage failed");
+      return false;
+    }, 1),
+  ).rejects.toThrow("mark storage failed");
+  const remaining = (await readdir(store.directory)).filter(
+    (name) => name !== ".uploads",
+  );
+  expect(remaining).toHaveLength(2);
+  const expectedBytes = payloads
+    .filter((bytes) => remaining.includes(descriptor(bytes).hash))
+    .reduce((sum, bytes) => sum + bytes.length, 0);
+  expect(store.usage.storedBytes).toBe(expectedBytes);
+  expect(store.usage.reservedBytes).toBe(stagedBytes.length);
+  await store.install(staged);
+  await store.verify(descriptor(stagedBytes));
+  await store.close();
+  const reopened = await BlobStore.open(store.directory);
+  stores.push(reopened);
+  expect(reopened.usage.storedBytes).toBe(expectedBytes + stagedBytes.length);
+  const abort = new AbortController();
+  await expect(
+    reopened.collectMarked(
+      async () => {
+        abort.abort(new Error("cancel sweep"));
+        return false;
+      },
+      Date.now() + 10000,
+      abort.signal,
+    ),
+  ).rejects.toThrow("cancel sweep");
+  expect(reopened.usage.storedBytes).toBe(expectedBytes + stagedBytes.length);
+  await expect(
+    reopened.collectMarked(async () => undefined as unknown as boolean, 1),
+  ).rejects.toThrow("mark result");
+  await expect(reopened.collectMarked(async () => false, NaN)).rejects.toThrow(
+    "cutoff",
+  );
+  expect(
+    await reopened.collectMarked(async () => true, Date.now() + 10000),
+  ).toBe(0);
+});
+
+it("sweeps only unmarked blobs using a sealed disk-backed mark set", async () => {
+  const store = await setup();
+  const kept = Buffer.from("retained"),
+    garbage = Buffer.from("intermediate");
+  for (const bytes of [kept, garbage]) {
+    await store.install(await store.stage(descriptor(bytes), source(bytes)));
+    await utimes(
+      join(store.directory, descriptor(bytes).hash),
+      new Date(0),
+      new Date(0),
+    );
+  }
+  const parent = await mkdtemp(join(tmpdir(), "agentlive-sweep-marks-"));
+  roots.push(parent);
+  const marks = await ContentMarks.create(parent);
+  try {
+    marks.add(descriptor(kept).hash);
+    await expect(
+      store.collectMarked(async (hash) => marks.has(hash), 1),
+    ).rejects.toThrow("building");
+    expect(store.usage.storedBytes).toBe(kept.length + garbage.length);
+    await marks.seal();
+    expect(await store.collectMarked(async (hash) => marks.has(hash), 1)).toBe(
+      1,
+    );
+    await store.verify(descriptor(kept));
+    expect(store.usage.storedBytes).toBe(kept.length);
+  } finally {
+    await marks.close();
+  }
 });

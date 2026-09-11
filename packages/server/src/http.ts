@@ -1,4 +1,14 @@
+import { reportInputSchema, reportDecisionSchema } from "./reports.js";
+import { ViewingGrants } from "./viewing-grants.js";
+import { Accounts } from "./accounts.js";
+import { AccountSessions } from "./account-sessions.js";
+import { OidcLogin } from "./oidc-login.js";
+import { hostedAuth } from "./hosted-auth.js";
+import { viewingResponse } from "./viewing-response.js";
+import { TransferAuthority } from "./transfer-authority.js";
+import { adminBackups } from "./admin-backup.js";
 import { Hono } from "hono";
+import { getCookie } from "hono/cookie";
 import {
   serve,
   upgradeWebSocket,
@@ -9,21 +19,34 @@ import {
 import type { WSContext } from "hono/ws";
 import { WebSocketServer, type WebSocket } from "ws";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { Readable } from "node:stream";
+import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { createReadStream, createWriteStream } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  writeArchive,
+  openArchive,
+  type ArchiveMetadata,
+} from "@agentlive/storage";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { z } from "zod";
 import {
   ProtocolError,
   canonicalJson,
+  migrationOriginSchema,
   hashSchema,
+  snapshotLeaseTokenSchema,
   idSchema,
   publisherMessageSchema,
   subscriberMessageSchema,
   contentSchema,
+  reduceCompletenessNotice,
   type ErrorCode,
   type StoredEvent,
 } from "@agentlive/protocol";
 import { RecordingStore, createSessionSchema } from "./store.js";
+import { storageReadiness } from "./readiness.js";
 import type { RecordingSession, Lease } from "./session.js";
 
 export interface ServerOptions {
@@ -32,8 +55,16 @@ export interface ServerOptions {
   host?: string;
   port?: number;
   publicOrigin?: string;
+  hosted?: {
+    issuer: string;
+    clientId: string;
+    clientSecret: string;
+    cookiePassword: string;
+    fetch?: import("openid-client").CustomFetch;
+  };
   maxConnections?: number;
   maxCachedSessions?: number;
+  snapshots?: import("./snapshot-scheduler.js").SnapshotScheduleOptions;
   maxSocketBytes?: number;
   shutdownTimeoutMs?: number;
 }
@@ -123,6 +154,14 @@ const integer = (value: string | undefined, fallback?: number): number => {
 };
 
 export async function startServer(options: ServerOptions) {
+  if (options.hosted) {
+    const publicUrl = new URL(options.publicOrigin ?? "http://invalid");
+    if (
+      publicUrl.protocol !== "https:" ||
+      publicUrl.origin !== options.publicOrigin
+    )
+      throw new Error("Hosted mode requires an explicit HTTPS publicOrigin");
+  }
   if (!/^[a-f0-9]{64}$/.test(options.ownerSecret))
     throw new Error("Owner secret must be 32 random bytes encoded as hex");
   const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 30_000;
@@ -134,16 +173,74 @@ export async function startServer(options: ServerOptions) {
     throw new Error(
       "shutdownTimeoutMs must be an integer from 1 to 2147483647",
     );
-  const store = await RecordingStore.open(
-    options.directory,
-    options.maxCachedSessions === undefined
+  const store = await RecordingStore.open(options.directory, {
+    ...(options.maxCachedSessions === undefined
       ? {}
-      : { maxCachedSessions: options.maxCachedSessions },
-  );
+      : { maxCachedSessions: options.maxCachedSessions }),
+    ...(options.snapshots === undefined
+      ? {}
+      : { snapshots: options.snapshots }),
+  });
+  let grants: ViewingGrants;
+  let accounts: Accounts | undefined;
+  let accountSessions: AccountSessions | undefined;
+  let login: OidcLogin | undefined;
+  const closeHosted = async () => {
+    try {
+      await accountSessions?.close();
+    } finally {
+      await accounts?.close();
+    }
+  };
+  try {
+    grants = await ViewingGrants.open(
+      join(options.directory, "viewing-grants.json"),
+      store.barrier,
+    );
+  } catch (error) {
+    await store.close();
+    throw error;
+  }
+  try {
+    if (options.hosted) {
+      accounts = await Accounts.open(
+        join(options.directory, "accounts"),
+        store.barrier,
+      );
+      accountSessions = await AccountSessions.open(
+        join(options.directory, "account-sessions.json"),
+        accounts,
+        options.hosted.cookiePassword,
+        store.barrier,
+      );
+      login = await OidcLogin.discover({
+        ...options.hosted,
+        accounts,
+        redirectUri: options.publicOrigin + "/auth/callback",
+      });
+    }
+  } catch (error) {
+    await closeHosted();
+    await grants.close();
+    await store.close();
+    throw error;
+  }
   const app = new Hono<{
     Bindings: HttpBindings;
-    Variables: { session: RecordingSession };
+    Variables: {
+      session: RecordingSession;
+      accountId: string | undefined;
+      /** Present only for cookie-authenticated browser account sessions. */
+      accountSessionActive: (() => boolean) | undefined;
+      /** Aborts when the request's read authorization or recording access ends. */
+      transferSignal: AbortSignal | undefined;
+    };
   }>();
+  // In-flight transfers authorized by revocable principals; see transfer-authority.ts.
+  const transfers = new TransferAuthority();
+  const revalidateTransfers = () => transfers.revalidate();
+  accountSessions?.onRevoke(revalidateTransfers);
+  accounts?.onStatusChange(revalidateTransfers);
   const ownerHash = digest(options.ownerSecret);
   const isOwner = (secret: string) =>
     !!secret && timingSafeEqual(digest(secret), ownerHash);
@@ -154,9 +251,29 @@ export async function startServer(options: ServerOptions) {
   const requests = new Set<Promise<void>>();
   const connections = new Set<() => Promise<void>>();
   const connectionErrors: unknown[] = [];
-  const tickets = new Map<string, { streamId: string; expires: number }>();
-  const readable = (session: RecordingSession, secret: string) => {
-    if (session.info.visibility !== "private" || isOwner(secret)) return;
+  const tickets = new Map<
+    string,
+    {
+      streamId: string;
+      expires: number;
+      grantToken?: string;
+      accountCookie?: string;
+    }
+  >();
+  const readable = (
+    session: RecordingSession,
+    secret: string,
+    accountId?: string,
+  ) => {
+    session.assertAvailable();
+    accountId ??= accountSessions?.authenticateDevice(secret)?.account.id;
+    if (
+      session.info.visibility !== "private" ||
+      (accountId !== undefined && session.info.ownerId === accountId) ||
+      isOwner(secret) ||
+      grants.authorize(secret, session.info.id, session.info.revision)
+    )
+      return;
     try {
       session.authorize(secret);
     } catch {
@@ -192,6 +309,49 @@ export async function startServer(options: ServerOptions) {
       finished();
     }
   });
+  app.use("/api/*", async (c, next) => {
+    const device = accountSessions?.authenticateDevice(
+      token(c.req.header("authorization")),
+    );
+    if (device) c.set("accountId", device.account.id);
+    // Explicit bearer authorization takes precedence; never silently fall back
+    // from an invalid bearer credential to a privileged browser session.
+    if (accountSessions && !c.req.header("authorization")) {
+      const cookie = getCookie(c, "__Host-agentlive-session");
+      const principal = cookie
+        ? await accountSessions.authenticate(cookie)
+        : undefined;
+      if (principal) {
+        if (
+          !["GET", "HEAD", "OPTIONS"].includes(c.req.method) &&
+          (c.req.header("origin") !== origin ||
+            !AccountSessions.validCsrf(
+              principal.csrf,
+              c.req.header("x-csrf-token"),
+            ))
+        )
+          throw new ProtocolError(
+            "forbidden",
+            "Cookie-authenticated mutations require same-origin CSRF authorization",
+          );
+        c.set("accountId", principal.account.id);
+        c.set("accountSessionActive", principal.isActive);
+      }
+    }
+    await next();
+  });
+  if (login && accountSessions)
+    app.route(
+      "/auth",
+      hostedAuth({
+        origin: options.publicOrigin!,
+        login,
+        sessions: accountSessions,
+      }),
+    );
+  app.get("/api/v1/auth-config", (c) =>
+    c.json({ mode: options.hosted ? "hosted" : "standalone" }),
+  );
   app.onError((error, c) => {
     const failure = protocolError(error);
     return c.json(
@@ -205,13 +365,98 @@ export async function startServer(options: ServerOptions) {
       statusFor(failure.code),
     );
   });
+  /** Authorization lifetime of a stream request. Grant tokens keep the grant's own
+   * lifetime and anonymous reads end when the recording becomes private. Reads by
+   * other credentials (accounts, devices, publisher keys) are rechecked with the
+   * route's read rule whenever a revocable principal or recording access changes. */
+  const streamAuthorization = (
+    session: RecordingSession,
+    secret: string,
+    method: string,
+    signal: AbortSignal,
+    accountId: string | undefined,
+    accountSessionActive: (() => boolean) | undefined,
+  ): { signal: AbortSignal; close(): void } | undefined => {
+    if (grants.authorize(secret, session.info.id, session.info.revision))
+      return grants.acquire(
+        secret,
+        session.info.id,
+        session.info.revision,
+        signal,
+      );
+    if (method !== "GET") return undefined;
+    if (!secret && accountId === undefined)
+      return session.acquirePublicRead(signal);
+    return transfers.register(() => {
+      try {
+        // A device credential is re-resolved from its bearer token; a browser
+        // session contributes its account only while its ledger entry is live.
+        readable(
+          session,
+          secret,
+          accountSessionActive?.() ? accountId : undefined,
+        );
+        return true;
+      } catch {
+        return false;
+      }
+    }, signal);
+  };
   app.use("/api/v1/streams/:id", async (c, next) => {
     const session = await store.get(c.req.param("id")!);
     c.set("session", session);
+    const secret = token(c.req.header("authorization"));
+    let access: { signal: AbortSignal; close(): void } | undefined;
+    let responseOwnsSession = false;
+    let recordingAccess: { signal: AbortSignal; close(): void } | undefined;
     try {
+      recordingAccess = session.acquireRead(c.req.raw.signal);
+      access = streamAuthorization(
+        session,
+        secret,
+        c.req.method,
+        c.req.raw.signal,
+        c.get("accountId"),
+        c.get("accountSessionActive"),
+      );
+      const authorization = access;
+      const recording = recordingAccess;
+      access = {
+        signal: authorization
+          ? AbortSignal.any([authorization.signal, recording.signal])
+          : recording.signal,
+        close() {
+          authorization?.close();
+          recording.close();
+        },
+      };
+      c.set("transferSignal", access.signal);
       await next();
+      if (access) {
+        if (access.signal.aborted) {
+          await c.res.body?.cancel(access.signal.reason).catch(() => {});
+          access.signal.throwIfAborted();
+        }
+        const lifetime = access;
+        responseOwnsSession = true;
+        let released = false;
+        c.res = viewingResponse(c.res, {
+          signal: lifetime.signal,
+          close() {
+            lifetime.close();
+            if (!released) {
+              released = true;
+              store.release(session);
+            }
+          },
+        });
+      }
+    } catch (error) {
+      access?.close();
+      recordingAccess?.close();
+      throw error;
     } finally {
-      store.release(session);
+      if (!responseOwnsSession) store.release(session);
     }
   });
   app.use("/api/v1/streams/:id/*", async (c, next) => {
@@ -221,21 +466,99 @@ export async function startServer(options: ServerOptions) {
     }
     const session = await store.get(c.req.param("id")!);
     c.set("session", session);
+    const secret = token(c.req.header("authorization"));
+    let access: { signal: AbortSignal; close(): void } | undefined;
+    let responseOwnsSession = false;
+    let recordingAccess: { signal: AbortSignal; close(): void } | undefined;
     try {
+      recordingAccess = session.acquireRead(c.req.raw.signal);
+      access = streamAuthorization(
+        session,
+        secret,
+        c.req.method,
+        c.req.raw.signal,
+        c.get("accountId"),
+        c.get("accountSessionActive"),
+      );
+      const authorization = access;
+      const recording = recordingAccess;
+      access = {
+        signal: authorization
+          ? AbortSignal.any([authorization.signal, recording.signal])
+          : recording.signal,
+        close() {
+          authorization?.close();
+          recording.close();
+        },
+      };
+      c.set("transferSignal", access.signal);
       await next();
+      if (access) {
+        if (access.signal.aborted) {
+          await c.res.body?.cancel(access.signal.reason).catch(() => {});
+          access.signal.throwIfAborted();
+        }
+        const lifetime = access;
+        responseOwnsSession = true;
+        let released = false;
+        c.res = viewingResponse(c.res, {
+          signal: lifetime.signal,
+          close() {
+            lifetime.close();
+            if (!released) {
+              released = true;
+              store.release(session);
+            }
+          },
+        });
+      }
+    } catch (error) {
+      access?.close();
+      recordingAccess?.close();
+      throw error;
     } finally {
-      store.release(session);
+      if (!responseOwnsSession) store.release(session);
     }
+  });
+  app.get("/artifact-interactive", async (c) => {
+    c.header(
+      "Content-Security-Policy",
+      "default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline'; img-src data:; frame-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts",
+    );
+    c.header("Referrer-Policy", "no-referrer");
+    c.header("Content-Type", "text/html; charset=utf-8");
+    return c.body(
+      await readFile(
+        new URL("./web/artifact-interactive.html", import.meta.url),
+      ),
+    );
+  });
+  app.get("/artifact-preview", async (c) => {
+    c.header(
+      "Content-Security-Policy",
+      "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:; frame-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts",
+    );
+    c.header("Referrer-Policy", "no-referrer");
+    c.header("Content-Type", "text/html; charset=utf-8");
+    return c.body(
+      await readFile(new URL("./web/artifact-preview.html", import.meta.url)),
+    );
   });
   for (const [route, filename, mime] of [
     ["/", "index.html", "text/html; charset=utf-8"],
+    [
+      "/artifact-preview.js",
+      "artifact-preview.js",
+      "text/javascript; charset=utf-8",
+    ],
     ["/app.js", "app.js", "text/javascript; charset=utf-8"],
     ["/app.css", "app.css", "text/css; charset=utf-8"],
+    ["/favicon.svg", "favicon.svg", "image/svg+xml"],
   ] as const) {
     app.get(route, async (c) => {
       c.header(
         "Content-Security-Policy",
-        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; frame-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
       );
       c.header("Referrer-Policy", "no-referrer");
       c.header("Content-Type", mime);
@@ -251,10 +574,215 @@ export async function startServer(options: ServerOptions) {
       }
     });
   }
+  // Short share links; access keys never appear in the URL.
+  app.get("/s/:id", (c) => {
+    const parsed = idSchema.safeParse(c.req.param("id"));
+    if (!parsed.success) return c.text("Not found", 404);
+    c.header("Referrer-Policy", "no-referrer");
+    return c.redirect(`/?stream=${encodeURIComponent(parsed.data)}`, 302);
+  });
   app.get("/healthz", (c) => c.json({ ok: true }));
-  app.get("/readyz", (c) => c.json({ ready: !closing }));
+  const checkStorage = storageReadiness(options.directory);
+  app.get("/readyz", async (c) => {
+    const ready = !closing && (await checkStorage());
+    return c.json({ ready: ready && !closing }, ready && !closing ? 200 : 503);
+  });
+  let activeImports = 0;
+  app.post("/api/v1/imports", async (c) => {
+    const ownerId =
+      c.get("accountId") ??
+      (isOwner(token(c.req.header("authorization"))) ? "local" : undefined);
+    if (!ownerId)
+      throw new ProtocolError("unauthorized", "Owner authorization required");
+    const importRequestId = c.req.header("idempotency-key");
+    if (importRequestId !== undefined) idSchema.parse(importRequestId);
+    if (!c.req.raw.body)
+      throw new ProtocolError("invalid_request", "Archive body is required");
+    if (activeImports >= 2)
+      throw new ProtocolError("retry_later", "Import capacity is busy");
+    const secret = token(c.req.header("authorization"));
+    const accountSessionActive = c.get("accountSessionActive");
+    // Logout, device revocation or account disable aborts an in-flight import
+    // before it commits; the operator credential is not revocable at runtime.
+    const importing = transfers.register(
+      () =>
+        accountSessionActive
+          ? accountSessionActive()
+          : isOwner(secret) ||
+            accountSessions?.authenticateDevice(secret)?.account.id === ownerId,
+      c.req.raw.signal,
+    );
+    const signal = importing.signal;
+    activeImports++;
+    let directory: string | undefined;
+    try {
+      directory = await mkdtemp(join(tmpdir(), "agentlive-upload-"));
+      const path = join(directory, "recording.agentlive");
+      let bytes = 0;
+      const bounded = new Transform({
+        transform(chunk, _encoding, done) {
+          bytes += chunk.length;
+          done(
+            bytes > 9 * 1024 ** 3
+              ? new ProtocolError(
+                  "invalid_request",
+                  "Archive upload exceeds limit",
+                )
+              : null,
+            chunk,
+          );
+        },
+      });
+      await pipeline(
+        Readable.fromWeb(c.req.raw.body as any),
+        bounded,
+        createWriteStream(path, { flags: "wx", mode: 0o600 }),
+        { signal },
+      );
+      let archive;
+      try {
+        archive = await openArchive(path, signal);
+      } catch {
+        signal.throwIfAborted();
+        throw new ProtocolError("invalid_request", "Invalid recording archive");
+      }
+      try {
+        const session = await store.importArchive(
+          archive,
+          ownerId,
+          signal,
+          importRequestId,
+        );
+        try {
+          return c.json(
+            {
+              streamId: session.info.id,
+              revision: session.info.revision,
+              lifecycle: session.info.lifecycle,
+            },
+            201,
+          );
+        } finally {
+          store.release(session);
+        }
+      } finally {
+        await archive.close();
+      }
+    } catch (error) {
+      // Report lost authorization rather than a generic abort/storage failure.
+      signal.throwIfAborted();
+      throw error;
+    } finally {
+      importing.close();
+      activeImports--;
+      if (directory) await rm(directory, { recursive: true, force: true });
+    }
+  });
+  let activeExports = 0;
+  app.get("/api/v1/streams/:id/export", async (c) => {
+    const session = c.get("session");
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
+    if (activeExports >= 2)
+      throw new ProtocolError("retry_later", "Export capacity is busy");
+    activeExports++;
+    let directory: string | undefined;
+    let transferred = false;
+    const cleanup = async () => {
+      activeExports--;
+      if (directory) await rm(directory, { recursive: true, force: true });
+    };
+    try {
+      directory = await mkdtemp(join(tmpdir(), "agentlive-download-"));
+      const info = await session.exportBoundary();
+      const metadata: ArchiveMetadata = {
+        format: "agentlive.recording",
+        version: 1,
+        protocolVersion: 1,
+        reducerVersion: 1,
+        exportedAt: new Date().toISOString(),
+        recording: {
+          ...(origin ? { serverOrigin: origin } : {}),
+          streamId: info.id,
+          revision: info.revision,
+          title: info.title,
+          createdAt: info.createdAt,
+          throughServerSeq: info.serverSeq,
+          timelineMs: info.timelineMs,
+          lifecycle: info.lifecycle,
+        },
+        provenance: {
+          ...(info.archiveOrigin ? { archiveOrigin: info.archiveOrigin } : {}),
+          ...(info.migrationOrigin
+            ? { migrationOrigin: info.migrationOrigin }
+            : {}),
+          agent: null,
+          sourceVersion: null,
+          adapterVersion: null,
+          capabilities: [],
+          completeness:
+            info.lifecycle === "ended" ? "ended-recording" : "captured-prefix",
+          gapCount: 0,
+        },
+      };
+      const events = async function* () {
+        for await (const event of session.history(0, info.serverSeq)) {
+          if (event.content.kind === "session.started")
+            metadata.provenance.agent = event.content.payload.agent;
+          if (event.content.kind === "capture.gap")
+            metadata.provenance.gapCount++;
+          const notice = reduceCompletenessNotice(
+            metadata.provenance.completenessNotice,
+            event,
+          );
+          if (notice) metadata.provenance.completenessNotice = notice;
+          else delete metadata.provenance.completenessNotice;
+          yield event;
+        }
+      };
+      const path = join(directory, "recording.agentlive");
+      await writeArchive(
+        path,
+        metadata,
+        events(),
+        async (hash) => (await session.openAttachment(hash)).createReadStream(),
+        c.get("transferSignal") ?? c.req.raw.signal,
+      );
+      const stream = createReadStream(path);
+      stream.once("close", () => {
+        void cleanup().catch(() => {});
+      });
+      transferred = true;
+      c.header("Content-Type", "application/octet-stream");
+      c.header(
+        "Content-Disposition",
+        'attachment; filename="recording.agentlive"',
+      );
+      return c.body(Readable.toWeb(stream) as ReadableStream<Uint8Array>);
+    } catch (error) {
+      c.get("transferSignal")?.throwIfAborted();
+      throw error;
+    } finally {
+      if (!transferred) await cleanup();
+    }
+  });
+  app.get("/api/v1/public-recordings", async (c) => {
+    const rawLimit = c.req.query("limit");
+    if (rawLimit !== undefined && !/^[1-9][0-9]{0,2}$/.test(rawLimit))
+      throw new ProtocolError("invalid_request", "Invalid listing limit");
+    const after = c.req.query("after");
+    return c.json(
+      await store.listPublic({
+        ...(after ? { after } : {}),
+        ...(rawLimit ? { limit: Number(rawLimit) } : {}),
+        signal: c.req.raw.signal,
+      }),
+    );
+  });
   app.get("/api/v1/streams", async (c) => {
-    if (!isOwner(token(c.req.header("authorization"))))
+    const ownerId =
+      c.get("accountId") ??
+      (isOwner(token(c.req.header("authorization"))) ? "local" : undefined);
+    if (!ownerId)
       throw new ProtocolError("unauthorized", "Owner authorization required");
     const rawLimit = c.req.query("limit");
     if (rawLimit !== undefined && !/^[1-9][0-9]{0,2}$/.test(rawLimit))
@@ -262,19 +790,22 @@ export async function startServer(options: ServerOptions) {
     const after = c.req.query("after");
     return c.json(
       await store.list({
-        ownerId: "local",
+        ownerId,
         ...(after === undefined ? {} : { after }),
         ...(rawLimit === undefined ? {} : { limit: Number(rawLimit) }),
       }),
     );
   });
   app.post("/api/v1/streams", async (c) => {
-    if (!isOwner(token(c.req.header("authorization"))))
+    const ownerId =
+      c.get("accountId") ??
+      (isOwner(token(c.req.header("authorization"))) ? "local" : undefined);
+    if (!ownerId)
       throw new ProtocolError("unauthorized", "Owner authorization required");
     const input = createSessionSchema
       .omit({ ownerId: true })
       .parse(await boundedJson(c.req.raw));
-    const session = await store.create({ ...input, ownerId: "local" });
+    const session = await store.create({ ...input, ownerId });
     try {
       return c.json(
         { streamId: session.info.id, revision: session.info.revision },
@@ -284,9 +815,261 @@ export async function startServer(options: ServerOptions) {
       store.release(session);
     }
   });
+  app.post("/api/v1/streams/:id/reports", async (c) => {
+    const session = c.get("session");
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
+    const input = reportInputSchema.parse(await boundedJson(c.req.raw, 8192));
+    return c.json(
+      await store.reports.submit(
+        input,
+        session.info.id,
+        session.info.revision,
+        c.get("accountId"),
+      ),
+      201,
+    );
+  });
+  // Operator-only online backup to a new server-host directory (admin-backup.ts).
+  const backups = adminBackups({
+    server: store,
+    ownerSecret: options.ownerSecret,
+    isOwner,
+  });
+  app.post("/api/v1/admin/backup", (c) => backups.handle(c.req.raw));
+  app.get("/api/v1/reports", async (c) => {
+    if (!isOwner(token(c.req.header("authorization"))))
+      throw new ProtocolError(
+        "unauthorized",
+        "Operator authorization required",
+      );
+    return c.json(
+      await store.reports.list(
+        c.req.query("after"),
+        integer(c.req.query("limit"), 50),
+      ),
+    );
+  });
+  app.post("/api/v1/reports/:id/decision", async (c) => {
+    if (!isOwner(token(c.req.header("authorization"))))
+      throw new ProtocolError(
+        "unauthorized",
+        "Operator authorization required",
+      );
+    const input = reportDecisionSchema.parse(
+      await boundedJson(c.req.raw, 8192),
+    );
+    return c.json(
+      await store.reports.decide(c.req.param("id"), input, (removal) =>
+        store.remove({ ...removal, operator: true }),
+      ),
+    );
+  });
+  // Separate from stream-loading middleware so durable removal retries work.
+  app.post("/api/v1/recordings/:id/removal", async (c) => {
+    const input = z
+      .strictObject({
+        revision: idSchema,
+        operationId: idSchema,
+        expectedServerSeq: z.number().int().nonnegative().safe().optional(),
+      })
+      .parse(await boundedJson(c.req.raw, 4096));
+    return c.json(
+      await store.remove({
+        id: c.req.param("id"),
+        ...input,
+        ...(c.get("accountId") !== undefined
+          ? { ownerId: c.get("accountId")! }
+          : {}),
+        operator: isOwner(token(c.req.header("authorization"))),
+      }),
+    );
+  });
+  app.post("/api/v1/streams/:id/migration-origin", async (c) => {
+    const session = c.get("session");
+    const operator = isOwner(token(c.req.header("authorization")));
+    const accountId = c.get("accountId");
+    if (
+      !operator &&
+      !(accountId !== undefined && accountId === session.info.ownerId)
+    )
+      throw new ProtocolError(
+        "unauthorized",
+        "Recording owner authorization required",
+      );
+    const input = z
+      .strictObject({ revision: idSchema, origin: migrationOriginSchema })
+      .parse(await boundedJson(c.req.raw, 4096));
+    // Validate the source before entering the target queue; opposite lineage requests
+    // must not hold one session queue while waiting for the other.
+    if (input.origin.externalSource?.serverOrigin === origin)
+      throw new ProtocolError(
+        "invalid_request",
+        "Use local lineage for this server origin",
+      );
+    if (!session.info.migrationOrigin && !input.origin.externalSource) {
+      const source = await store.get(input.origin.sourceStreamId);
+      try {
+        if (!operator && source.info.ownerId !== accountId)
+          throw new ProtocolError(
+            "unauthorized",
+            "Source recording owner authorization required",
+          );
+        const boundary = await source.exportBoundary();
+        if (
+          boundary.revision !== input.origin.sourceRevision ||
+          boundary.lifecycle !== "ended"
+        )
+          throw new ProtocolError(
+            "precondition_failed",
+            "Migration source revision or lifecycle changed",
+          );
+      } finally {
+        store.release(source);
+      }
+    }
+    const savedOrigin = await session.setMigrationOrigin(
+      input.revision,
+      input.origin,
+    );
+    return c.json({ revision: session.info.revision, origin: savedOrigin });
+  });
+  app.get("/api/v1/streams/:id/visibility", (c) => {
+    const session = c.get("session");
+    if (
+      !isOwner(token(c.req.header("authorization"))) &&
+      !(
+        c.get("accountId") !== undefined &&
+        c.get("accountId") === session.info.ownerId
+      )
+    )
+      throw new ProtocolError(
+        "unauthorized",
+        "Recording owner authorization required",
+      );
+    return c.json(session.visibilityState);
+  });
+  app.post("/api/v1/streams/:id/visibility", async (c) => {
+    const session = c.get("session");
+    if (
+      !isOwner(token(c.req.header("authorization"))) &&
+      !(
+        c.get("accountId") !== undefined &&
+        c.get("accountId") === session.info.ownerId
+      )
+    )
+      throw new ProtocolError(
+        "unauthorized",
+        "Recording owner authorization required",
+      );
+    const input = z
+      .strictObject({
+        revision: idSchema,
+        operationId: idSchema,
+        expectedVersion: z.number().int().nonnegative().safe(),
+        visibility: z.enum(["public", "unlisted", "private"]),
+      })
+      .parse(await boundedJson(c.req.raw, 4096));
+    const changed = await session.changeVisibility(input);
+    revalidateTransfers();
+    return c.json(changed);
+  });
+  app.get("/api/v1/streams/:id/publisher-credential", (c) => {
+    if (
+      !isOwner(token(c.req.header("authorization"))) &&
+      !(
+        c.get("accountId") !== undefined &&
+        c.get("accountId") === c.get("session").info.ownerId
+      )
+    )
+      throw new ProtocolError("unauthorized", "Owner authorization required");
+    return c.json(c.get("session").publisherCredentialState);
+  });
+  app.post("/api/v1/streams/:id/publisher-credential", async (c) => {
+    if (
+      !isOwner(token(c.req.header("authorization"))) &&
+      !(
+        c.get("accountId") !== undefined &&
+        c.get("accountId") === c.get("session").info.ownerId
+      )
+    )
+      throw new ProtocolError("unauthorized", "Owner authorization required");
+    const input = z
+      .strictObject({
+        operationId: z.string(),
+        revision: z.string(),
+        expectedVersion: z.number().int().nonnegative().safe(),
+        replacementSecret: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .nullable(),
+      })
+      .parse(await boundedJson(c.req.raw, 4096));
+    const changed = await c.get("session").changePublisherCredential(input);
+    revalidateTransfers();
+    return c.json(changed);
+  });
+  const manageGrants = (
+    session: RecordingSession,
+    secret: string,
+    accountId?: string,
+  ) => {
+    if (
+      !isOwner(secret) &&
+      !(accountId !== undefined && session.info.ownerId === accountId)
+    )
+      session.authorize(secret);
+  };
+  app.post("/api/v1/streams/:id/viewing-grants", async (c) => {
+    const session = c.get("session");
+    manageGrants(
+      session,
+      token(c.req.header("authorization")),
+      c.get("accountId"),
+    );
+    const input = z
+      .strictObject({
+        label: z.string().max(200),
+        expiresAt: z.number().int().nonnegative().safe(),
+      })
+      .parse(await boundedJson(c.req.raw, 4096));
+    return c.json(
+      await grants.issue({
+        ...input,
+        streamId: session.info.id,
+        revision: session.info.revision,
+      }),
+      201,
+    );
+  });
+  app.get("/api/v1/streams/:id/viewing-grants", (c) => {
+    const session = c.get("session");
+    manageGrants(
+      session,
+      token(c.req.header("authorization")),
+      c.get("accountId"),
+    );
+    return c.json({ grants: grants.list(session.info.id) });
+  });
+  app.delete("/api/v1/streams/:id/viewing-grants/:grantId", async (c) => {
+    const session = c.get("session");
+    manageGrants(
+      session,
+      token(c.req.header("authorization")),
+      c.get("accountId"),
+    );
+    return c.json({
+      revoked: await grants.revoke(session.info.id, c.req.param("grantId")),
+    });
+  });
+  app.get("/api/v1/streams/:id/publisher-state", (c) => {
+    const session = c.get("session");
+    session.authorize(token(c.req.header("authorization")));
+    const { revision, publisherId, producerEpoch, serverSeq } = session.info;
+    return c.json({ revision, publisherId, producerEpoch, serverSeq });
+  });
   app.get("/api/v1/streams/:id", async (c) => {
     const session = c.get("session");
-    readable(session, token(c.req.header("authorization")));
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
     const {
       id,
       revision,
@@ -310,7 +1093,7 @@ export async function startServer(options: ServerOptions) {
   });
   app.get("/api/v1/streams/:id/events", async (c) => {
     const session = c.get("session");
-    readable(session, token(c.req.header("authorization")));
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
     if (c.req.query("revision") !== session.info.revision)
       throw new ProtocolError("revision_changed", "History revision changed");
     const after = integer(c.req.query("afterServerSeq"), 0);
@@ -324,7 +1107,9 @@ export async function startServer(options: ServerOptions) {
     const lines: string[] = [];
     let size = 0;
     let next = after;
+    const transferSignal = c.get("transferSignal") ?? c.req.raw.signal;
     for await (const event of session.history(after, through)) {
+      transferSignal.throwIfAborted();
       const line = canonicalJson(event) + "\n";
       const bytes = Buffer.byteLength(line);
       if (lines.length && size + bytes > 2 * 1024 * 1024) break;
@@ -343,7 +1128,14 @@ export async function startServer(options: ServerOptions) {
   app.post("/api/v1/streams/:id/snapshots", async (c) => {
     const session = c.get("session");
     const secret = token(c.req.header("authorization"));
-    if (!isOwner(secret)) session.authorize(secret);
+    if (
+      !isOwner(secret) &&
+      !(
+        c.get("accountId") !== undefined &&
+        c.get("accountId") === session.info.ownerId
+      )
+    )
+      session.authorize(secret);
     const input = z
       .strictObject({
         revision: idSchema,
@@ -363,12 +1155,19 @@ export async function startServer(options: ServerOptions) {
   });
   app.get("/api/v1/streams/:id/snapshots", async (c) => {
     const session = c.get("session");
-    readable(session, token(c.req.header("authorization")));
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
     if (c.req.query("revision") !== session.info.revision)
       throw new ProtocolError("revision_changed", "Snapshot revision changed");
     const snapshot = await session.selectSnapshot(
       integer(c.req.query("throughServerSeq")),
-      c.req.raw.signal,
+      c.get("transferSignal") ?? c.req.raw.signal,
+      c.req.query("timelineMs") === undefined
+        ? undefined
+        : z.coerce
+            .number()
+            .finite()
+            .nonnegative()
+            .parse(c.req.query("timelineMs")),
     );
     return c.json({
       streamId: session.info.id,
@@ -376,9 +1175,94 @@ export async function startServer(options: ServerOptions) {
       snapshot,
     });
   });
+  app.post("/api/v1/streams/:id/snapshot-leases", async (c) => {
+    const session = c.get("session");
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
+    const input = z
+      .strictObject({
+        revision: idSchema,
+        throughServerSeq: z.number().int().nonnegative().safe(),
+        timelineMs: z.number().finite().nonnegative().optional(),
+      })
+      .parse(await boundedJson(c.req.raw));
+    if (input.revision !== session.info.revision)
+      throw new ProtocolError(
+        "revision_changed",
+        "Snapshot lease revision changed",
+      );
+    const lease = await session.selectSnapshotLeased(
+      input.throughServerSeq,
+      c.req.raw.signal,
+      input.timelineMs,
+    );
+    return c.json(
+      { streamId: session.info.id, revision: session.info.revision, lease },
+      201,
+    );
+  });
+  app.post("/api/v1/streams/:id/snapshot-leases/:lease/renew", async (c) => {
+    const session = c.get("session");
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
+    const input = z
+      .strictObject({ revision: idSchema })
+      .parse(await boundedJson(c.req.raw));
+    if (input.revision !== session.info.revision)
+      throw new ProtocolError(
+        "revision_changed",
+        "Snapshot lease revision changed",
+      );
+    const lease = await session.renewSnapshotLease(
+      snapshotLeaseTokenSchema.parse(c.req.param("lease")),
+      c.req.raw.signal,
+    );
+    return c.json({
+      streamId: session.info.id,
+      revision: session.info.revision,
+      lease,
+    });
+  });
+  app.delete("/api/v1/streams/:id/snapshot-leases/:lease", async (c) => {
+    const session = c.get("session");
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
+    if (c.req.query("revision") !== session.info.revision)
+      throw new ProtocolError(
+        "revision_changed",
+        "Snapshot lease revision changed",
+      );
+    await session.releaseSnapshotLease(
+      snapshotLeaseTokenSchema.parse(c.req.param("lease")),
+      c.req.raw.signal,
+    );
+    return c.body(null, 204);
+  });
+  app.get("/api/v1/streams/:id/snapshot-blobs/:hash", async (c) => {
+    const session = c.get("session");
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
+    if (c.req.query("revision") !== session.info.revision)
+      throw new ProtocolError(
+        "revision_changed",
+        "Snapshot blob revision changed",
+      );
+    const ref = {
+      hash: hashSchema.parse(c.req.param("hash")),
+      byteSize: integer(c.req.query("byteSize")),
+      units: integer(c.req.query("units")),
+    };
+    if (ref.byteSize < 1 || ref.byteSize > 1048576 || ref.units > 67108864)
+      throw new ProtocolError(
+        "invalid_request",
+        "Invalid snapshot blob reference",
+      );
+    const bytes = await session.readSnapshotBlob(
+      ref,
+      c.get("transferSignal") ?? c.req.raw.signal,
+      c.req.query("lease"),
+    );
+    return c.json({ base64: bytes.toString("base64") });
+  });
   app.get("/api/v1/streams/:id/snapshot-content/:hash", async (c) => {
     const session = c.get("session");
-    readable(session, token(c.req.header("authorization")));
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
     if (c.req.query("revision") !== session.info.revision)
       throw new ProtocolError(
         "revision_changed",
@@ -407,7 +1291,8 @@ export async function startServer(options: ServerOptions) {
       ref,
       offset,
       length,
-      c.req.raw.signal,
+      c.get("transferSignal") ?? c.req.raw.signal,
+      c.req.query("lease"),
     );
     // JSON preserves exact UTF-16 units, including slices through a surrogate pair.
     return c.json({ text });
@@ -428,15 +1313,26 @@ export async function startServer(options: ServerOptions) {
             .body as import("node:stream/web").ReadableStream<Uint8Array>,
         )
       : Readable.from([]);
+    // Rotation/revocation of the publisher credential aborts staging promptly;
+    // installation independently rechecks the credential.
+    const upload = transfers.register(() => {
+      try {
+        session.authorize(secret);
+        return true;
+      } catch {
+        return false;
+      }
+    }, c.req.raw.signal);
     try {
       const uploaded = await session.uploadAttachment(
         secret,
         descriptor,
         source,
-        c.req.raw.signal,
+        upload.signal,
       );
       return c.json(uploaded, 201);
     } finally {
+      upload.close();
       source.destroy();
     }
   });
@@ -450,7 +1346,7 @@ export async function startServer(options: ServerOptions) {
   });
   app.get("/api/v1/streams/:id/attachments/:hash", async (c) => {
     const session = c.get("session");
-    readable(session, token(c.req.header("authorization")));
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
     const hash = hashSchema.parse(c.req.param("hash"));
     const file = await session.openAttachment(hash);
     try {
@@ -504,7 +1400,13 @@ export async function startServer(options: ServerOptions) {
       );
     });
   app.post("/api/v1/streams/:id/share", async (c) => {
-    if (!isOwner(token(c.req.header("authorization"))))
+    if (
+      !isOwner(token(c.req.header("authorization"))) &&
+      !(
+        c.get("accountId") !== undefined &&
+        c.get("accountId") === c.get("session").info.ownerId
+      )
+    )
       throw new ProtocolError(
         "unauthorized",
         "Sharing an import requires owner authorization",
@@ -514,11 +1416,12 @@ export async function startServer(options: ServerOptions) {
       .parse(await boundedJson(c.req.raw));
     const session = c.get("session");
     await session.shareEnded(input.visibility);
+    revalidateTransfers();
     return c.json({ visibility: session.info.visibility });
   });
   app.post("/api/v1/streams/:id/watch-ticket", async (c) => {
     const session = c.get("session");
-    readable(session, token(c.req.header("authorization")));
+    readable(session, token(c.req.header("authorization")), c.get("accountId"));
     for (const [key, ticket] of tickets)
       if (ticket.expires < Date.now()) tickets.delete(key);
     if (tickets.size >= 1024)
@@ -530,6 +1433,12 @@ export async function startServer(options: ServerOptions) {
     tickets.set(ticket, {
       streamId: session.info.id,
       expires: Date.now() + 60_000,
+      ...(c.get("accountId") && !c.req.header("authorization")
+        ? { accountCookie: getCookie(c, "__Host-agentlive-session")! }
+        : {}),
+      ...(token(c.req.header("authorization"))
+        ? { grantToken: token(c.req.header("authorization")) }
+        : {}),
     });
     return c.json({ ticket, expiresInMs: 60_000 });
   });
@@ -542,6 +1451,7 @@ export async function startServer(options: ServerOptions) {
     publishing: boolean,
     secret: string,
     ticketStream: string | undefined,
+    accountCookie?: string,
   ) {
     let socket: WSContext<WebSocketLike> | undefined;
     let session: RecordingSession | undefined;
@@ -551,9 +1461,31 @@ export async function startServer(options: ServerOptions) {
     let queued = 0;
     let ended = false;
     let lastSeen = Date.now();
+    let viewing: ReturnType<ViewingGrants["acquire"]> | undefined;
+    let cancelViewing: (() => void) | undefined;
+    let accountActive: (() => boolean) | undefined;
+    let authorizeView: (() => void) | undefined;
 
     const send = (value: unknown) => {
-      if (ended || !socket || socket.readyState !== 1) return;
+      try {
+        authorizeView?.();
+      } catch {
+        cleanup();
+        socket?.close(1008, "Viewing authorization ended");
+        return;
+      }
+      if (accountActive && !accountActive()) {
+        cleanup();
+        socket?.close(1008, "Account viewing authorization ended");
+        return;
+      }
+      if (
+        ended ||
+        viewing?.signal.aborted ||
+        !socket ||
+        socket.readyState !== 1
+      )
+        return;
       const serialized = JSON.stringify(value);
       if (
         (socket.raw as WebSocket).bufferedAmount +
@@ -568,6 +1500,12 @@ export async function startServer(options: ServerOptions) {
     };
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     const releaseSession = () => {
+      authorizeView = undefined;
+      if (cancelViewing)
+        viewing?.signal.removeEventListener("abort", cancelViewing);
+      cancelViewing = undefined;
+      viewing?.close();
+      viewing = undefined;
       if (session) store.release(session);
       session = undefined;
       lease = undefined;
@@ -684,7 +1622,46 @@ export async function startServer(options: ServerOptions) {
                 unsubscribe = undefined;
                 releaseSession();
                 const target = (acquired = await store.get(message.streamId));
-                if (ticketStream !== target.info.id) readable(target, secret);
+                const devicePrincipal =
+                  accountSessions?.authenticateDevice(secret);
+                if (devicePrincipal) accountActive = devicePrincipal.isActive;
+                if (accountCookie) {
+                  const principal =
+                    await accountSessions?.authenticate(accountCookie);
+                  if (!principal || ticketStream !== target.info.id)
+                    throw new ProtocolError(
+                      "unauthorized",
+                      "Account viewing authorization expired",
+                    );
+                  readable(target, secret, principal.account.id);
+                  authorizeView = () =>
+                    readable(target, secret, principal.account.id);
+                  accountActive = principal.isActive;
+                } else {
+                  if (ticketStream && ticketStream !== target.info.id)
+                    throw new ProtocolError(
+                      "unauthorized",
+                      "Viewing ticket scope differs",
+                    );
+                  readable(target, secret);
+                  authorizeView = () => readable(target, secret);
+                }
+                if (
+                  grants.authorize(secret, target.info.id, target.info.revision)
+                ) {
+                  viewing = grants.acquire(
+                    secret,
+                    target.info.id,
+                    target.info.revision,
+                  );
+                  cancelViewing = () => {
+                    cleanup();
+                    ws.close(1008, "Viewing authorization ended");
+                  };
+                  viewing.signal.addEventListener("abort", cancelViewing, {
+                    once: true,
+                  });
+                }
                 if (message.revision !== target.info.revision)
                   throw new ProtocolError(
                     "revision_changed",
@@ -784,6 +1761,8 @@ export async function startServer(options: ServerOptions) {
       },
       upgradeWebSocket((c) => {
         let ticketStream: string | undefined;
+        let ticketSecret: string | undefined;
+        let accountCookie: string | undefined;
         const value = c.req.query("ticket");
         if (value) {
           const ticket = tickets.get(value);
@@ -791,11 +1770,14 @@ export async function startServer(options: ServerOptions) {
           if (!ticket || ticket.expires < Date.now())
             throw new ProtocolError("unauthorized", "Viewing ticket expired");
           ticketStream = ticket.streamId;
+          ticketSecret = ticket.grantToken;
+          accountCookie = ticket.accountCookie;
         }
         return connection(
           publishing,
-          token(c.req.header("authorization")),
+          ticketSecret ?? token(c.req.header("authorization")),
           ticketStream,
+          accountCookie,
         );
       }),
     );
@@ -819,6 +1801,8 @@ export async function startServer(options: ServerOptions) {
     });
   } catch (error) {
     wss.close();
+    await closeHosted();
+    await grants.close();
     await store.close();
     throw error;
   }
@@ -832,6 +1816,8 @@ export async function startServer(options: ServerOptions) {
   function close() {
     if (closePromise) return closePromise;
     closing = true;
+    const backupsClosed = backups.close();
+    const grantsClosed = grants.close();
     cleanupPromise = (async () => {
       for (const client of wss.clients) client.terminate();
       const stopped = new Promise<void>((resolve, reject) =>
@@ -845,11 +1831,19 @@ export async function startServer(options: ServerOptions) {
         errors.push(error);
       }
       while (requests.size) await Promise.all([...requests]);
+      transfers.close();
       // An upgrade accepted before admission stopped may have completed during HTTP draining.
       for (const client of wss.clients) client.terminate();
       while (connections.size)
         await Promise.allSettled([...connections].map((drain) => drain()));
       errors.push(...connectionErrors);
+      await backupsClosed;
+      await grantsClosed;
+      try {
+        await closeHosted();
+      } catch (error) {
+        errors.push(error);
+      }
       try {
         await store.close();
       } catch (error) {
@@ -882,6 +1876,10 @@ export async function startServer(options: ServerOptions) {
   return {
     url,
     store,
+    /** Diagnostic count of registered revocable transfers (0 when idle). */
+    get activeTransfers() {
+      return transfers.size;
+    },
     close,
     /** Starts shutdown if necessary; waits without a deadline for actual cleanup. */
     whenClosed() {

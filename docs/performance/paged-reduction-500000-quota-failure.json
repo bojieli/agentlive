@@ -1,0 +1,36 @@
+{
+  "workload": "paged reducer; one message per 64 events, 48-byte text deltas, 8-hour simulated timeline",
+  "runtime": "v26.8.1",
+  "platform": "darwin",
+  "requestedEvents": 500000,
+  "batchSize": 256,
+  "latencyUnit": "batch",
+  "completed": 449792,
+  "elapsedMs": 4455102.823833001,
+  "eventsPerSecond": 100.96108165984283,
+  "reductionP50Ms": 1551.892479,
+  "reductionP95Ms": 2629.828607,
+  "peakHeap": 42225496,
+  "peakRss": 144654336,
+  "storedBytes": 536868963,
+  "blobFiles": 334593,
+  "operations": {
+    "put": {
+      "calls": 174329,
+      "ms": 4318445.8536630375
+    },
+    "append": {
+      "calls": 7032,
+      "ms": 12751.815778011758
+    },
+    "read": {
+      "calls": 368130,
+      "ms": 97511.3419531077
+    }
+  },
+  "failure": {
+    "name": "ProtocolError",
+    "message": "Attachment capacity exceeded",
+    "code": "retry_later"
+  }
+}

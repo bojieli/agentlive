@@ -17,6 +17,8 @@ export interface BrowserView {
   serverSeq: number;
   timelineMs: number;
   speed: number;
+  idleCapMs?: number;
+  gapAnchorMs?: number;
   mode: "follow" | "paused" | "playing";
 }
 interface SavedView extends BrowserView {
@@ -28,8 +30,21 @@ function view(value: unknown): SavedView | undefined {
   if (
     !saved ||
     typeof saved !== "object" ||
-    Object.keys(saved).sort().join(",") !==
-      "hash,mode,serverSeq,speed,through,timelineMs" ||
+    ![
+      "hash,mode,serverSeq,speed,through,timelineMs",
+      "hash,idleCapMs,mode,serverSeq,speed,through,timelineMs",
+      "gapAnchorMs,hash,mode,serverSeq,speed,through,timelineMs",
+      "gapAnchorMs,hash,idleCapMs,mode,serverSeq,speed,through,timelineMs",
+    ].includes(Object.keys(saved).sort().join(",")) ||
+    ("idleCapMs" in saved &&
+      (typeof saved.idleCapMs !== "number" ||
+        !Number.isFinite(saved.idleCapMs) ||
+        saved.idleCapMs < 0)) ||
+    ("gapAnchorMs" in saved &&
+      (typeof saved.gapAnchorMs !== "number" ||
+        !Number.isFinite(saved.gapAnchorMs) ||
+        saved.gapAnchorMs < 0 ||
+        saved.gapAnchorMs > saved.timelineMs)) ||
     !Number.isSafeInteger(saved.serverSeq) ||
     saved.serverSeq < 0 ||
     !Number.isSafeInteger(saved.through) ||
@@ -358,6 +373,12 @@ export class BrowserHistoryCache {
             serverSeq: saved.serverSeq,
             timelineMs: saved.timelineMs,
             speed: saved.speed,
+            ...(saved.idleCapMs === undefined
+              ? {}
+              : { idleCapMs: saved.idleCapMs }),
+            ...(saved.gapAnchorMs === undefined
+              ? {}
+              : { gapAnchorMs: saved.gapAnchorMs }),
             mode: saved.mode,
           }
         : undefined;

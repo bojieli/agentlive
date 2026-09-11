@@ -1,0 +1,21 @@
+{
+  "success": true,
+  "checks": [
+    "account CLI exports/imports portable archive privately with identical replay and account ownership",
+    "account CLI imports native Claude history and publishes appended native records into account-owned recordings",
+    "browser lists approved CLI credential and revokes its private recording access",
+    "actual CLI login, browser approval, private account listing/replay and logout with credential deletion",
+    "cookie-only account listing and private recording join",
+    "cookie-authenticated grant issuance with CSRF transport",
+    "cookie-authenticated grant revocation",
+    "browser owner changes private/public visibility and restores anonymous denial",
+    "browser confirmed owner removal ends service access",
+    "sign-out clears open recording/list and private server access",
+    "signed-out state survives reload",
+    "signed-out public discovery excludes private recordings and opens public playback",
+    "signed-out browser submits public-recording report and receives durable receipt",
+    "browser operator reviews a report and explicitly confirms recording removal",
+    "operator refresh adopts a saved pending removal and requires explicit confirmation before retry",
+    "operator sees restored report revision and submits a fresh review against it"
+  ]
+}

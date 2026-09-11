@@ -1,3 +1,8 @@
+import {
+  fileFamilyImportVersions,
+  prepareFileFamilyResume,
+  assertCodexResumeFormat,
+} from "./resume-file-family.js";
 import { inspectOpenCodeHistory } from "./opencode-history.js";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,6 +18,7 @@ const digest = (value: unknown) =>
 export interface PublishIdentity {
   version: number;
   converterVersion: string;
+  familyRoot?: string;
   recordFormat: string;
   baseDirectory: string;
   roots: string[];
@@ -26,6 +32,7 @@ export async function resumeImportedRecording(options: {
   sourcePath: string;
   identity: PublishIdentity;
   requested: boolean;
+  validateOpenCodeFamily?: (sources: unknown) => Promise<void>;
   signal: AbortSignal;
 }) {
   const { journal, identity, signal } = options;
@@ -64,9 +71,16 @@ export async function resumeImportedRecording(options: {
     throw new Error(
       "This binding is a historical import; use --resume-import with the original import options to continue it live",
     );
+  const fileFamilyVersion = fileFamilyImportVersions[identity.converterVersion];
+  const isFileFamily =
+    fileFamilyVersion !== undefined &&
+    (journal.identity.nativeAgent === "kimi" ||
+      journal.identity.nativeAgent === "claude" ||
+      journal.identity.nativeAgent === "codex");
   if (
     imported.version !== 1 ||
-    imported.converterVersion !== identity.converterVersion ||
+    imported.converterVersion !==
+      (isFileFamily ? fileFamilyVersion : identity.converterVersion) ||
     imported.nativeSessionId !== journal.identity.nativeSessionId ||
     imported.artifactBaseDirectory !== identity.baseDirectory ||
     canonicalJson(imported.artifactRoots) !== canonicalJson(identity.roots) ||
@@ -99,7 +113,37 @@ export async function resumeImportedRecording(options: {
     }))
       void _;
   }
-  if (journal.identity.nativeAgent === "codex") {
+  if (isFileFamily) {
+    await prepareFileFamilyResume({
+      agent: journal.identity.nativeAgent as "kimi" | "claude" | "codex",
+      ...(identity.familyRoot ? { familyRoot: identity.familyRoot } : {}),
+      recordFormat: identity.recordFormat,
+      nativeSessionId: journal.identity.nativeSessionId,
+      sourcePath: options.sourcePath,
+      directory: journal.directory,
+      sources: imported.familySources,
+      signal,
+    });
+  } else if (
+    journal.identity.nativeAgent === "opencode" &&
+    identity.converterVersion === "opencode-snapshot-4-family-import-1"
+  ) {
+    if (!options.validateOpenCodeFamily)
+      throw new Error("OpenCode family continuation requires native preflight");
+    await options.validateOpenCodeFamily(imported.familySources);
+  } else if (imported.familySources !== undefined) {
+    throw new Error(
+      "Family import continuation requires the same supported family scope",
+    );
+  }
+  if (journal.identity.nativeAgent === "codex" && isFileFamily) {
+    await assertCodexResumeFormat(
+      options.sourcePath,
+      cursor,
+      identity.recordFormat,
+      signal,
+    );
+  } else if (journal.identity.nativeAgent === "codex") {
     let structured = false;
     for await (const record of readJsonlSource(options.sourcePath, {
       through: cursor.offset,

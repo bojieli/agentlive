@@ -1,0 +1,20 @@
+{
+  "success": true,
+  "node": "v26.8.1",
+  "platform": "darwin",
+  "arch": "arm64",
+  "iterations": 1000000,
+  "withMarks": true,
+  "completed": 1000000,
+  "phase": "complete",
+  "memory": {
+    "rss": 202588160,
+    "heapTotal": 108265472,
+    "heapUsed": 62968048,
+    "external": 2602036,
+    "arrayBuffers": 143737
+  },
+  "exitCode": 0,
+  "signal": null,
+  "elapsedMs": 133546.452083
+}

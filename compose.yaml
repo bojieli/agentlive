@@ -1,0 +1,20 @@
+services:
+  agentlive:
+    build:
+      context: .
+    image: agentlive:local
+    ports:
+      - "127.0.0.1:7331:7331"
+    volumes:
+      - agentlive-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 45s
+volumes:
+  agentlive-data:

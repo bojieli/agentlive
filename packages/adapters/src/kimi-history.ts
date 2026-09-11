@@ -1,3 +1,7 @@
+import {
+  nativeMediaEvents,
+  type NativeMediaResolvers,
+} from "./native-media.js";
 import { createHash } from "node:crypto";
 import { basename, dirname, resolve } from "node:path";
 import { z } from "zod";
@@ -67,6 +71,7 @@ export async function captureKimiHistory(
   secrets: readonly string[] = [],
   signal?: AbortSignal,
   resolveArtifact?: FileArtifactResolver,
+  options: { childLog?: boolean; mediaResolvers?: NativeMediaResolvers } = {},
 ) {
   const validate = async () => {
     for await (const _ of readJsonlSource(path, {
@@ -82,6 +87,7 @@ export async function captureKimiHistory(
     sink,
     secrets,
     resolveArtifact,
+    options,
   );
   for await (const record of readJsonlSource(path, {
     through: manifest.boundary.offset,
@@ -97,6 +103,7 @@ export async function createKimiHistoryConsumer(
   sink: KimiCaptureSink,
   secrets: readonly string[] = [],
   resolveArtifact?: FileArtifactResolver,
+  options: { childLog?: boolean; mediaResolvers?: NativeMediaResolvers } = {},
 ) {
   if (
     sink.identity.nativeAgent !== "kimi" ||
@@ -212,17 +219,65 @@ export async function createKimiHistoryConsumer(
     );
     report.messages++;
   };
+  const media = async (
+    key: string,
+    role: "user" | "assistant" | "system",
+    part: Record<string, unknown>,
+    timestamp: string,
+  ) => {
+    const kind = (
+      { image_url: "image", audio_url: "audio", video_url: "video" } as const
+    )[String(part.type) as "image_url" | "audio_url" | "video_url"];
+    if (!kind) return false;
+    const payload = part[String(part.type)];
+    if (
+      !payload ||
+      typeof payload !== "object" ||
+      typeof (payload as { url?: unknown }).url !== "string"
+    ) {
+      await gap(key, `media/${String(part.type)}/invalid-url`, timestamp);
+      return true;
+    }
+    const messageId = hash(`${agentId}/${key}`);
+    const content = await nativeMediaEvents({
+      url: (payload as { url: string }).url,
+      mediaKind: kind,
+      artifactId: messageId,
+      messageId,
+      sourceKey: `kimi-media/${agentId}/${key}`,
+      nativeAgent: "kimi",
+      ...(options.mediaResolvers ? { resolvers: options.mediaResolvers } : {}),
+    });
+    await emit(
+      key,
+      [
+        { kind: "message.started", payload: { messageId, role, agentId } },
+        ...content,
+        { kind: "message.completed", payload: { messageId } },
+      ],
+      timestamp,
+    );
+    report.messages++;
+    if (content.some((event) => event.kind === "attachment.available"))
+      report.availableAttachments++;
+    else report.unavailableAttachments++;
+    return true;
+  };
   await emit(
     "session",
     [
-      {
-        kind: "session.started",
-        payload: {
-          agent: "kimi",
-          nativeSessionId: manifest.nativeSessionId,
-          title: "Kimi Code session",
-        },
-      },
+      ...(!options.childLog
+        ? [
+            {
+              kind: "session.started",
+              payload: {
+                agent: "kimi",
+                nativeSessionId: manifest.nativeSessionId,
+                title: "Kimi Code session",
+              },
+            } as EventContent,
+          ]
+        : []),
       {
         kind: "agent.updated",
         payload: {
@@ -269,7 +324,7 @@ export async function createKimiHistoryConsumer(
             timestamp,
           );
         else if (part.type === "think") report.omittedReasoning++;
-        else
+        else if (!(await media(`${key}/${index}`, role, part, timestamp)))
           await gap(
             `${key}/${index}`,
             `message/${String(part.type)}`,
@@ -289,7 +344,8 @@ export async function createKimiHistoryConsumer(
             timestamp,
           );
         else if (part.type === "think") report.omittedReasoning++;
-        else await gap(eventKey, `content/${String(part.type)}`, timestamp);
+        else if (!(await media(eventKey, "assistant", part, timestamp)))
+          await gap(eventKey, `content/${String(part.type)}`, timestamp);
       } else if (event.type === "tool.call") {
         const toolId = hash(`${agentId}/${z.string().parse(event.toolCallId)}`);
         if (tools.has(toolId))

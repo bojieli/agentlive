@@ -1,6 +1,9 @@
 import {
   canonicalJson,
   contentSchema,
+  reduceCompletenessNotice,
+  reducedCompletenessNoticeSchema,
+  type ReducedCompletenessNotice,
   attachmentSchema,
   storedEventSchema,
   idSchema,
@@ -85,6 +88,8 @@ export interface PagedRecordingState {
   title: string;
   lifecycle: "open" | "ended";
   maps: Record<Name, OrderedMapRoot | null>;
+  /** Optional so roots without a notice keep their original canonical bytes. */
+  completeness?: ReducedCompletenessNotice;
 }
 function bad(): never {
   throw new ProtocolError("corrupt_storage", "Invalid paged reducer state");
@@ -122,14 +127,19 @@ function copy(state: PagedRecordingState): PagedRecordingState {
     !["open", "ended"].includes(state.lifecycle)
   )
     bad();
-  fields(state as unknown as Record<string, unknown>, [
-    "version",
-    "appliedSeq",
-    "timelineMs",
-    "title",
-    "lifecycle",
-    "maps",
-  ]);
+  fields(
+    state as unknown as Record<string, unknown>,
+    ["version", "appliedSeq", "timelineMs", "title", "lifecycle", "maps"],
+    ["completeness"],
+  );
+  let completeness: ReducedCompletenessNotice | undefined;
+  if (state.completeness !== undefined) {
+    const parsed = reducedCompletenessNoticeSchema.safeParse(
+      state.completeness,
+    );
+    if (!parsed.success || parsed.data.at > state.appliedSeq) bad();
+    completeness = parsed.data;
+  }
   if (
     !state.maps ||
     Object.keys(state.maps).sort().join(",") !== [...names].sort().join(",")
@@ -149,6 +159,7 @@ function copy(state: PagedRecordingState): PagedRecordingState {
     title: state.title,
     lifecycle: state.lifecycle,
     maps,
+    ...(completeness ? { completeness } : {}),
   };
 }
 export function initialPagedState(): PagedRecordingState {
@@ -479,6 +490,91 @@ export class PagedReducer {
       );
     return result;
   }
+  /** Reduce a bounded checkpoint batch without persisting unobserved intermediate text roots.
+   * Every original event is validated; only adjacent appends of the same field/object coalesce.
+   * The optional observer receives each completed group, not fabricated stored events.
+   */
+  async applyBatch(
+    input: PagedRecordingState,
+    raw: readonly StoredEvent[],
+    signal?: AbortSignal,
+    reduced?: (
+      state: PagedRecordingState,
+      events: readonly StoredEvent[],
+    ) => Promise<void>,
+  ): Promise<PagedRecordingState> {
+    if (raw.length > 256)
+      throw new RangeError("Paged batch exceeds event limit");
+    const encoded = canonicalJson(raw);
+    if (new TextEncoder().encode(encoded).length > 1048576)
+      throw new RangeError("Paged batch exceeds byte limit");
+    const events = (JSON.parse(encoded) as unknown[]).map((event) =>
+      storedEventSchema.parse(event),
+    );
+    let state = copy(input),
+      sequence = state.appliedSeq,
+      time = state.timelineMs;
+    for (const event of events) {
+      signal?.throwIfAborted();
+      if (event.serverSeq !== ++sequence)
+        throw new ProtocolError(
+          "sequence_gap",
+          "Paged batch is not contiguous",
+        );
+      if (event.timelineMs < time)
+        throw new ProtocolError(
+          "event_conflict",
+          "Batch timeline moved backward",
+        );
+      time = event.timelineMs;
+    }
+    const target = (event: StoredEvent) => {
+      const c = event.content;
+      return c.kind === "message.text.append"
+        ? [c.kind, c.payload.messageId].join("/")
+        : c.kind === "tool.arguments.append" || c.kind === "tool.output.append"
+          ? [c.kind, c.payload.toolId].join("/")
+          : undefined;
+    };
+    for (let offset = 0; offset < events.length;) {
+      const first = events[offset]!,
+        key = target(first);
+      let end = offset + 1;
+      if (key !== undefined)
+        while (end < events.length && target(events[end]!) === key) end++;
+      const group = events.slice(offset, end);
+      if (group.length === 1) state = await this.apply(state, first, signal);
+      else {
+        const last = group[group.length - 1]!;
+        const content = last.content;
+        if (
+          content.kind !== "message.text.append" &&
+          content.kind !== "tool.arguments.append" &&
+          content.kind !== "tool.output.append"
+        )
+          throw new Error("Invalid append group");
+        const text = group
+          .map((event) => (event.content.payload as { text: string }).text)
+          .join("");
+        // The checked group is one derivative transition. No intermediate cursor is published.
+        state = await this.apply(
+          { ...state, appliedSeq: last.serverSeq - 1 },
+          {
+            ...last,
+            content: contentSchema.parse({
+              ...content,
+              payload: { ...content.payload, text },
+            }),
+          },
+          signal,
+        );
+      }
+      await reduced?.(copy(state), group);
+      signal?.throwIfAborted();
+      offset = end;
+    }
+    return state;
+  }
   async apply(
     input: PagedRecordingState,
     raw: StoredEvent,
@@ -553,6 +649,7 @@ export class PagedReducer {
         break;
       case "recording.reopened":
         state.lifecycle = "open";
+        delete state.completeness;
         break;
       case "agent.updated":
         await put("agents", content.payload.agentId, content.payload);
@@ -855,6 +952,12 @@ export class PagedReducer {
           ...content.payload,
         });
         break;
+      case "capture.completeness":
+        state.completeness = reduceCompletenessNotice(
+          state.completeness,
+          event,
+        )!;
+        break;
       case "session.ended":
       case "turn.started":
       case "turn.ended":
@@ -872,6 +975,91 @@ export class PagedReducer {
       appliedSeq: event.serverSeq,
       timelineMs: event.timelineMs,
     };
+  }
+  /** Trace schema-defined content dependencies from a bound checkpoint.
+   * Text and attachment bodies are opaque: attachment hashes are not content-store refs.
+   * Callbacks are provisional until success. Caller owns pins and codec-page tracing.
+   */
+  async trace(
+    reference: ContentReference,
+    binding: SnapshotBinding,
+    visit: (reference: ContentReference) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    reference = ref(reference);
+    const state = await this.open(reference, binding, signal);
+    const emit = async (reference: ContentReference) => {
+      signal?.throwIfAborted();
+      await visit({ ...reference });
+      signal?.throwIfAborted();
+    };
+    await emit(reference);
+    for (const name of names) {
+      await this.map.trace(
+        state.maps[name],
+        async (entry) => {
+          if (entry.kind !== "value") {
+            await emit(entry.ref);
+            return;
+          }
+          const [key, item] = await this.readItem(
+            name,
+            entry.key,
+            entry.ref,
+            state.appliedSeq,
+            signal,
+          );
+          await emit(entry.ref);
+          if (name === "messages") await emit((item as Items["messages"]).text);
+          else if (name === "tools") {
+            const tool = item as Items["tools"];
+            await emit(tool.input);
+            await emit(tool.output);
+          } else if (name === "changes")
+            await emit((item as Items["changes"]).patch);
+          else if (name === "artifacts") {
+            await this.map.trace(
+              (item as Items["artifacts"]).versions,
+              async (version) => {
+                if (version.kind === "value")
+                  await this.readAttachment(
+                    String(key),
+                    version.key,
+                    version.ref,
+                    signal,
+                  );
+                await emit(version.ref);
+              },
+              signal,
+            );
+          } else if (name === "replacements") {
+            const replacement = item as Items["replacements"];
+            await emit(replacement.text);
+            let chunks = 0,
+              units = 0;
+            await this.map.trace(
+              replacement.chunks,
+              async (chunk) => {
+                if (chunk.kind === "value") {
+                  if (chunk.key !== chunks++) bad();
+                  units += chunk.ref.units;
+                  if (
+                    !Number.isSafeInteger(units) ||
+                    units > replacement.length
+                  )
+                    bad();
+                }
+                await emit(chunk.ref);
+              },
+              signal,
+            );
+            if (units !== replacement.length) bad();
+          }
+        },
+        signal,
+      );
+    }
+    signal?.throwIfAborted();
   }
   async checkpoint(
     state: PagedRecordingState,
@@ -967,6 +1155,7 @@ export class PagedReducer {
       timelineMs: state.timelineMs,
       title: state.title,
       lifecycle: state.lifecycle,
+      ...(state.completeness ? { completeness: state.completeness } : {}),
     });
     for (const name of names)
       for (let offset = 0; offset < (state.maps[name]?.size ?? 0); offset += 32)

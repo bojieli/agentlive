@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -139,6 +139,112 @@ it("cancels between index writes without returning a mixed root and permits a de
     expect(await map.get(retry, "key")).toEqual(two);
     expect(await entries(map, retry)).toEqual([["key", two]]);
   } finally {
+    await store.close();
+  }
+});
+
+it("traces both indexes, validates their pairing and leaves application values opaque", async () => {
+  const { store } = await setup();
+  try {
+    const map = new OrderedContentMap(store);
+    const value = await store.put("opaque value");
+    let root: OrderedMapRoot | null = null;
+    for (const key of ["z", 1, "1", "a"])
+      root = await map.set(root, key, value);
+    const old = root!;
+    root = await map.delete(root, 1);
+    const reads: string[] = [];
+    const reader = new OrderedContentMap({
+      put: () => {
+        throw new Error("Tracing must not write");
+      },
+      read: (ref, offset, length, signal) => {
+        reads.push(ref.hash);
+        return store.read(ref, offset, length, signal);
+      },
+    });
+    const keys: OrderedMapKey[] = [],
+      nodes = new Set<string>(),
+      entries = new Set<string>();
+    await reader.trace(root, async (item) => {
+      if (item.kind === "value") keys.push(item.key);
+      else (item.kind === "node" ? nodes : entries).add(item.ref.hash);
+      item.ref.hash = "0".repeat(64);
+    });
+    expect(keys).toEqual(["z", "1", "a"]);
+    expect(nodes.size).toBe(2);
+    expect(entries.size).toBe(3);
+    expect(reads).not.toContain(value.hash);
+    const original: OrderedMapKey[] = [];
+    await reader.trace(old, async (item) => {
+      if (item.kind === "value") original.push(item.key);
+    });
+    expect(original).toEqual(["z", 1, "1", "a"]);
+    // Same-sized indexes from different maps must not be accepted as a retained map.
+    const replacement = await map.set(
+      root,
+      "a",
+      await store.put("replacement"),
+    );
+    await expect(
+      reader.trace({ ...root!, byKey: replacement.byKey }, async () => {}),
+    ).rejects.toMatchObject({ code: "corrupt_storage" });
+    const abort = new AbortController();
+    let calls = 0;
+    await expect(
+      reader.trace(
+        root,
+        async () => {
+          calls++;
+          abort.abort(new Error("cancelled trace"));
+        },
+        abort.signal,
+      ),
+    ).rejects.toThrow("cancelled trace");
+    expect(calls).toBe(1);
+    await expect(
+      reader.trace(root, async () => {
+        throw new Error("mark failed");
+      }),
+    ).rejects.toThrow("mark failed");
+    await reader.trace(null, async () => {
+      throw new Error("unexpected");
+    });
+  } finally {
+    await store.close();
+  }
+});
+
+it("bounds stalled native digest waits and lets cancellation reject without waiting for crypto", async () => {
+  const { store } = await setup();
+  const map = new OrderedContentMap(store);
+  const value = await store.put("value");
+  const root = {
+    version: 1 as const,
+    size: 0,
+    nextOrdinal: 0,
+    byKey: null,
+    byOrder: null,
+  };
+  const spy = vi
+    .spyOn(crypto.subtle, "digest")
+    .mockImplementation(() => new Promise(() => {}));
+  try {
+    const stop = new AbortController();
+    const pending = map.set(root, "key", value, stop.signal);
+    const rejected = expect(pending).rejects.toThrow("cancelled digest");
+    await Promise.resolve();
+    stop.abort(new Error("cancelled digest"));
+    await rejected;
+    vi.useFakeTimers();
+    const timed = expect(map.set(root, "key", value)).rejects.toMatchObject({
+      code: "retry_later",
+    });
+    await vi.advanceTimersByTimeAsync(30000);
+    await timed;
+  } finally {
+    vi.useRealTimers();
+    spy.mockRestore();
     await store.close();
   }
 });

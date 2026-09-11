@@ -1,4 +1,5 @@
 import { RecordingSnapshots } from "./snapshots.js";
+import type { WriteBarrier } from "./write-barrier.js";
 import type { ContentReference } from "@agentlive/playback";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,6 +14,9 @@ import {
 } from "@agentlive/storage";
 import {
   canonicalJson,
+  migrationOriginSchema,
+  archiveOriginSchema,
+  type MigrationOrigin,
   idSchema,
   cursorSchema,
   storedEventSchema,
@@ -30,10 +34,33 @@ export const sessionMetadataSchema = z.strictObject({
   ownerId: idSchema,
   title: z.string().max(500),
   visibility: z.enum(["public", "unlisted", "private"]),
+  migrationOrigin: migrationOriginSchema.optional(),
+  archiveOrigin: archiveOriginSchema.optional(),
+  removed: z
+    .strictObject({
+      operationId: idSchema,
+      removedAt: z.number().int().nonnegative().safe(),
+    })
+    .optional(),
+  visibilityChange: z
+    .strictObject({
+      version: cursorSchema,
+      operationId: idSchema,
+      digest: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .optional(),
   createdAt: z.iso.datetime(),
   creationRequestId: idSchema,
   creationDigest: z.string().regex(/^[a-f0-9]{64}$/),
   secretHash: z.string().regex(/^[a-f0-9]{64}$/),
+  publisherCredential: z
+    .strictObject({
+      version: cursorSchema,
+      revoked: z.boolean(),
+      operationId: idSchema,
+      digest: z.string().regex(/^[a-f0-9]{64}$/),
+    })
+    .optional(),
   publisherId: idSchema,
   producerEpoch: idSchema,
   leaseGeneration: cursorSchema,
@@ -64,6 +91,8 @@ export class RecordingSession {
   private snapshots: RecordingSnapshots;
   private queue: Promise<unknown> = Promise.resolve();
   private closing = false;
+  private removalUncertain = false;
+  private migrationUncertain = false;
   private state: "open" | "ended" = "open";
   private appliedLifecycle = 0;
   private producerThrough = 0;
@@ -75,6 +104,64 @@ export class RecordingSession {
     { elapsedMs: number; timelineMs: number; lastElapsedMs: number }
   >();
   private readonly subscribers = new Set<Subscriber>();
+  private readonly readers = new Set<AbortController>();
+  /** Lifetime of any HTTP response, independent of its authorization kind. */
+  acquireRead(parent?: AbortSignal) {
+    this.assertAvailable();
+    if (this.closing)
+      throw new ProtocolError("stream_gone", "Session is closing");
+    if (this.readers.size >= 4096)
+      throw new ProtocolError("retry_later", "Too many recording reads");
+    const stop = new AbortController();
+    const close = () => {
+      this.readers.delete(stop);
+      parent?.removeEventListener("abort", cancel);
+    };
+    const cancel = () => {
+      stop.abort(parent?.reason);
+      close();
+    };
+    this.readers.add(stop);
+    parent?.addEventListener("abort", cancel, { once: true });
+    if (parent?.aborted) cancel();
+    return { signal: stop.signal, close };
+  }
+  private cancelReads() {
+    for (const reader of this.readers)
+      reader.abort(
+        new ProtocolError("stream_gone", "Recording is unavailable"),
+      );
+    this.readers.clear();
+  }
+  private readonly publicReaders = new Set<AbortController>();
+  acquirePublicRead(parent?: AbortSignal) {
+    this.assertAvailable();
+    if (this.closing)
+      throw new ProtocolError("stream_gone", "Session is closing");
+    if (this.metadata.visibility === "private") return undefined;
+    if (this.publicReaders.size >= 4096)
+      throw new ProtocolError("retry_later", "Too many public reads");
+    const stop = new AbortController();
+    const close = () => {
+      this.publicReaders.delete(stop);
+      parent?.removeEventListener("abort", cancel);
+    };
+    const cancel = () => {
+      stop.abort(parent?.reason);
+      close();
+    };
+    this.publicReaders.add(stop);
+    parent?.addEventListener("abort", cancel, { once: true });
+    if (parent?.aborted) cancel();
+    return { signal: stop.signal, close };
+  }
+  private cancelPublicReads() {
+    for (const reader of this.publicReaders)
+      reader.abort(
+        new ProtocolError("forbidden", "Public viewing authorization ended"),
+      );
+    this.publicReaders.clear();
+  }
   private readonly attachmentVersions = new Map<
     string,
     Map<number, BlobDescriptor>
@@ -89,13 +176,17 @@ export class RecordingSession {
     private metadata: SessionMetadata,
     private readonly log: JsonlLog<StoredEvent>,
     private readonly blobs: BlobStore,
+    private readonly barrier?: WriteBarrier,
   ) {
     this.snapshots = new RecordingSnapshots(join(directory, "snapshots"), {
       streamId: metadata.id,
       revision: metadata.revision,
     });
   }
-  static async open(directory: string): Promise<RecordingSession> {
+  static async open(
+    directory: string,
+    barrier?: WriteBarrier,
+  ): Promise<RecordingSession> {
     const metadata = sessionMetadataSchema.parse(
       JSON.parse(await readFile(join(directory, "metadata.json"), "utf8")),
     );
@@ -109,7 +200,13 @@ export class RecordingSession {
       await log.close();
       throw error;
     }
-    const session = new RecordingSession(directory, metadata, log, blobs);
+    const session = new RecordingSession(
+      directory,
+      metadata,
+      log,
+      blobs,
+      barrier,
+    );
     try {
       const verified = new Map<string, number>();
       for await (const record of log.read()) {
@@ -147,7 +244,12 @@ export class RecordingSession {
   }
   get info(): Omit<
     SessionMetadata,
-    "secretHash" | "creationDigest" | "creationRequestId"
+    | "secretHash"
+    | "creationDigest"
+    | "creationRequestId"
+    | "publisherCredential"
+    | "visibilityChange"
+    | "removed"
   > & {
     lifecycle: "open" | "ended";
     serverSeq: number;
@@ -158,10 +260,19 @@ export class RecordingSession {
       secretHash: _,
       creationDigest: __,
       creationRequestId: ___,
+      publisherCredential: ____,
+      visibilityChange: _____,
+      removed: ______,
       ...publicMetadata
     } = this.metadata;
     return {
       ...publicMetadata,
+      ...(publicMetadata.archiveOrigin
+        ? { archiveOrigin: { ...publicMetadata.archiveOrigin } }
+        : {}),
+      ...(publicMetadata.migrationOrigin
+        ? { migrationOrigin: structuredClone(publicMetadata.migrationOrigin) }
+        : {}),
       lifecycle: this.state,
       serverSeq: this.log.boundary.sequence,
       timelineMs: this.timeline,
@@ -179,20 +290,46 @@ export class RecordingSession {
       signal,
     );
   }
-  selectSnapshot(through: number, signal?: AbortSignal) {
+  selectSnapshot(through: number, signal?: AbortSignal, timelineMs?: number) {
     this.snapshotBoundary(through);
-    return this.snapshots.select(through, signal);
+    return this.snapshots.select(through, signal, timelineMs);
+  }
+  selectSnapshotLeased(
+    through: number,
+    signal?: AbortSignal,
+    timelineMs?: number,
+  ) {
+    this.snapshotBoundary(through);
+    return this.snapshots.selectLeased(through, signal, timelineMs);
+  }
+  renewSnapshotLease(token: string, signal?: AbortSignal) {
+    this.snapshotBoundary(0);
+    return this.snapshots.renewLease(token, signal);
+  }
+  releaseSnapshotLease(token: string, signal?: AbortSignal) {
+    this.snapshotBoundary(0);
+    return this.snapshots.releaseLease(token, signal);
   }
   readSnapshotContent(
     ref: ContentReference,
     offset: number,
     length: number,
     signal?: AbortSignal,
+    lease?: string,
   ) {
     this.snapshotBoundary(0);
-    return this.snapshots.read(ref, offset, length, signal);
+    return this.snapshots.read(ref, offset, length, signal, lease);
+  }
+  readSnapshotBlob(
+    ref: ContentReference,
+    signal?: AbortSignal,
+    lease?: string,
+  ) {
+    this.snapshotBoundary(0);
+    return this.snapshots.readBlob(ref, signal, lease);
   }
   private snapshotBoundary(through: number) {
+    this.assertAvailable();
     if (this.closing)
       throw new ProtocolError("stream_gone", "Session is closing");
     if (
@@ -209,22 +346,118 @@ export class RecordingSession {
     return this.subscribers.size;
   }
   authorize(secret: string): void {
+    this.assertAvailable();
     const actual = Buffer.from(sha256(secret), "hex");
     const expected = Buffer.from(this.metadata.secretHash, "hex");
-    if (!timingSafeEqual(actual, expected))
+    if (
+      this.metadata.publisherCredential?.revoked ||
+      !timingSafeEqual(actual, expected)
+    )
       throw new ProtocolError(
         "unauthorized",
         "Invalid stream publishing credential",
       );
+  }
+  get publisherCredentialState() {
+    return {
+      streamId: this.metadata.id,
+      revision: this.metadata.revision,
+      publisherId: this.metadata.publisherId,
+      producerEpoch: this.metadata.producerEpoch,
+      version: this.metadata.publisherCredential?.version ?? 0,
+      revoked: this.metadata.publisherCredential?.revoked ?? false,
+    };
+  }
+  /** Owner authorization is enforced by the API. CAS prevents stale retries from restoring access. */
+  changePublisherCredential(input: {
+    operationId: string;
+    revision: string;
+    expectedVersion: number;
+    replacementSecret: string | null;
+  }) {
+    const parsed = z
+      .strictObject({
+        operationId: idSchema,
+        revision: idSchema,
+        expectedVersion: cursorSchema,
+        replacementSecret: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .nullable(),
+      })
+      .parse(input);
+    return this.mutate(async () => {
+      if (parsed.revision !== this.metadata.revision)
+        throw new ProtocolError(
+          "revision_changed",
+          "Recording revision changed",
+        );
+      const digest = sha256(canonicalJson(parsed));
+      const previous = this.metadata.publisherCredential;
+      if (previous?.operationId === parsed.operationId) {
+        if (previous.digest !== digest)
+          throw new ProtocolError(
+            "event_conflict",
+            "Credential operation changed",
+          );
+        return this.publisherCredentialState;
+      }
+      if (parsed.expectedVersion !== (previous?.version ?? 0))
+        throw new ProtocolError(
+          "precondition_failed",
+          "Publisher credential version changed",
+        );
+      const version = parsed.expectedVersion + 1;
+      const generation = this.metadata.leaseGeneration + 1;
+      if (!Number.isSafeInteger(version) || !Number.isSafeInteger(generation))
+        throw new ProtocolError(
+          "storage_failed",
+          "Credential sequence exhausted",
+        );
+      if (
+        parsed.replacementSecret !== null &&
+        sha256(parsed.replacementSecret) === this.metadata.secretHash
+      )
+        throw new ProtocolError(
+          "invalid_request",
+          "Replacement credential must differ",
+        );
+      await this.save({
+        ...this.metadata,
+        secretHash:
+          parsed.replacementSecret === null
+            ? this.metadata.secretHash
+            : sha256(parsed.replacementSecret),
+        leaseGeneration: generation,
+        publisherCredential: {
+          version,
+          revoked: parsed.replacementSecret === null,
+          operationId: parsed.operationId,
+          digest,
+        },
+      });
+      this.lease = null;
+      return this.publisherCredentialState;
+    });
   }
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     if (this.closing)
       return Promise.reject(
         new ProtocolError("stream_gone", "Session is closing"),
       );
-    const run = this.queue.then(operation);
+    const run = this.queue.then(() => {
+      this.assertAvailable();
+      return operation();
+    });
     this.queue = run.catch(() => {});
     return run;
+  }
+  /** Durable mutations wait while an online backup holds the server write barrier. */
+  private guard<T>(operation: () => Promise<T>): Promise<T> {
+    return this.barrier ? this.barrier.shared(operation) : operation();
+  }
+  private mutate<T>(operation: () => Promise<T>): Promise<T> {
+    return this.guard(() => this.serial(operation));
   }
   private async save(metadata: SessionMetadata): Promise<void> {
     await atomicJson(join(this.directory, "metadata.json"), metadata);
@@ -248,7 +481,8 @@ export class RecordingSession {
     },
   ): Promise<{ lease: Lease; ack: PublisherAck }> {
     this.authorize(secret);
-    return this.serial(async () => {
+    return this.mutate(async () => {
+      this.authorize(secret);
       if (input.revision !== this.metadata.revision)
         throw new ProtocolError(
           "revision_changed",
@@ -325,7 +559,7 @@ export class RecordingSession {
     } catch (error) {
       return Promise.reject(error);
     }
-    return this.serial(async () => {
+    return this.mutate(async () => {
       this.checkLease(lease);
       let expected = this.producerThrough + 1;
       let nextServer = this.log.boundary.sequence;
@@ -596,7 +830,7 @@ export class RecordingSession {
       throw new ProtocolError("stream_gone", "Session is closing");
     const staged = await this.blobs.stage(descriptor, source, signal);
     try {
-      return await this.serial(async () => {
+      return await this.mutate(async () => {
         this.authorize(secret);
         return this.blobs.install(staged);
       });
@@ -610,6 +844,7 @@ export class RecordingSession {
   ): Promise<boolean> {
     this.authorize(secret);
     return this.serial(async () => {
+      this.authorize(secret);
       try {
         await this.blobs.verify(descriptor);
         return true;
@@ -639,7 +874,7 @@ export class RecordingSession {
       return Promise.reject(
         new ProtocolError("invalid_request", "Invalid collection cutoff"),
       );
-    return this.serial(() =>
+    return this.mutate(() =>
       this.blobs.collect(this.referencedBlobs, olderThan),
     );
   }
@@ -660,8 +895,15 @@ export class RecordingSession {
     });
   }
   async *history(after: number, through: number): AsyncGenerator<StoredEvent> {
-    for await (const record of this.log.read(after, through))
+    this.assertAvailable();
+    for await (const record of this.log.read(after, through)) {
+      this.assertAvailable();
       yield record.value;
+    }
+  }
+  /** Freeze export metadata at the same serialized boundary as publication. */
+  exportBoundary() {
+    return this.serial(async () => structuredClone(this.info));
   }
   lifecycle(
     secret: string,
@@ -674,7 +916,8 @@ export class RecordingSession {
   ): Promise<StoredEvent> {
     this.authorize(secret);
     idSchema.parse(operationId);
-    return this.serial(async () => {
+    return this.mutate(async () => {
+      this.authorize(secret);
       const digest = sha256(canonicalJson(content));
       const existing = this.operations.get(operationId);
       if (existing) {
@@ -720,9 +963,210 @@ export class RecordingSession {
       return record;
     });
   }
+  get visibilityState() {
+    return {
+      streamId: this.metadata.id,
+      revision: this.metadata.revision,
+      visibility: this.metadata.visibility,
+      version: this.metadata.visibilityChange?.version ?? 0,
+    };
+  }
+  get isRemoved() {
+    return this.metadata.removed !== undefined;
+  }
+  assertAvailable() {
+    if (this.migrationUncertain)
+      throw new ProtocolError(
+        "storage_failed",
+        "Migration persistence is uncertain; reopen the store before continuing",
+      );
+    if (this.removalUncertain)
+      throw new ProtocolError(
+        "storage_failed",
+        "Removal persistence is uncertain; reopen the store before continuing",
+      );
+    if (this.metadata.removed)
+      throw new ProtocolError("stream_gone", "Recording was removed");
+  }
+  /** Persist an irreversible service tombstone before cancelling active access. */
+  remove(operationId: string, revision: string, expectedServerSeq?: number) {
+    idSchema.parse(operationId);
+    idSchema.parse(revision);
+    if (expectedServerSeq !== undefined) cursorSchema.parse(expectedServerSeq);
+    return this.guard(() =>
+      this.removeQueued(operationId, revision, expectedServerSeq),
+    );
+  }
+  private removeQueued(
+    operationId: string,
+    revision: string,
+    expectedServerSeq?: number,
+  ) {
+    if (this.closing)
+      return Promise.reject(
+        new ProtocolError("stream_gone", "Session is closing"),
+      );
+    const run = this.queue.then(async () => {
+      if (revision !== this.metadata.revision)
+        throw new ProtocolError(
+          "revision_changed",
+          "Recording revision changed",
+        );
+      if (!this.metadata.removed) {
+        if (
+          expectedServerSeq !== undefined &&
+          (this.state !== "ended" ||
+            this.log.boundary.sequence !== expectedServerSeq)
+        )
+          throw new ProtocolError(
+            "precondition_failed",
+            "Recording changed after migration export",
+          );
+        if (this.removalUncertain || this.migrationUncertain)
+          this.assertAvailable();
+        try {
+          await this.save({
+            ...this.metadata,
+            removed: { operationId, removedAt: Date.now() },
+          });
+        } catch (error) {
+          // Atomic replacement can succeed before its directory sync fails.
+          // Do not continue serving from the stale in-memory metadata.
+          this.removalUncertain = true;
+          this.lease = null;
+          this.cancelPublicReads();
+          this.cancelReads();
+          for (const subscriber of this.subscribers) {
+            try {
+              subscriber.invalidate("removal_uncertain");
+            } catch {}
+          }
+          this.subscribers.clear();
+          throw error;
+        }
+        this.lease = null;
+        this.cancelPublicReads();
+        this.cancelReads();
+        for (const subscriber of this.subscribers) {
+          try {
+            subscriber.invalidate("recording_removed");
+          } catch {}
+        }
+        this.subscribers.clear();
+      }
+      return {
+        streamId: this.metadata.id,
+        removed: true,
+        removedAt: this.metadata.removed!.removedAt,
+      };
+    });
+    this.queue = run.catch(() => {});
+    return run;
+  }
+  /** Immutable lineage, committed before migration may remove its source. */
+  setMigrationOrigin(revision: string, value: MigrationOrigin) {
+    idSchema.parse(revision);
+    const origin = migrationOriginSchema.parse(value);
+    return this.mutate(async () => {
+      if (revision !== this.metadata.revision)
+        throw new ProtocolError(
+          "revision_changed",
+          "Recording revision changed",
+        );
+      if (this.metadata.migrationOrigin) {
+        if (
+          canonicalJson(origin) !== canonicalJson(this.metadata.migrationOrigin)
+        )
+          throw new ProtocolError(
+            "event_conflict",
+            "Migration lineage is immutable",
+          );
+        return structuredClone(this.metadata.migrationOrigin);
+      }
+      if (
+        (!origin.externalSource &&
+          origin.sourceStreamId === this.metadata.id) ||
+        this.state !== "ended" ||
+        this.metadata.visibility !== "private"
+      )
+        throw new ProtocolError(
+          "precondition_failed",
+          "Migration lineage requires a private ended replacement",
+        );
+      try {
+        await this.save({ ...this.metadata, migrationOrigin: origin });
+      } catch (error) {
+        this.migrationUncertain = true;
+        throw error;
+      }
+      return structuredClone(origin);
+    });
+  }
+  changeVisibility(input: {
+    revision: string;
+    operationId: string;
+    expectedVersion: number;
+    visibility: "public" | "unlisted" | "private";
+  }) {
+    const parsed = z
+      .strictObject({
+        revision: idSchema,
+        operationId: idSchema,
+        expectedVersion: cursorSchema,
+        visibility: z.enum(["public", "unlisted", "private"]),
+      })
+      .parse(input);
+    return this.mutate(async () => {
+      if (parsed.revision !== this.metadata.revision)
+        throw new ProtocolError(
+          "revision_changed",
+          "Recording revision changed",
+        );
+      const previous = this.metadata.visibilityChange;
+      const digest = sha256(canonicalJson(parsed));
+      if (previous?.operationId === parsed.operationId) {
+        if (previous.digest !== digest)
+          throw new ProtocolError(
+            "event_conflict",
+            "Visibility operation changed",
+          );
+        return this.visibilityState;
+      }
+      if ((previous?.version ?? 0) !== parsed.expectedVersion)
+        throw new ProtocolError(
+          "precondition_failed",
+          "Visibility version changed",
+        );
+      const version = parsed.expectedVersion + 1;
+      if (!Number.isSafeInteger(version))
+        throw new ProtocolError(
+          "storage_failed",
+          "Visibility sequence exhausted",
+        );
+      await this.save({
+        ...this.metadata,
+        visibility: parsed.visibility,
+        visibilityChange: { version, operationId: parsed.operationId, digest },
+      });
+      if (parsed.visibility === "private") this.cancelPublicReads();
+      // Re-subscription rechecks current access, including previously public viewers.
+      for (const subscriber of this.subscribers) {
+        try {
+          subscriber.invalidate("visibility_changed");
+        } catch {}
+      }
+      this.subscribers.clear();
+      return this.visibilityState;
+    });
+  }
   /** One-way publication of an ended, initially private imported recording. */
   shareEnded(visibility: "public" | "unlisted" | "private"): Promise<void> {
-    return this.serial(async () => {
+    return this.mutate(async () => {
+      if (this.metadata.visibilityChange)
+        throw new ProtocolError(
+          "precondition_failed",
+          "Use versioned visibility management after a visibility edit",
+        );
       if (this.state !== "ended")
         throw new ProtocolError(
           "precondition_failed",
@@ -746,6 +1190,8 @@ export class RecordingSession {
     this.closing = true;
     this.closePromise = (async () => {
       await this.queue;
+      this.cancelPublicReads();
+      this.cancelReads();
       for (const subscriber of this.subscribers) {
         try {
           subscriber.invalidate("session_closed");

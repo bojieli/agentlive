@@ -1,3 +1,4 @@
+import { spendIdleGap, validateIdleCap } from "./idle-gap.js";
 import { openRecordingHistory, SubscriberClient } from "@agentlive/client";
 import { apply, initialState, activityMentions } from "@agentlive/playback";
 import {
@@ -15,6 +16,8 @@ export class BrowserSession {
   private restoring = true;
   playing = false;
   speed = 1;
+  idleCapMs: number | undefined;
+  private gapAnchor = 0;
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   private saving: Promise<void> | undefined;
   private saveDirty = false;
@@ -28,6 +31,12 @@ export class BrowserSession {
     if (!Number.isFinite(speed) || speed < 1 / 1024 || speed > 1024)
       throw new RangeError("Invalid playback speed");
     this.speed = speed;
+    this.changed();
+    this.scheduleView(true);
+  }
+  setIdleCap(cap: number | undefined) {
+    validateIdleCap(cap);
+    this.idleCapMs = cap;
     this.changed();
     this.scheduleView(true);
   }
@@ -62,6 +71,13 @@ export class BrowserSession {
             serverSeq: this.state.appliedSeq,
             timelineMs: this.time,
             speed: this.speed,
+            gapAnchorMs: Math.min(
+              this.time,
+              Math.max(this.state.timelineMs, this.gapAnchor),
+            ),
+            ...(this.idleCapMs === undefined
+              ? {}
+              : { idleCapMs: this.idleCapMs }),
             mode: this.follow ? "follow" : this.playing ? "playing" : "paused",
           },
           AbortSignal.timeout(10000),
@@ -235,12 +251,17 @@ export class BrowserSession {
             (nextTime === undefined || saved.timelineMs <= nextTime)
           ) {
             session.speed = saved.speed;
+            session.idleCapMs = saved.idleCapMs;
             session.playing = saved.mode === "playing";
             if (saved.mode !== "follow") {
               session.state = initialState();
               for (let index = 0; index < saved.serverSeq; index++)
                 session.state = apply(session.state, events[index]!);
               session.time = saved.timelineMs;
+              session.gapAnchor = Math.max(
+                session.state.timelineMs,
+                saved.gapAnchorMs ?? saved.timelineMs,
+              );
               session.follow = false;
             }
           }
@@ -353,12 +374,55 @@ export class BrowserSession {
   }
   seek(time: number, follow = false) {
     this.move(time, follow, true);
+    this.gapAnchor = this.time;
+  }
+  step(direction: -1 | 1) {
+    if (direction !== -1 && direction !== 1)
+      throw new RangeError("Invalid step direction");
+    this.playing = false;
+    this.follow = false;
+    const through = Math.max(
+      0,
+      Math.min(this.received, this.state.appliedSeq + direction),
+    );
+    let state = through < this.state.appliedSeq ? initialState() : this.state;
+    while (state.appliedSeq < through)
+      state = apply(state, this.events[state.appliedSeq]!);
+    this.state = state;
+    this.time = state.timelineMs;
+    this.gapAnchor = this.time;
+    this.changed();
+    this.scheduleView(true);
   }
   advance(elapsedMs: number) {
     if (!Number.isFinite(elapsedMs) || elapsedMs < 0)
       throw new RangeError("Invalid playback elapsed time");
-    if (this.playing)
+    if (!this.playing) return;
+    if (this.idleCapMs === undefined) {
       this.move(this.time + elapsedMs * this.speed, false, false);
+      this.gapAnchor = Math.max(this.gapAnchor, this.state.timelineMs);
+      return;
+    }
+    let time = this.time,
+      anchor = this.gapAnchor,
+      budget = elapsedMs * this.speed;
+    for (
+      let index = this.state.appliedSeq;
+      index < this.events.length;
+      index++
+    ) {
+      const next = spendIdleGap(
+        time,
+        anchor,
+        this.events[index]!.timelineMs,
+        budget,
+        this.idleCapMs,
+      );
+      ({ time, anchor, budget } = next);
+      if (!next.admitted) break;
+    }
+    this.move(time, false, false);
+    this.gapAnchor = anchor;
   }
   private move(time: number, follow: boolean, immediate: boolean) {
     if (!Number.isFinite(time) || time < 0)

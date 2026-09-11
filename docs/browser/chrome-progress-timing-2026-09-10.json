@@ -1,0 +1,142 @@
+{
+  "success": true,
+  "checks": [
+    "cached private join",
+    "fresh IndexedDB imports server snapshot blobs",
+    "exact tied previous event",
+    "idle cap control",
+    "live receipt preserves paused prefix",
+    "IndexedDB survives page reload with exact selection",
+    "renderer crash preserves committed cached selection",
+    "keyboard next event",
+    "follow live",
+    "activity keyboard navigation retains row focus",
+    "desktop viewport has no document overflow",
+    "mobile viewport has no document overflow",
+    "paged activity search",
+    "clear persistent playback cache",
+    "uncached fallback joins and steps",
+    "multi-row virtualized keyboard navigation in both cache modes"
+  ],
+  "errors": [],
+  "timings": [
+    {
+      "name": "cached private join",
+      "elapsedMs": 179.960959
+    },
+    {
+      "name": "fresh IndexedDB imports server snapshot blobs",
+      "elapsedMs": 73.97491699999955
+    },
+    {
+      "name": "exact tied previous event",
+      "elapsedMs": 104.89479200000005
+    },
+    {
+      "name": "idle cap control",
+      "elapsedMs": 3.0892499999999927
+    },
+    {
+      "name": "live receipt preserves paused prefix",
+      "elapsedMs": 29.944124999999985
+    },
+    {
+      "name": "IndexedDB survives page reload with exact selection",
+      "elapsedMs": 169.0307499999999
+    },
+    {
+      "name": "renderer crash preserves committed cached selection",
+      "elapsedMs": 575.4544589999996
+    },
+    {
+      "name": "keyboard next event",
+      "elapsedMs": 29.64049999999952
+    },
+    {
+      "name": "follow live",
+      "elapsedMs": 39.67554100000052
+    },
+    {
+      "name": "activity keyboard navigation retains row focus",
+      "elapsedMs": 29.50908299999992
+    },
+    {
+      "name": "desktop viewport has no document overflow",
+      "elapsedMs": 339.32845799999996
+    },
+    {
+      "name": "mobile viewport has no document overflow",
+      "elapsedMs": 261.47658299999966
+    },
+    {
+      "name": "paged activity search",
+      "elapsedMs": 56.15479200000027
+    },
+    {
+      "name": "clear persistent playback cache",
+      "elapsedMs": 49.09637500000008
+    },
+    {
+      "name": "uncached fallback joins and steps",
+      "elapsedMs": 110.30891700000029
+    },
+    {
+      "name": "multi-row virtualized keyboard navigation in both cache modes",
+      "elapsedMs": 26754.253999999997
+    }
+  ],
+  "phase": "complete",
+  "browser": "152.0.7977.83",
+  "accessibility": {
+    "desktop": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    },
+    "mobile": {
+      "passedRules": 25,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    }
+  },
+  "navigation": [
+    {
+      "cached": true,
+      "totalRows": 65,
+      "mountedRows": 12,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    },
+    {
+      "cached": false,
+      "totalRows": 65,
+      "mountedRows": 7,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    }
+  ]
+}

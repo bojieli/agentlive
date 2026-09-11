@@ -1,3 +1,10 @@
+import { assertPublisherNotFinished } from "@agentlive/publisher";
+import {
+  validateRemoteArtifactPolicy,
+  remoteArtifactSecrets,
+} from "./remote-artifacts.js";
+import { prepareImportedFileExpansion } from "./expand-import-family.js";
+import { isFileFamilyExpansion } from "./expand-family.js";
 import { resumeImportedRecording } from "./resume-import.js";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve, join } from "node:path";
@@ -17,6 +24,8 @@ import { localArtifactResolver } from "./local-artifacts.js";
 
 export interface NativePublishOptions extends NativeImportOptions {
   resumeImport?: boolean;
+  expandFamily?: boolean;
+  finishRequested?: () => boolean;
   onProgress?: (progress: {
     sourceCursor: SourceCursor;
     producerEvents: number;
@@ -42,9 +51,31 @@ export async function publishNativeRecording(
     nativeSessionId: string;
     converterVersion: string;
     recordFormat: string;
+    familyRoot?: string;
     follow: (context: NativeFollowContext) => Promise<void>;
   },
 ): Promise<void> {
+  if (options.remoteArtifacts) {
+    const remoteArtifacts = validateRemoteArtifactPolicy(
+      options.remoteArtifacts,
+    );
+    options = {
+      ...options,
+      remoteArtifacts,
+      secrets: [
+        ...(options.secrets ?? []),
+        ...remoteArtifactSecrets(remoteArtifacts),
+      ],
+    };
+  }
+  if (options.artifactBundles)
+    options = {
+      ...options,
+      secrets: [
+        ...(options.secrets ?? []),
+        "agentlive-artifact-bundle-policy-v2",
+      ],
+    };
   const journal = await PublisherJournal.open(options.publisherRoot, {
     serverOrigin: options.serverOrigin,
     agent: adapter.agent,
@@ -56,6 +87,7 @@ export async function publishNativeRecording(
   let running: Promise<void> | undefined;
   let networkFailure: unknown;
   try {
+    await assertPublisherNotFinished(journal.directory);
     const baseDirectory = resolve(
       options.artifactBaseDirectory ?? dirname(options.sourcePath),
     );
@@ -66,6 +98,9 @@ export async function publishNativeRecording(
       version: 1,
       converterVersion: adapter.converterVersion,
       recordFormat: adapter.recordFormat,
+      ...(adapter.familyRoot
+        ? { familyRoot: resolve(adapter.familyRoot) }
+        : {}),
       baseDirectory,
       roots,
       title: options.title,
@@ -74,24 +109,38 @@ export async function publishNativeRecording(
         .update(canonicalJson([...new Set(options.secrets ?? [])].sort()))
         .digest("hex"),
     };
+    const expansion = await prepareImportedFileExpansion(
+      journal.directory,
+      identity,
+      options.expandFamily ?? false,
+    );
     await resumeImportedRecording({
       journal,
       sourcePath: options.sourcePath,
-      identity,
+      identity: expansion?.original ?? identity,
       requested: options.resumeImport ?? false,
       signal,
     });
+    await expansion?.commit();
     const manifestPath = join(journal.directory, "publish.json");
     try {
-      if (
-        canonicalJson(JSON.parse(await readFile(manifestPath, "utf8"))) !==
-        canonicalJson(identity)
-      )
-        throw new Error(
-          "Publishing conversion or sharing options changed; explicit reconciliation is required",
-        );
+      const previous = JSON.parse(await readFile(manifestPath, "utf8"));
+      if (canonicalJson(previous) !== canonicalJson(identity)) {
+        if (
+          (!options.expandFamily && !expansion) ||
+          !isFileFamilyExpansion(previous, identity)
+        )
+          throw new Error(
+            "Publishing conversion or sharing options changed; explicit reconciliation is required",
+          );
+        await atomicJson(manifestPath, identity);
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if (options.expandFamily)
+        throw new Error(
+          "Family expansion requires an existing live file publication",
+        );
       await atomicJson(manifestPath, identity);
     }
     const cursorPath = join(journal.directory, "native-cursor.json");
@@ -138,6 +187,10 @@ export async function publishNativeRecording(
       journal.identity.writeSecret,
     ];
     artifacts = await localArtifactResolver({
+      ...(options.artifactBundles ? { artifactBundles: true } : {}),
+      ...(options.remoteArtifacts
+        ? { remoteArtifacts: options.remoteArtifacts }
+        : {}),
       directory: join(journal.directory, "artifacts"),
       roots,
       baseDirectory,

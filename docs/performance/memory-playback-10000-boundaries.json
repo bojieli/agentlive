@@ -1,0 +1,54 @@
+{
+  "success": true,
+  "runtime": "v26.8.1",
+  "platform": "darwin/arm64",
+  "count": 10000,
+  "completed": 10000,
+  "phase": "complete",
+  "collections": [
+    {
+      "through": 4352,
+      "elapsedMs": 114.60158300000006,
+      "removedBytes": 3867802,
+      "removedEntries": 3581,
+      "bytes": 434704,
+      "entries": 1342
+    },
+    {
+      "through": 7680,
+      "elapsedMs": 200.67945799999995,
+      "removedBytes": 3891691,
+      "removedEntries": 2853,
+      "bytes": 846186,
+      "entries": 2334
+    }
+  ],
+  "peakHeap": 68833024,
+  "peakRss": 181436416,
+  "peakBytes": 4737877,
+  "peakEntries": 5241,
+  "receiptMs": 1249.76525,
+  "seeks": [
+    {
+      "through": 5000,
+      "elapsedMs": 68.10462499999994
+    },
+    {
+      "through": 1,
+      "elapsedMs": 1.4239999999999782
+    },
+    {
+      "through": 10000,
+      "elapsedMs": 5.495208000000048
+    }
+  ],
+  "finalUsage": {
+    "bytes": 4705334,
+    "entries": 5357
+  },
+  "afterClose": {
+    "bytes": 0,
+    "entries": 0
+  },
+  "elapsedMs": 1325.667458
+}
