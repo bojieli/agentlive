@@ -28,6 +28,7 @@ import {
   setPublisherSharing,
   finishBinding,
   reopenBinding,
+  retireBinding,
   viewerUrl,
 } from "./publication.js";
 import { doctor } from "./doctor.js";
@@ -82,6 +83,7 @@ Everyday commands:
   agentlive resume --stream <id>         Re-enable a paused binding
   agentlive finish --stream <id>         Deliver captured events and end the recording
   agentlive reopen --stream <id>         Reopen a recording finished by this binding
+  agentlive retire --stream <id>         Set a finished binding aside; the next publish starts a new recording
   agentlive doctor [--server <origin>]   Check runtime, credentials, server and agents
 
 Commands:
@@ -229,6 +231,7 @@ async function main() {
     command !== "resume" &&
     command !== "finish" &&
     command !== "reopen" &&
+    command !== "retire" &&
     command !== "doctor" &&
     command !== "migrate-recording" &&
     command !== "migrate-import" &&
@@ -380,7 +383,7 @@ async function main() {
       ? ["source", "operation-id", "server"]
       : []),
     ...(command === "status" ? ["stream"] : []),
-    ...(["pause", "resume", "finish", "reopen"].includes(command)
+    ...(["pause", "resume", "finish", "reopen", "retire"].includes(command)
       ? ["stream", "source"]
       : []),
     ...(command === "finish" ? ["account-file", "server"] : []),
@@ -461,6 +464,7 @@ async function main() {
             command === "resume" ||
             command === "finish" ||
             command === "reopen" ||
+            command === "retire" ||
             command === "doctor" ||
             command === "migrate-recording" ||
             command === "migrate-import" ||
@@ -896,6 +900,11 @@ async function main() {
       directory: await bindingDirectory(),
       signal: controller.signal,
     });
+    process.stdout.write(JSON.stringify(result) + "\n");
+    return;
+  }
+  if (command === "retire") {
+    const result = await retireBinding({ directory: await bindingDirectory() });
     process.stdout.write(JSON.stringify(result) + "\n");
     return;
   }

@@ -43,7 +43,7 @@ The user-directed order remains: finish missing product features, then performan
 - Segmented outbox pruning with safe retention of source mappings, filter tails, checkpoints and artifact dependencies.
 - Unavailable artifact work must not block unrelated capture/delivery indefinitely.
 - Explicit publisher epoch handoff and the remaining lifecycle/recovery fault matrix.
-- An explicit `--new-stream` path for starting a new recording of a native session whose binding is finished (today this requires a separate state directory).
+- A single-step `publish --new-stream` (today: `finish`, then `retire`, then `publish`), and a way to start a new recording from the current native position instead of the retained beginning.
 - Actual laptop suspension and long offline periods within documented capacity limits.
 
 ## 5. Multi-session server and access lifecycle — M2/M5/M6

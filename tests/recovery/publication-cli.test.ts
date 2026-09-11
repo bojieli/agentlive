@@ -319,3 +319,53 @@ it("replays the committed sample recording and exits quietly when output closes"
   expect(stderr).toBe("");
   expect(code).toBe(0);
 });
+
+it("retires a finished binding so the same native session starts a new recording", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-publication-retire-"));
+  let server: Awaited<ReturnType<typeof start>> | undefined;
+  try {
+    server = await start(root);
+    const source = join(root, "source.jsonl");
+    await writeFile(source, row("first", "FIRST_RECORDING"));
+    const publishArgs = [
+      "--agent",
+      "claude",
+      "--source",
+      source,
+      "--server",
+      server.url,
+      "--state-dir",
+      root,
+    ];
+    const state = ["--state-dir", root];
+    const first = (await publishUntilLive(publishArgs)).find(
+      (event) => event.event === "publishing",
+    )!.streamId as string;
+    await expect(
+      exec(process.execPath, [cli, "retire", "--stream", first, ...state], {
+        env,
+      }),
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining("run finish first"),
+    });
+    await run(["finish", "--stream", first, ...state]);
+    const retired = await run(["retire", "--stream", first, ...state]);
+    expect(retired).toMatchObject({ streamId: first, agent: "claude" });
+    expect(retired.retiredDirectory).toContain(
+      join(root, "publisher", "retired"),
+    );
+    expect((await run(["status", ...state])).bindings).toEqual([]);
+    await appendFile(source, row("second", "SECOND_RECORDING"));
+    const second = (await publishUntilLive(publishArgs)).find(
+      (event) => event.event === "publishing",
+    )!.streamId as string;
+    expect(second).not.toBe(first);
+    const status = (await run(["status", ...state])).bindings;
+    expect(status).toHaveLength(1);
+    expect(status[0]).toMatchObject({ streamId: second, lifecycle: "open" });
+  } finally {
+    server?.child.kill("SIGTERM");
+    await server?.exited;
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60_000);

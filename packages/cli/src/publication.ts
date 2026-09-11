@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
-import { lstat, open, readdir, rename } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, mkdir, open, readdir, rename } from "node:fs/promises";
+import { basename, dirname, join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import {
@@ -511,6 +511,67 @@ export async function reopenBinding(options: {
       revision: identity.revision,
       reopenServerSeq: reopened.serverSeq,
       viewerUrl: viewerUrl(identity.serverOrigin, identity.streamId),
+    };
+  } finally {
+    await journal.close();
+  }
+}
+
+/**
+ * Move a completed binding aside so the next publish of the same native
+ * session creates a new recording. The binding lock is held across the rename,
+ * so no publisher can be writing into the retired directory.
+ */
+export async function retireBinding(options: { directory: string }) {
+  let journal: PublisherJournal;
+  try {
+    journal = await PublisherJournal.openExisting(options.directory);
+  } catch (error) {
+    if (error instanceof ProtocolError && error.code === "publisher_busy")
+      throw new Error(
+        "A publisher process is attached to this binding; stop it and retry",
+      );
+    throw error;
+  }
+  try {
+    const identity = journal.identity;
+    const finish = finishSchema.safeParse(
+      await readPublisherOperation(journal.directory, "finish-publish.json"),
+    );
+    const transferred =
+      (await readPublisherOperation(
+        journal.directory,
+        "archive-transfer.json",
+      )) !== undefined;
+    const importOnly =
+      (await readPrivateJson(join(journal.directory, "import.json"))) !==
+        undefined &&
+      (await readPrivateJson(join(journal.directory, "publish.json"))) ===
+        undefined;
+    if (
+      !(finish.success && finish.data.completed) &&
+      !transferred &&
+      !importOnly
+    )
+      throw new Error(
+        "Only finished, transferred or imported bindings can be retired; run finish first",
+      );
+    if (identity.acknowledgedSeq !== journal.capturedThrough)
+      throw new Error(
+        "The binding still has undelivered events; deliver them before retiring",
+      );
+    const retiredRoot = join(dirname(journal.directory), "retired");
+    await mkdir(retiredRoot, { recursive: true, mode: 0o700 });
+    const target = join(
+      retiredRoot,
+      `${basename(journal.directory)}-${identity.streamId ?? "unbound"}-${Date.now()}`,
+    );
+    await rename(journal.directory, target);
+    return {
+      retiredDirectory: target,
+      streamId: identity.streamId,
+      agent: identity.nativeAgent,
+      nativeSessionId: identity.nativeSessionId,
     };
   } finally {
     await journal.close();
