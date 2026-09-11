@@ -11,7 +11,7 @@ Last updated: 2026-09-11. **Production gate: not passed.** Every feature listed 
 | Standalone package (`package:verify`: offline reproducible rebuild, isolated install, serve/import/replay/archive/backup round trips) | Pass: `agentlive-0.1.0.tgz`, byte-identical offline rebuild, isolated install with scripts disabled, 27 passing installed-package checks |
 | CI (Linux + macOS) | Last confirmed at `2bcb9ca`; this checkpoint is confirmed only once CI passes on the pushed commit |
 | Rendered Chrome probes | 21 checks passed at the last browser checkpoint (2026-09-10); not rerun for this checkpoint ([evidence](docs/browser/README.md)) |
-| Docker image probe | 11 container checks passed on 2026-09-10 ([evidence](deployment/container-admin-probe-2026-09-10.json)); predates this checkpoint |
+| Docker image probe | 14 container checks passed on an image built from commit `87484e3`, including online backup while serving and its restore ([evidence](deployment/container-probe-2026-09-11.json)) |
 
 Local tests use synthetic fixtures and make no model calls. They are correctness evidence, not native-version, device, deployment or performance acceptance.
 

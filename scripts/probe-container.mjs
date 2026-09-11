@@ -148,7 +148,34 @@ try {
   );
   await assert.rejects(
     cli("backup", "--output", "/data/refused-live-backup"),
-    /owns this data directory/,
+    /in use by a running server/,
+  );
+  // Online backup while the server keeps running, then prove it restores.
+  const online = JSON.parse(
+    (
+      await cli(
+        "backup",
+        "--server",
+        "http://127.0.0.1:7331",
+        "--output",
+        "/data/online-backup",
+      )
+    )
+      .split("\n")
+      .filter(Boolean)
+      .at(-1),
+  );
+  assert.equal((await fetch(origin + "/readyz")).status, 200);
+  const doctor = JSON.parse(
+    await cli("doctor", "--server", "http://127.0.0.1:7331"),
+  );
+  assert.equal(
+    doctor.checks.find((check) => check.name === "server").status,
+    "ok",
+  );
+  assert.equal(
+    doctor.checks.find((check) => check.name === "owner-credential").status,
+    "ok",
   );
   await docker("stop", "-t", "45", name);
   await docker("rm", name);
@@ -181,6 +208,16 @@ try {
     ),
   );
   assert.equal(restored.recordings, 1);
+  const onlineRestored = JSON.parse(
+    await offline(
+      "restore",
+      "--source",
+      "/data/online-backup",
+      "--output",
+      "/data/online-restored",
+    ),
+  );
+  assert.equal(onlineRestored.recordings, 1);
   assert.notEqual(
     restored.revisions[0].revision,
     restored.revisions[0].previousRevision,
@@ -215,11 +252,15 @@ try {
       "volume-container-replacement",
       "owner-credential-permissions-and-persistence",
       "portable-export-offline-replay",
-      "running-server-backup-refusal",
+      "running-server-offline-backup-refusal",
+      "online-backup-while-serving",
+      "doctor-server-and-credential",
+      "online-backup-restore",
       "offline-container-backup-and-restore",
       "restored-revision-and-exact-replay",
     ],
     replayHash: createHash("sha256").update(replay).digest("hex"),
+    onlineBackup: { recordings: online.recordings ?? null },
   };
   await mkdir("probe-results/container", { recursive: true });
   await writeFile(
