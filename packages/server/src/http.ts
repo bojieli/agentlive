@@ -238,7 +238,12 @@ export async function startServer(options: ServerOptions) {
   }>();
   // In-flight transfers authorized by revocable principals; see transfer-authority.ts.
   const transfers = new TransferAuthority();
-  const revalidateTransfers = () => transfers.revalidate();
+  // Open viewing sockets recheck their authorization at the same revocation points.
+  const socketChecks = new Set<() => void>();
+  const revalidateTransfers = () => {
+    transfers.revalidate();
+    for (const check of [...socketChecks]) check();
+  };
   accountSessions?.onRevoke(revalidateTransfers);
   accounts?.onStatusChange(revalidateTransfers);
   const ownerHash = digest(options.ownerSecret);
@@ -1466,6 +1471,21 @@ export async function startServer(options: ServerOptions) {
     let accountActive: (() => boolean) | undefined;
     let authorizeView: (() => void) | undefined;
 
+    const recheck = () => {
+      if (ended || !socket) return;
+      try {
+        authorizeView?.();
+      } catch {
+        cleanup();
+        socket.close(1008, "Viewing authorization ended");
+        return;
+      }
+      if (accountActive && !accountActive()) {
+        cleanup();
+        socket.close(1008, "Account viewing authorization ended");
+      }
+    };
+    socketChecks.add(recheck);
     const send = (value: unknown) => {
       try {
         authorizeView?.();
@@ -1514,6 +1534,7 @@ export async function startServer(options: ServerOptions) {
     const drain = (): Promise<void> => {
       if (drained) return drained;
       ended = true;
+      socketChecks.delete(recheck);
       clearInterval(heartbeat);
       unsubscribe?.();
       unsubscribe = undefined;

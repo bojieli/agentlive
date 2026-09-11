@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
+import { createRequire } from "node:module";
 import { startServer } from "../../packages/server/src/http.js";
 import { Accounts } from "../../packages/server/src/accounts.js";
 import { AccountSessions } from "../../packages/server/src/account-sessions.js";
@@ -484,3 +485,138 @@ it("rechecks registered transfers when an account is disabled", async () => {
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("closes open viewing sockets promptly on logout and device revocation", async () => {
+  const { WebSocket } = createRequire(
+    new URL("../../packages/server/package.json", import.meta.url),
+  )("ws") as typeof import("ws");
+  const root = await mkdtemp(join(tmpdir(), "agentlive-socket-revoke-"));
+  const password = "p".repeat(64),
+    issuer = "https://id.example",
+    origin = "https://app.example";
+  const accounts = await Accounts.open(join(root, "accounts"));
+  const sessions = await AccountSessions.open(
+    join(root, "account-sessions.json"),
+    accounts,
+    password,
+  );
+  const account = await accounts.resolveVerifiedIdentity({
+    issuer,
+    subject: "owner",
+    displayName: "Owner",
+  });
+  const revokedDevice = await sessions.issueDevice(account.id);
+  const keptDevice = await sessions.issueDevice(account.id);
+  const loggedOut = await sessions.issue(account.id);
+  await sessions.close();
+  await accounts.close();
+  const server = await startServer({
+    directory: root,
+    ownerSecret,
+    port: 0,
+    publicOrigin: origin,
+    hosted: {
+      issuer,
+      clientId: "client",
+      clientSecret: "secret",
+      cookiePassword: password,
+      fetch: async () =>
+        Response.json({
+          issuer,
+          authorization_endpoint: issuer + "/authorize",
+          token_endpoint: issuer + "/token",
+          jwks_uri: issuer + "/jwks",
+          response_types_supported: ["code"],
+          subject_types_supported: ["public"],
+          id_token_signing_alg_values_supported: ["RS256"],
+        }),
+    },
+  });
+  const browser = {
+    cookie: `__Host-agentlive-session=${loggedOut.cookie}`,
+    origin,
+    "x-csrf-token": loggedOut.csrf,
+  };
+  const sockets: import("ws").WebSocket[] = [];
+  try {
+    const owned = await recording(server, account.id, "sockets", "private");
+    const connect = async (query: string, headers: Record<string, string>) => {
+      const socket = new WebSocket(
+        server.url.replace("http:", "ws:") + "/api/v1/watch" + query,
+        { headers },
+      );
+      sockets.push(socket);
+      const messages: { type: string }[] = [];
+      socket.on("message", (bytes: Buffer) =>
+        messages.push(JSON.parse(bytes.toString())),
+      );
+      const closed = new Promise<number>((resolve) =>
+        socket.once("close", resolve),
+      );
+      await new Promise<void>((resolve, reject) => {
+        socket.once("open", resolve);
+        socket.once("error", reject);
+      });
+      socket.send(
+        JSON.stringify({
+          type: "subscribe",
+          protocolVersion: 1,
+          requestId: "sub",
+          streamId: owned.id,
+          revision: owned.revision,
+          afterServerSeq: 0,
+        }),
+      );
+      await expect
+        .poll(() => messages.some((message) => message.type === "subscribed"))
+        .toBe(true);
+      return { socket, closed };
+    };
+    const ticket = await (
+      await fetch(`${owned.base}/watch-ticket`, {
+        method: "POST",
+        headers: { ...browser, "content-type": "application/json" },
+        body: "{}",
+      })
+    ).json();
+    const browserSocket = await connect(`?ticket=${ticket.ticket}`, {});
+    const revokedSocket = await connect("", {
+      authorization: `Bearer ${revokedDevice.token}`,
+    });
+    const keptSocket = await connect("", {
+      authorization: `Bearer ${keptDevice.token}`,
+    });
+    const within = <T>(promise: Promise<T>) =>
+      Promise.race([
+        promise,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("socket stayed open")), 3000),
+        ),
+      ]);
+
+    // No client traffic is sent: revocation itself must close the sockets.
+    expect(
+      (
+        await fetch(server.url + "/auth/device/revoke", {
+          method: "POST",
+          headers: { authorization: `Bearer ${revokedDevice.token}` },
+        })
+      ).status,
+    ).toBe(200);
+    expect(await within(revokedSocket.closed)).toBe(1008);
+    expect(
+      (
+        await fetch(server.url + "/auth/logout", {
+          method: "POST",
+          headers: browser,
+        })
+      ).status,
+    ).toBe(200);
+    expect(await within(browserSocket.closed)).toBe(1008);
+    expect(keptSocket.socket.readyState).toBe(WebSocket.OPEN);
+  } finally {
+    for (const socket of sockets) socket.terminate();
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60_000);
