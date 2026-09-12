@@ -434,3 +434,50 @@ it(
     );
   },
 );
+
+// Capture no longer waits for the binding, so a source that drains immediately
+// used to abort before onReady ever fired and the caller never learned the
+// recording's identity or its viewer URL.
+it("reports the recording identity when a drained source finishes at once", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-drained-ready-"));
+  roots.push(root);
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: "e".repeat(64),
+    port: 0,
+  });
+  servers.push(server);
+  const source = join(root, "session.jsonl");
+  await writeFile(
+    source,
+    JSON.stringify({
+      type: "user",
+      sessionId: "drained_session",
+      uuid: "only",
+      timestamp: "2026-09-01T00:00:00.000Z",
+      message: { content: "DRAINED_ONCE" },
+    }) + "\n",
+  );
+  const ready: { streamId: string; revision: string }[] = [];
+  await publishClaudeRecording({
+    sourcePath: source,
+    publisherRoot: join(root, "publisher"),
+    serverOrigin: server.url,
+    ownerCredential: "e".repeat(64),
+    title: "Drained at once",
+    visibility: "private",
+    signal: AbortSignal.timeout(25000),
+    // Stop as soon as the retained history is captured, as managed launch does
+    // when its native agent exits immediately.
+    finishRequested: () => true,
+    onReady: (recording) => ready.push(recording),
+  });
+  expect(ready).toHaveLength(1);
+  expect(ready[0]!.streamId).toBeTruthy();
+  const session = await server.store.get(ready[0]!.streamId);
+  try {
+    expect(session.info.revision).toBe(ready[0]!.revision);
+  } finally {
+    server.store.release(session);
+  }
+});
