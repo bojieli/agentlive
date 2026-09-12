@@ -18,6 +18,11 @@ export {
   getAccountUsage,
 } from "./admin-accounts.js";
 export {
+  readVisibility,
+  changeVisibility,
+  type VisibilityState,
+} from "./visibility.js";
+export {
   listReports,
   decideReport,
   type ReportDecision,

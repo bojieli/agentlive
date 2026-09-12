@@ -406,3 +406,96 @@ it("reports honest viewer reachability for loopback and wildcard binds", async (
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("reads and changes recording visibility from the CLI", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-visibility-cli-"));
+  let server: Awaited<ReturnType<typeof start>> | undefined;
+  try {
+    server = await start(root);
+    const state = ["--state-dir", root, "--server", server.url];
+    const source = join(root, "source.jsonl");
+    await writeFile(source, row("first", "VISIBILITY_MESSAGE"));
+    const imported = await run([
+      "import",
+      "--agent",
+      "claude",
+      "--source",
+      source,
+      ...state,
+    ]);
+    const stream = imported.streamId as string;
+    const anonymous = () =>
+      fetch(`${server!.url}/api/v1/streams/${stream}`).then(
+        (response) => response.status,
+      );
+
+    const initial = await run(["visibility", "--stream", stream, ...state]);
+    expect(initial).toMatchObject({ streamId: stream, visibility: "private" });
+    expect(await anonymous()).toBe(403);
+
+    const shared = await run([
+      "visibility",
+      "--stream",
+      stream,
+      "--visibility",
+      "public",
+      ...state,
+    ]);
+    expect(shared).toMatchObject({ visibility: "public", changed: true });
+    expect(shared.version).toBe(initial.version + 1);
+    expect(await anonymous()).toBe(200);
+
+    // Repeating the request is a no-op rather than a second version.
+    const repeated = await run([
+      "visibility",
+      "--stream",
+      stream,
+      "--visibility",
+      "public",
+      ...state,
+    ]);
+    expect(repeated).toMatchObject({
+      visibility: "public",
+      changed: false,
+      version: shared.version,
+    });
+
+    const restricted = await run([
+      "visibility",
+      "--stream",
+      stream,
+      "--visibility",
+      "private",
+      ...state,
+    ]);
+    expect(restricted).toMatchObject({ visibility: "private", changed: true });
+    expect(await anonymous()).toBe(403);
+
+    await expect(
+      exec(
+        process.execPath,
+        [
+          cli,
+          "visibility",
+          "--stream",
+          stream,
+          "--visibility",
+          "open",
+          ...state,
+        ],
+        { env },
+      ),
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining("must be private, unlisted or public"),
+    });
+    await expect(
+      exec(process.execPath, [cli, "visibility", ...state], { env }),
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining("requires --stream"),
+    });
+  } finally {
+    server?.child.kill("SIGTERM");
+    await server?.exited;
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60_000);

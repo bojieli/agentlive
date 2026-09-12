@@ -24,6 +24,8 @@ import {
   decideReport,
   listAccounts,
   setAccountDisabled,
+  readVisibility,
+  changeVisibility,
   listRecordings,
   removeRecording,
   requestOnlineBackup,
@@ -47,6 +49,8 @@ import { launchNewClaude } from "./new-claude.js";
 import { launchNewKimi } from "./new-kimi.js";
 import { launchNewCodex } from "./new-codex.js";
 import { launchManagedOpenCode } from "./managed-opencode.js";
+import { createHash } from "node:crypto";
+import { canonicalJson } from "@agentlive/protocol";
 import { parseArgs } from "node:util";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
@@ -110,6 +114,7 @@ Commands:
   agentlive export --stream <recording-id> --output <recording.agentlive> [--server <origin>] [--anonymous]
   agentlive remove --stream <id> --revision <revision> --operation-id <unique-id> --confirm-removal [--server <origin>]
   agentlive list [--server <origin>] [--limit 50] [--after <recording-id>]
+  agentlive visibility --stream <id> [--visibility public|unlisted|private] [--server <origin>]
   agentlive viewing-grant --stream <id> --expires-at <ISO-8601> [--label <name>] [--server <origin>]
   agentlive viewing-grants --stream <id> [--server <origin>]
   agentlive revoke-viewing-grant --stream <id> --grant-id <id> [--server <origin>]
@@ -121,7 +126,8 @@ Commands:
   agentlive backup --output <new-backup-directory> [--state-dir <directory>] [--owner-file <file>]
   agentlive backup --output <new-server-host-directory> --server <origin> [--barrier-timeout-ms 30000] [--owner-file <file>]
   agentlive serve [--host 127.0.0.1] [--port 7331] [--max-cached-sessions 128] [--shutdown-timeout-ms 30000]
-                  [--max-stored-bytes <n>] [--min-free-bytes <n>] [--metrics]   (metrics token: AGENTLIVE_METRICS_TOKEN)
+                  [--max-stored-bytes <n>] [--min-free-bytes <n>] [--no-snapshot-collection]
+                  [--metrics]   (metrics token: AGENTLIVE_METRICS_TOKEN)
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive import --agent <codex|claude|kimi> --native-session <id> [--source-root <directory>] [--native-agent <kimi-agent>]
   agentlive import --source <recording.agentlive> [--server <origin>]
@@ -298,6 +304,7 @@ async function main() {
     command !== "restore" &&
     command !== "backup" &&
     command !== "list" &&
+    command !== "visibility" &&
     command !== "discover" &&
     command !== "export" &&
     command !== "serve" &&
@@ -359,6 +366,7 @@ async function main() {
       "shutdown-timeout-ms": { type: "string" },
       "max-stored-bytes": { type: "string" },
       "min-free-bytes": { type: "string" },
+      "no-snapshot-collection": { type: "boolean" },
       metrics: { type: "boolean" },
       "cancellation-timeout-ms": { type: "string" },
       agent: { type: "string" },
@@ -405,6 +413,7 @@ async function main() {
       "remove",
       "logout",
       "list",
+      "visibility",
       "import",
       "publish",
       "watch",
@@ -562,79 +571,87 @@ async function main() {
               ]
             : command === "export"
               ? ["server", "stream", "output", "anonymous", "viewer-file"]
-              : command === "list"
-                ? ["server", "limit", "after"]
-                : command === "inspect-migration" ||
-                    command === "recover-publisher" ||
-                    command === "rotate-publisher-credential"
-                  ? [
-                      "source",
-                      ...(command === "inspect-migration"
-                        ? ["native-source", "verify-family", "family-source"]
-                        : []),
-                      ...(command === "rotate-publisher-credential"
-                        ? ["restart-rotation"]
-                        : []),
-                    ]
-                  : command === "restore"
-                    ? ["source", "output"]
-                    : command === "backup"
-                      ? ["output", "server", "barrier-timeout-ms"]
-                      : command === "serve"
-                        ? [
-                            "host",
-                            "hosted-config",
-                            "port",
-                            "max-cached-sessions",
-                            "shutdown-timeout-ms",
-                            "max-stored-bytes",
-                            "min-free-bytes",
-                            "metrics",
-                          ]
-                        : command === "replay" || command === "watch"
+              : command === "visibility"
+                ? ["server", "stream", "visibility"]
+                : command === "list"
+                  ? ["server", "limit", "after"]
+                  : command === "inspect-migration" ||
+                      command === "recover-publisher" ||
+                      command === "rotate-publisher-credential"
+                    ? [
+                        "source",
+                        ...(command === "inspect-migration"
+                          ? ["native-source", "verify-family", "family-source"]
+                          : []),
+                        ...(command === "rotate-publisher-credential"
+                          ? ["restart-rotation"]
+                          : []),
+                      ]
+                    : command === "restore"
+                      ? ["source", "output"]
+                      : command === "backup"
+                        ? ["output", "server", "barrier-timeout-ms"]
+                        : command === "serve"
                           ? [
-                              "server",
-                              "stream",
-                              "anonymous",
-                              "viewer-file",
-                              "idle-cap-ms",
-                              ...(command === "replay"
-                                ? ["speed", "interactive", "from-ms", "source"]
-                                : [
-                                    "speed",
-                                    "interactive",
-                                    "from-ms",
-                                    "resume-view",
-                                    "restart-view",
-                                    "cancellation-timeout-ms",
-                                  ]),
+                              "host",
+                              "hosted-config",
+                              "port",
+                              "max-cached-sessions",
+                              "shutdown-timeout-ms",
+                              "max-stored-bytes",
+                              "min-free-bytes",
+                              "no-snapshot-collection",
+                              "metrics",
                             ]
-                          : [
-                              ...(command === "publish"
-                                ? [
-                                    "record-format",
-                                    "resume-import",
-                                    "expand-family",
-                                    "native-server",
-                                    "launch",
-                                    "cwd",
-                                    "redact-env",
-                                  ]
-                                : []),
-                              "include-children",
-                              "agent",
-                              "source",
-                              "source-root",
-                              "server",
-                              "visibility",
-                              "title",
-                              "remote-artifact-policy",
-                              "artifact-bundles",
-                              "artifact-root",
-                              "artifact-base",
-                              "native-session",
-                              "native-agent",
-                            ]),
+                          : command === "replay" || command === "watch"
+                            ? [
+                                "server",
+                                "stream",
+                                "anonymous",
+                                "viewer-file",
+                                "idle-cap-ms",
+                                ...(command === "replay"
+                                  ? [
+                                      "speed",
+                                      "interactive",
+                                      "from-ms",
+                                      "source",
+                                    ]
+                                  : [
+                                      "speed",
+                                      "interactive",
+                                      "from-ms",
+                                      "resume-view",
+                                      "restart-view",
+                                      "cancellation-timeout-ms",
+                                    ]),
+                              ]
+                            : [
+                                ...(command === "publish"
+                                  ? [
+                                      "record-format",
+                                      "resume-import",
+                                      "expand-family",
+                                      "native-server",
+                                      "launch",
+                                      "cwd",
+                                      "redact-env",
+                                    ]
+                                  : []),
+                                "include-children",
+                                "agent",
+                                "source",
+                                "source-root",
+                                "server",
+                                "visibility",
+                                "title",
+                                "remote-artifact-policy",
+                                "artifact-bundles",
+                                "artifact-root",
+                                "artifact-base",
+                                "native-session",
+                                "native-agent",
+                              ]),
   ]);
   if (Object.keys(values).some((key) => !allowed.has(key)))
     throw new Error("Option does not apply to this command; use --help");
@@ -1528,6 +1545,9 @@ async function main() {
       directory: join(stateDir, "server"),
       ownerSecret: secret,
       host: values.host ?? "127.0.0.1",
+      ...(values["no-snapshot-collection"]
+        ? { snapshots: { collect: false } }
+        : {}),
       maxCachedSessions,
       shutdownTimeoutMs,
       port,
@@ -1551,6 +1571,53 @@ async function main() {
     } finally {
       await server.close();
     }
+    return;
+  }
+  if (command === "visibility") {
+    if (!values.stream)
+      throw new Error("Visibility requires --stream <recording-id>");
+    const credential = await loadCredential();
+    secrets.push(credential);
+    const common = {
+      serverOrigin: values.server ?? "http://127.0.0.1:7331",
+      streamId: values.stream,
+      credential,
+      signal: controller.signal,
+    };
+    const current = await readVisibility(common);
+    if (values.visibility === undefined) {
+      process.stdout.write(JSON.stringify(current) + "\n");
+      return;
+    }
+    if (!["public", "unlisted", "private"].includes(values.visibility))
+      throw new Error("--visibility must be private, unlisted or public");
+    const requested = values.visibility as "public" | "unlisted" | "private";
+    // A stable operation ID makes an interrupted change safe to repeat, and the
+    // observed version rejects a concurrent change instead of overwriting it.
+    const result =
+      current.visibility === requested
+        ? current
+        : await changeVisibility({
+            ...common,
+            revision: current.revision,
+            expectedVersion: current.version,
+            operationId: createHash("sha256")
+              .update(
+                canonicalJson({
+                  operation: "cli-visibility",
+                  streamId: current.streamId,
+                  revision: current.revision,
+                  version: current.version,
+                  visibility: requested,
+                }),
+              )
+              .digest("hex"),
+            visibility: requested,
+          });
+    process.stdout.write(
+      JSON.stringify({ ...result, changed: current.visibility !== requested }) +
+        "\n",
+    );
     return;
   }
   if (command === "list") {
