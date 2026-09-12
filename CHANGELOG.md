@@ -4,6 +4,14 @@ This file records notable user-visible changes. AgentLive is pre-release softwar
 
 ## Unreleased
 
+### Added
+
+- `agentlive --version` (also `-v` and `version`) prints the installed version.
+
+### Fixed
+
+- The web assets are rebuilt from an empty directory, so a file an older build script emitted can no longer survive into the published package.
+
 ## 0.1.0 — 2026-09-12
 
 First published release.

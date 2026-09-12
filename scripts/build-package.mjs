@@ -63,6 +63,8 @@ await build({
   format: "esm",
   external: Object.keys(dependencies),
   legalComments: "inline",
+  // The bundle is one file with no package.json beside it to read at runtime.
+  define: { AGENTLIVE_BUNDLED_VERSION: JSON.stringify(cli.version) },
 });
 await chmod(join(staging, "cli.mjs"), 0o755);
 await writeFile(

@@ -50,6 +50,7 @@ import { launchNewClaude } from "./new-claude.js";
 import { launchNewKimi } from "./new-kimi.js";
 import { launchNewCodex } from "./new-codex.js";
 import { launchManagedOpenCode } from "./managed-opencode.js";
+import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@agentlive/protocol";
 import { parseArgs } from "node:util";
@@ -84,6 +85,20 @@ import {
   validateSecret,
   viewingCredential,
 } from "./credentials.js";
+/**
+ * Replaced with a literal when the single-file package is bundled, which has no
+ * package.json beside it to read. Running from the workspace reads the manifest.
+ */
+declare const AGENTLIVE_BUNDLED_VERSION: string | undefined;
+function agentliveVersion(): string {
+  if (typeof AGENTLIVE_BUNDLED_VERSION === "string")
+    return AGENTLIVE_BUNDLED_VERSION;
+  try {
+    return createRequire(import.meta.url)("../package.json").version as string;
+  } catch {
+    return "unknown";
+  }
+}
 const help = `AgentLive — record and share coding-agent sessions
 
 Everyday commands:
@@ -97,6 +112,7 @@ Everyday commands:
   agentlive reopen --stream <id>         Reopen a recording finished by this binding
   agentlive retire --stream <id>         Set a finished binding aside; the next publish starts a new recording
   agentlive doctor [--server <origin>]   Check runtime, credentials, server and agents
+  agentlive --version                    Print the installed version
 
 Commands:
   agentlive finish-publisher --source <binding-directory> --operation-id <id>
@@ -288,6 +304,10 @@ async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!command || command === "--help" || command === "help") {
     process.stdout.write(help);
+    return;
+  }
+  if (command === "--version" || command === "-v" || command === "version") {
+    process.stdout.write(agentliveVersion() + "\n");
     return;
   }
   if (
