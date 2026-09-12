@@ -1,8 +1,12 @@
 # Changelog
 
-AgentLive has not made a versioned release yet. This file records notable user-visible changes on `main`.
+This file records notable user-visible changes. AgentLive is pre-release software: `0.x` versions make no production-readiness claim, and the exit gates in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) record what is still unverified.
 
 ## Unreleased
+
+## 0.1.0 — 2026-09-12
+
+First published release.
 
 ### Added
 
