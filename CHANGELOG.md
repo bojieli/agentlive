@@ -28,6 +28,7 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 
 ### Fixed
 
+- Disabling a hosted account now suspends its recordings in both directions: publishing is refused, publisher sockets close, and reads and the public listing exclude them until the account is enabled again (the operator credential can still review them).
 - Secret redaction no longer depends on a file extension or a transcript-supplied media type (security finding; see the commit for the exact rule).
 - `recover-publisher` works against a pruned journal; previously it replayed from sequence zero and would have failed on any publisher that had compacted.
 - A failed online-backup cleanup no longer wedges every later backup or leaves the plaintext owner credential in the partial output.

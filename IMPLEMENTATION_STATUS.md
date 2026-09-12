@@ -45,7 +45,7 @@ Local tests use synthetic fixtures and make no model calls. They are correctness
 - A bounded, segmented publisher journal with acknowledged-segment pruning, and durable capture before the first remote binding, so publishing works with the server unreachable. `recover-publisher` was broken by pruning and now verifies a compacted prefix by chain hash. Tests: `tests/recovery/journal-segments.test.ts`, `offline-capture.test.ts`, `publisher-recover-pruned.test.ts`.
 - Server-wide storage limits, a free-space floor and an owner/token-authenticated Prometheus `/metrics` of content-free aggregates. Tests: `tests/recovery/storage-limits.test.ts`, `server-metrics.test.ts`.
 - `agentlive visibility` and a release rehearsal (`pnpm probe:release`) that drives publish → watch → rewind → catch up → replay against the installed package through a real pseudo-terminal.
-- A security review of the new authorization, quota, backup, migration and preview surfaces: it found the authorization layer sound and produced four findings; the backup-cleanup wedge is fixed, the attachment-redaction bypass is being fixed, and two remain open (see [remaining work](REMAINING_WORK.md)).
+- A security review of the new authorization, quota, backup, migration and preview surfaces: it found the authorization layer sound and produced four findings; the backup-cleanup wedge and the account-disable gap are fixed, the attachment-redaction bypass is being fixed, and the import-staging accounting gap remains open (see [remaining work](REMAINING_WORK.md)).
 - Evidence-based platform statement: a Windows probe run shows install, build and the native file locks work, and that directory fsync is rejected there.
 
 ## Production exit gates
