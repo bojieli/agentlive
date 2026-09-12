@@ -24,7 +24,7 @@ import { canonicalJson } from "@agentlive/protocol";
 import type { NativeImportOptions } from "./import-native.js";
 import { type SourceCursor, readJsonlSource } from "./jsonl.js";
 import { localArtifactResolver } from "./local-artifacts.js";
-import { reportWhenBound } from "./bound-recording.js";
+import { reportWhenBound, settleBinding } from "./bound-recording.js";
 
 export interface NativePublishOptions extends NativeImportOptions {
   resumeImport?: boolean;
@@ -98,6 +98,7 @@ export async function publishNativeRecording(
   let running: Promise<void> | undefined;
   let recordingReport: ReturnType<typeof reportWhenBound> | undefined;
   let networkFailure: unknown;
+  let drained = false;
   try {
     await assertPublisherNotFinished(journal.directory);
     const baseDirectory = resolve(
@@ -235,10 +236,17 @@ export async function publishNativeRecording(
         });
       },
     });
+    drained = true;
   } catch (error) {
     if (networkFailure) throw networkFailure;
     if (!options.signal.aborted) throw error;
   } finally {
+    // A run that finished its source gracefully owes the caller a recording:
+    // capture no longer waits for the binding, so on a fast source `follow`
+    // can return while the creation request is still in flight. Keep the
+    // network alive until it settles, bounded so shutdown cannot hang.
+    if (drained && !networkFailure)
+      await settleBinding(journal, options.signal);
     controller.abort();
     await running;
     await recordingReport?.reported;

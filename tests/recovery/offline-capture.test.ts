@@ -516,3 +516,57 @@ it("reports a recording that binds while the publisher shuts down", async () => 
   report.flush();
   expect(reported).toHaveLength(1);
 });
+
+// The Ubuntu CI race: a drained source returns from `follow` before the
+// recording-creation request has come back, which is what a fast native agent
+// on a slow machine does. The caller must still learn its recording.
+it("reports the recording when creation completes after the source drains", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-slow-create-"));
+  roots.push(root);
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: "f".repeat(64),
+    port: 0,
+  });
+  servers.push(server);
+  const source = join(root, "session.jsonl");
+  await writeFile(
+    source,
+    JSON.stringify({
+      type: "user",
+      sessionId: "slow_create_session",
+      uuid: "only",
+      timestamp: "2026-09-01T00:00:00.000Z",
+      message: { content: "SLOW_CREATE" },
+    }) + "\n",
+  );
+  const native = globalThis.fetch;
+  globalThis.fetch = (async (input: any, init: any) => {
+    if (String(input).endsWith("/api/v1/streams") && init?.method === "POST")
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    return native(input, init);
+  }) as typeof fetch;
+  const ready: { streamId: string; revision: string }[] = [];
+  try {
+    await publishClaudeRecording({
+      sourcePath: source,
+      publisherRoot: join(root, "publisher"),
+      serverOrigin: server.url,
+      ownerCredential: "f".repeat(64),
+      title: "Slow creation",
+      visibility: "private",
+      signal: AbortSignal.timeout(25000),
+      finishRequested: () => true,
+      onReady: (recording) => ready.push(recording),
+    });
+  } finally {
+    globalThis.fetch = native;
+  }
+  expect(ready).toHaveLength(1);
+  const session = await server.store.get(ready[0]!.streamId);
+  try {
+    expect(session.info.revision).toBe(ready[0]!.revision);
+  } finally {
+    server.store.release(session);
+  }
+});

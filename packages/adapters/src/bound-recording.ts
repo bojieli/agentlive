@@ -9,6 +9,20 @@ import type { PublisherJournal } from "@agentlive/publisher";
  * things that genuinely address the remote recording — `onReady`, attachment
  * uploads — wait here.
  */
+/**
+ * Wait for a binding that is expected to arrive, bounded so a shutdown can
+ * never hang: the caller's signal still cancels, and an unreachable server
+ * gives up after `timeoutMs` leaving the captured events for the next attach.
+ */
+export async function settleBinding(
+  journal: PublisherJournal,
+  signal: AbortSignal,
+  timeoutMs = 30_000,
+): Promise<void> {
+  if (journal.identity.streamId) return;
+  const deadline = AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]);
+  await whenBound(journal, deadline).catch(() => {});
+}
 export async function whenBound(
   journal: PublisherJournal,
   signal: AbortSignal,
