@@ -97,13 +97,34 @@ it("accepts readable-recording reports, protects operator details and preserves 
         })
       ).status,
     ).toBe(400);
-    for (let i = 0; i < 32; i++)
+    // One recording's reports are bounded on their own, so a flood on a public
+    // recording cannot consume the whole intake.
+    for (let i = 0; i < 15; i++)
       expect(
         (await submit(ids[0]!, { ...input, operationId: `limit-${i}` })).status,
       ).toBe(201);
     expect(
       (await submit(ids[0]!, { ...input, operationId: "excess" })).status,
     ).toBe(503);
+    // Another recording still accepts reports while that one waits for review.
+    expect(
+      (
+        await submit(
+          ids[1]!,
+          { ...input, operationId: "other-recording" },
+          writer,
+        )
+      ).status,
+    ).toBe(201);
+    // The per-minute intake bound still applies across recordings.
+    let accepted = 0;
+    for (let i = 0; i < 32; i++)
+      if (
+        (await submit(ids[1]!, { ...input, operationId: `rate-${i}` }, writer))
+          .status === 201
+      )
+        accepted++;
+    expect(accepted).toBeLessThan(32);
     expect(await (await submit(ids[0]!, input)).json()).toEqual(receipt);
   } finally {
     await server.close();

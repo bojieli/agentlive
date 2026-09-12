@@ -44,7 +44,7 @@ The 2026-09-12 review probed the authorization layer route by route and found it
 - Redaction is exact-substring over the named values, so encoded (base64, percent, JSON-escaped), case-shifted, split or derived copies of a secret survive, and a secret inside a compressed or nested container is not reached. Scope — which artifact roots a publisher allows — is the primary control, not filtering.
 - Spool directories that already captured artifacts keep the pre-2026-09-12 redaction rule so their retries stay idempotent; only new bindings get byte-based redaction. Consider an explicit migration for long-lived publishers.
 - Every capture is now checked against the publisher's own dictionary before it is written, over the whole encoded event rather than the fields an adapter treats as text, and a hit stops the publisher. That enforces the exact-value rule below the adapters; it does not make a field-by-field audit unnecessary for encoded, split or derived copies, which the dictionary cannot match.
-- Watch-ticket and abuse-report tables are fillable by anonymous viewers of public recordings (bounded and self-healing, but they can block new tickets or reports meanwhile).
+- Watch-ticket and abuse-report intake are now partitioned so one public recording's flood cannot block the others: tickets recycle per recording (and anonymous requests hold at most half the table) instead of refusing everyone, and reports are bounded per recording with reviewed ones never occupying intake capacity. A flood still costs the recording it targets its own share, and anonymous requests behind one proxy are not told apart.
 
 ## 4. Publisher durability and spool lifecycle — M1/M2
 

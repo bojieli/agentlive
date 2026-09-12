@@ -322,15 +322,19 @@ export async function startServer(options: ServerOptions) {
   const requests = new Set<Promise<void>>();
   const connections = new Set<() => Promise<void>>();
   const connectionErrors: unknown[] = [];
-  const tickets = new Map<
-    string,
-    {
-      streamId: string;
-      expires: number;
-      grantToken?: string;
-      accountCookie?: string;
-    }
-  >();
+  const TICKETS_TOTAL = 1024;
+  /** No one recording may hold more than this many pending tickets. */
+  const TICKETS_PER_STREAM = 64;
+  /** Nor may unauthenticated requests hold more than half the table. */
+  const TICKETS_ANONYMOUS = TICKETS_TOTAL / 2;
+  interface WatchTicket {
+    streamId: string;
+    expires: number;
+    anonymous?: true;
+    grantToken?: string;
+    accountCookie?: string;
+  }
+  const tickets = new Map<string, WatchTicket>();
   const readable = (
     session: RecordingSession,
     secret: string,
@@ -1669,15 +1673,36 @@ export async function startServer(options: ServerOptions) {
     readable(session, token(c.req.header("authorization")), c.get("accountId"));
     for (const [key, ticket] of tickets)
       if (ticket.expires < Date.now()) tickets.delete(key);
-    if (tickets.size >= 1024)
-      throw new ProtocolError(
-        "retry_later",
-        "Too many pending viewing tickets",
-      );
+    // Anyone who can read a public recording can ask for a ticket, so the table is
+    // shared with strangers. Rather than refuse everyone once it is full, each
+    // request recycles its own share: the oldest ticket for this recording, then
+    // the oldest anonymous one, then the oldest of all. Tickets live 60 seconds
+    // and are used within one, so recycling costs a retry, not a lost viewer.
+    const anonymous =
+      !token(c.req.header("authorization")) && !c.get("accountId");
+    const evict = (match: (entry: WatchTicket) => boolean) => {
+      for (const [key, entry] of tickets)
+        if (match(entry)) {
+          tickets.delete(key);
+          return;
+        }
+    };
+    let forStream = 0,
+      anonymousCount = 0;
+    for (const entry of tickets.values()) {
+      if (entry.streamId === session.info.id) forStream++;
+      if (entry.anonymous) anonymousCount++;
+    }
+    if (forStream >= TICKETS_PER_STREAM)
+      evict((entry) => entry.streamId === session.info.id);
+    else if (anonymous && anonymousCount >= TICKETS_ANONYMOUS)
+      evict((entry) => entry.anonymous === true);
+    if (tickets.size >= TICKETS_TOTAL) evict(() => true);
     const ticket = randomBytes(32).toString("hex");
     tickets.set(ticket, {
       streamId: session.info.id,
       expires: Date.now() + 60_000,
+      ...(anonymous ? { anonymous: true as const } : {}),
       ...(c.get("accountId") && !c.req.header("authorization")
         ? { accountCookie: getCookie(c, "__Host-agentlive-session")! }
         : {}),

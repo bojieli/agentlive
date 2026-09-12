@@ -39,6 +39,16 @@ const reportSchema = reportInputSchema.extend({
   resolvedAt: z.number().int().nonnegative().safe().optional(),
 });
 type Report = z.infer<typeof reportSchema>;
+/**
+ * Anyone who can read a public recording can file a report, so the intake is
+ * shared by strangers. These bounds keep one recording's flood from consuming
+ * the whole queue, and keep already reviewed reports from consuming any of it.
+ */
+const OPEN_LIMIT = 500;
+const OPEN_PER_STREAM = 16;
+const LEDGER_LIMIT = 1000;
+const resolved = (report: Report) =>
+  report.status === "dismissed" || report.status === "removed";
 /** Private operator ledger. Caller owns the exclusive server lock for its lifetime. */
 export class Reports {
   private entries = new Map<string, Report>();
@@ -47,6 +57,8 @@ export class Reports {
   private failed = false;
   private window = 0;
   private submitted = 0;
+  /** Reviewed reports dropped to keep the ledger bounded; reported to operators. */
+  private dropped = 0;
   /** Online backup admission gate for ledger mutations. */
   private barrier: WriteBarrier | undefined;
   private constructor(private readonly path: string) {}
@@ -85,7 +97,8 @@ export class Reports {
       const data = z
         .strictObject({
           version: z.literal(1),
-          reports: z.array(reportSchema).max(1000),
+          reports: z.array(reportSchema).max(LEDGER_LIMIT),
+          droppedReviewed: z.number().int().nonnegative().safe().optional(),
         })
         .parse(
           JSON.parse(
@@ -104,6 +117,7 @@ export class Reports {
         operations.add(report.operationId);
         reports.entries.set(report.id, report);
       }
+      reports.dropped = data.droppedReviewed ?? 0;
       return reports;
     } finally {
       await file.close();
@@ -134,7 +148,11 @@ export class Reports {
     return mutation && this.barrier ? this.barrier.shared(enqueue) : enqueue();
   }
   private async save(next: Map<string, Report>) {
-    const saved = { version: 1, reports: [...next.values()] };
+    const saved = {
+      version: 1,
+      reports: [...next.values()],
+      ...(this.dropped ? { droppedReviewed: this.dropped } : {}),
+    };
     if (Buffer.byteLength(JSON.stringify(saved)) > 8 * 1024 * 1024)
       throw new ProtocolError("retry_later", "Report ledger capacity reached");
     try {
@@ -188,20 +206,45 @@ export class Reports {
         this.window = now;
         this.submitted = 0;
       }
-      if (this.submitted >= 32 || this.entries.size >= 1000)
+      const open = [...this.entries.values()].filter((row) => !resolved(row));
+      if (
+        open.filter((row) => row.streamId === streamId).length >=
+        OPEN_PER_STREAM
+      )
+        throw new ProtocolError(
+          "retry_later",
+          "Reports already awaiting review for this recording",
+        );
+      if (this.submitted >= 32 || open.length >= OPEN_LIMIT)
         throw new ProtocolError(
           "retry_later",
           "Report intake capacity reached",
         );
       this.submitted++;
+      const next = new Map(this.entries);
+      // Reviewed reports are kept as the operator's record, but they never keep a
+      // new report out: the oldest of them make room, and the count of dropped
+      // ones is durable so the trim is visible.
+      let dropped = 0;
+      for (const row of next.values()) {
+        if (next.size < LEDGER_LIMIT) break;
+        if (!resolved(row)) continue;
+        next.delete(row.id);
+        dropped++;
+      }
+      if (next.size >= LEDGER_LIMIT)
+        throw new ProtocolError(
+          "retry_later",
+          "Report intake capacity reached",
+        );
       const report: Report = {
         ...identity,
         id: randomUUID(),
         createdAt: now,
         status: "open",
       };
-      const next = new Map(this.entries);
       next.set(report.id, report);
+      this.dropped += dropped;
       await this.save(next);
       return { reportId: report.id, receivedAt: now };
     });
@@ -332,6 +375,8 @@ export class Reports {
       return {
         reports: structuredClone(rows),
         nextAfter: more ? rows.at(-1)!.id : null,
+        // Visible on every page so a trimmed ledger is never silent.
+        ...(this.dropped ? { droppedReviewed: this.dropped } : {}),
       };
     }, false);
   }

@@ -241,3 +241,62 @@ it("cancels an active response source and prevents further bytes on revocation",
     await rm(root, { recursive: true, force: true });
   }
 });
+
+it("keeps one recording's ticket flood from starving the others", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-ticket-share-"));
+  const owner = "5".repeat(64);
+  const server = await startServer({
+    directory: root,
+    ownerSecret: owner,
+    port: 0,
+  });
+  try {
+    const ids: string[] = [];
+    for (const requestId of ["flooded", "quiet"]) {
+      const session = await server.store.create({
+        ownerId: "local",
+        requestId,
+        requestedAt: new Date().toISOString(),
+        publisherId: "pub",
+        producerEpoch: "epoch",
+        writeSecret: "6".repeat(64),
+        title: "Ticket fixture",
+        visibility: "public",
+      });
+      ids.push(session.info.id);
+      server.store.release(session);
+    }
+    const ticket = (id: string) =>
+      fetch(`${server.url}/api/v1/streams/${id}/watch-ticket`, {
+        method: "POST",
+      });
+    // Far more anonymous requests for one recording than the whole table holds.
+    const flood: string[] = [];
+    for (let i = 0; i < 1200; i++) {
+      const response = await ticket(ids[0]!);
+      expect(response.status).toBe(200);
+      flood.push(((await response.json()) as { ticket: string }).ticket);
+    }
+    // The other recording is unaffected, and its ticket still works.
+    const quiet = await ticket(ids[1]!);
+    expect(quiet.status).toBe(200);
+    const value = ((await quiet.json()) as { ticket: string }).ticket;
+    const socket = new WebSocket(
+      `${server.url.replace("http", "ws")}/api/v1/watch?ticket=${value}`,
+    );
+    try {
+      await new Promise<void>((done, fail) => {
+        socket.once("open", () => done());
+        socket.once("error", fail);
+      });
+      expect(socket.readyState).toBe(1);
+    } finally {
+      socket.close();
+    }
+    // The flood recycled its own share rather than the whole table.
+    expect(flood.length).toBe(1200);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 60000);
