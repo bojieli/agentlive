@@ -57,6 +57,11 @@ The 2026-09-12 review probed the authorization layer route by route and found it
 
 ## 5. Multi-session server and access lifecycle — M2/M5/M6
 
+- Past its fan-out knee (~51,000–60,000 deliveries/s measured) the server queues rather than sheds: latency rises to seconds with no capacity error, no socket close and no reconnect, so a saturated server looks healthy while viewers fall behind. Decide and implement an explicit overload signal.
+- Automatic snapshot builds hit their 30-second deadline under that saturation, so snapshot freshness degrades exactly when a recording is busiest; only a metrics counter reports it.
+- Durable capture serializes with the delivery loop's read of the same journal and fsyncs per capture, which caps a publisher at ~15 captures/s when many share a volume. Batching hides it; a fast native source would not.
+- An event whose reducer preconditions are unmet (an append before its start) is accepted at publish and rejected only by the snapshot builder, repeatedly and silently except for a counter.
+
 - Retention, deletion tombstones, read/export pins, server content collection and operational quotas.
 - Scale historical indexes and session recovery with measured heap/descriptor/socket limits.
 - Safe operational metrics and concurrent load/failure testing.

@@ -65,6 +65,7 @@ No gate is marked passed merely because part of its implementation exists.
 
 ## Known limits
 
+- **Concurrency.** Measured on loopback: the plan's p95 ≤ 300 ms target holds for a single publisher (68 ms) but not for ten (348–436 ms); the server's fan-out knee is 51,000–60,000 deliveries/s, and past it it queues rather than sheds. See [limits](docs/limits.md#measured-concurrent-load).
 - **Capacity.** The synthetic 500,000-event, eight-hour memory-backend workload now completes in 94 s with exact text at the measured seeks (100k: 11.6 s, about 9× faster than before), but a seek far from any retained landmark can take an estimated 13 s, and mixed payloads, the IndexedDB and server-snapshot paths and browser heap limits at that scale are unmeasured. See [performance](docs/performance/README.md#generational-memory-collection-and-500k-memory-playback-2026-09-11).
 - **Fidelity.** Text appears as native records or snapshots are written, not token by token. Unsupported native objects are explicit gaps, not rendered content.
 - **Platforms.** Linux and macOS only. A Windows probe run now establishes that install, build and the native file-lock binding work, but 95 of 142 test files fail, nearly all because Windows rejects the directory fsync that every durable write performs; see [compatibility](docs/compatibility.md#platforms). WSL is untested. Browser evidence is headless Chrome at desktop and mobile viewport sizes, not physical devices or other engines.

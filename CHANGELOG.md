@@ -44,6 +44,8 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 
 ### Changed
 
+- Published measured concurrent-load numbers: latency percentiles, the server's fan-out knee, history and attachment throughput, slow-viewer behaviour and the enforced ceilings.
+
 - The standalone package is named `agentlive` and licensed under MIT.
 - Documentation reorganized: a concise README, a detailed [usage guide](docs/usage.md), a [compatibility matrix](docs/compatibility.md), [published limits and measured performance](docs/limits.md), and contribution and security policies. Historical status logs moved to `docs/history/`, and `pnpm check` now validates every documentation link.
 - A tag-triggered release workflow builds a publishable manifest (`build-package.mjs --release`) and publishes `agentlive` to npm with provenance; see [RELEASING.md](RELEASING.md).
