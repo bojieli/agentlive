@@ -87,7 +87,7 @@ it("redacts secrets across read boundaries and verifies historical raw hashes", 
     }),
   ).rejects.toThrow(/hash does not match/);
 });
-it("rejects escaped roots, malformed text and missing files; captures empty files", async () => {
+it("rejects escaped roots and missing files; captures undecodable and empty files", async () => {
   const { spool, input, root } = await setup();
   const outside = join(root, "outside");
   await writeFile(outside, "private");
@@ -95,8 +95,16 @@ it("rejects escaped roots, malformed text and missing files; captures empty file
   await expect(spool.capture(input)).rejects.toThrow(/outside configured/);
   await rm(input.path);
   await expect(spool.capture(input)).rejects.toThrow();
+  // Declared text that does not decode is stored as bytes rather than failing.
   await writeFile(input.path, Buffer.from([0xff]));
-  await expect(spool.capture(input)).rejects.toThrow();
+  const undecodable = await spool.capture({ ...input, sourceKey: "bytes" });
+  expect(undecodable.byteSize).toBe(1);
+  const stored = await spool.openFile(undecodable);
+  try {
+    expect(await stored.readFile()).toEqual(Buffer.from([0xff]));
+  } finally {
+    await stored.close();
+  }
   await writeFile(input.path, "");
   const empty = await spool.capture(input);
   expect(empty.byteSize).toBe(0);

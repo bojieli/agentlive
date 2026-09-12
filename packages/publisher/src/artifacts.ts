@@ -17,9 +17,85 @@ import {
   FileLock,
   syncDirectory,
 } from "@agentlive/storage";
-import { StreamingRedactor } from "./filter.js";
+import { StreamingByteRedactor, StreamingRedactor } from "./filter.js";
 
 export type CapturedAttachment = z.infer<typeof attachmentSchema>;
+/**
+ * Which rule decides whether captured bytes are filtered for known secrets.
+ *
+ * 1. `declared-text` (historical): only captures whose caller declared `text`
+ *    were filtered, so an unrecognised file extension or a transcript-supplied
+ *    media type could store a secret verbatim.
+ * 2. `utf8-sniff` (current): the captured bytes themselves decide. Bytes that
+ *    decode as strict UTF-8 are filtered as text; bytes that do not are scanned
+ *    for the UTF-8 encoding of each secret at the byte level. The declared
+ *    `text` flag is not consulted.
+ *
+ * The value is pinned in the spool directory on first open. A spool that
+ * already holds captures keeps rule 1, so retries of an existing binding stay
+ * byte-identical; every new spool pins rule 2.
+ */
+export type ArtifactRedactionPolicy = 1 | 2;
+export const CURRENT_ARTIFACT_REDACTION: ArtifactRedactionPolicy = 2;
+const policySchema = z.strictObject({
+  version: z.literal(1),
+  artifactRedaction: z.union([z.literal(1), z.literal(2)]),
+});
+const EMPTY = Buffer.alloc(0);
+interface ChunkFilter {
+  push(chunk: Uint8Array): Uint8Array;
+  finish(): Uint8Array;
+}
+const passthroughFilter = (): ChunkFilter => ({
+  push: (chunk) => chunk,
+  finish: () => EMPTY,
+});
+/** `ignoreBOM` stays false for rule 1, which dropped a leading byte-order mark. */
+const textFilter = (
+  secrets: readonly string[],
+  ignoreBOM: boolean,
+): ChunkFilter => {
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM });
+  const redactor = new StreamingRedactor(secrets);
+  return {
+    push: (chunk) =>
+      Buffer.from(redactor.push(decoder.decode(chunk, { stream: true }))),
+    finish: () =>
+      Buffer.from(redactor.push(decoder.decode()) + redactor.finish()),
+  };
+};
+const byteFilter = (secrets: readonly string[]): ChunkFilter => {
+  const redactor = new StreamingByteRedactor(secrets);
+  return {
+    push: (chunk) => redactor.push(chunk),
+    finish: () => redactor.finish(),
+  };
+};
+/** True when the whole byte sequence is strict UTF-8; consumed chunk by chunk. */
+class Utf8Probe {
+  private readonly decoder = new TextDecoder("utf-8", {
+    fatal: true,
+    ignoreBOM: true,
+  });
+  private valid = true;
+  push(chunk: Uint8Array): void {
+    if (!this.valid) return;
+    try {
+      this.decoder.decode(chunk, { stream: true });
+    } catch {
+      this.valid = false;
+    }
+  }
+  finish(): boolean {
+    if (!this.valid) return false;
+    try {
+      this.decoder.decode();
+    } catch {
+      this.valid = false;
+    }
+    return this.valid;
+  }
+}
 export interface ArtifactCapture {
   artifactId: string;
   sourceKey: string;
@@ -55,6 +131,8 @@ export class ArtifactSpool {
     private readonly secrets: string[],
     private readonly lock: FileLock,
     private readonly blobs: BlobStore,
+    /** Pinned for the life of the spool directory; see ArtifactRedactionPolicy. */
+    readonly redaction: ArtifactRedactionPolicy,
   ) {}
   static async open(
     directory: string,
@@ -62,6 +140,8 @@ export class ArtifactSpool {
       allowedRoots: readonly string[];
       secrets?: readonly string[];
       maxBlobBytes?: number;
+      /** Rejected when it contradicts an already pinned policy. */
+      redaction?: ArtifactRedactionPolicy;
     },
   ): Promise<ArtifactSpool> {
     const roots = await Promise.all(
@@ -69,11 +149,48 @@ export class ArtifactSpool {
     );
     const secrets = [...new Set(options.secrets ?? [])].sort();
     new StreamingRedactor(secrets);
+    new StreamingByteRedactor(secrets);
     const lock = await FileLock.acquire(join(directory, ".lock"));
     try {
+      const policyPath = join(directory, "policy.json");
+      let redaction: ArtifactRedactionPolicy | undefined;
+      try {
+        redaction = policySchema.parse(
+          JSON.parse(await readFile(policyPath, "utf8")),
+        ).artifactRedaction;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (
+        redaction !== undefined &&
+        options.redaction !== undefined &&
+        options.redaction !== redaction
+      )
+        throw new ProtocolError(
+          "precondition_failed",
+          "Artifact capture redaction policy changed; explicit migration is required",
+        );
+      if (redaction === undefined) {
+        // Bytes already captured here were produced under the historical rule;
+        // changing it would change their hashes under a pinned request identity.
+        let captured: string[] = [];
+        try {
+          captured = await readdir(join(directory, "references"));
+        } catch (missing) {
+          if ((missing as NodeJS.ErrnoException).code !== "ENOENT")
+            throw missing;
+        }
+        redaction =
+          options.redaction ??
+          (captured.length ? 1 : CURRENT_ARTIFACT_REDACTION);
+      }
       await mkdir(join(directory, "references"), {
         recursive: true,
         mode: 0o700,
+      });
+      await atomicJson(policyPath, {
+        version: 1,
+        artifactRedaction: redaction,
       });
       await syncDirectory(directory);
       const blobs = await BlobStore.open(
@@ -82,7 +199,14 @@ export class ArtifactSpool {
           ? {}
           : { maxBlobBytes: options.maxBlobBytes },
       );
-      return new ArtifactSpool(directory, roots, secrets, lock, blobs);
+      return new ArtifactSpool(
+        directory,
+        roots,
+        secrets,
+        lock,
+        blobs,
+        redaction,
+      );
     } catch (error) {
       await lock.release();
       throw error;
@@ -98,6 +222,46 @@ export class ArtifactSpool {
     const operation = this.queue.then(() => this.captureLocked(copy, signal));
     this.queue = operation.catch(() => {});
     return operation;
+  }
+  /**
+   * Rule 2 decides from the bytes: anything that decodes as strict UTF-8 is
+   * filtered as text, and anything else is scanned for the UTF-8 encoding of
+   * each secret. Rule 1 consults only the caller's declaration, and still fails
+   * the capture when bytes declared as text are not decodable.
+   */
+  private filterBytes(declaredText: boolean, bytes: Buffer): Buffer {
+    if (this.redaction === 1) {
+      if (!declaredText) return bytes;
+      const redactor = new StreamingRedactor(this.secrets);
+      return Buffer.from(
+        redactor.push(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) +
+          redactor.finish(),
+      );
+    }
+    if (!this.secrets.length) return bytes;
+    let text: string | undefined;
+    try {
+      text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+        bytes,
+      );
+    } catch {
+      text = undefined;
+    }
+    if (text !== undefined) {
+      const redactor = new StreamingRedactor(this.secrets);
+      return Buffer.from(redactor.push(text) + redactor.finish());
+    }
+    const redactor = new StreamingByteRedactor(this.secrets);
+    return Buffer.concat([redactor.push(bytes), redactor.finish()]);
+  }
+  /** Chunked form of the same rule; `utf8` comes from a probe of every byte. */
+  private streamFilter(declaredText: boolean, utf8: boolean): ChunkFilter {
+    if (this.redaction === 1)
+      return declaredText
+        ? textFilter(this.secrets, false)
+        : passthroughFilter();
+    if (!this.secrets.length) return passthroughFilter();
+    return utf8 ? textFilter(this.secrets, true) : byteFilter(this.secrets);
   }
   private queuedInlineBytes = 0;
   async captureInline(
@@ -130,6 +294,9 @@ export class ArtifactSpool {
           sourceHash,
           filter: hash(canonicalJson(this.secrets)),
           encoding: "inline-v1",
+          // Absent for rule 1, so bindings pinned before the sniffing rule keep
+          // their request identity and resolve to their original bytes.
+          ...(this.redaction === 1 ? {} : { redaction: "utf8-sniff-v2" }),
         }),
       );
       const referenceDirectory = join(
@@ -158,13 +325,7 @@ export class ArtifactSpool {
         await this.blobs.verify(existing.attachment);
         return existing.attachment;
       }
-      const redactor = new StreamingRedactor(this.secrets);
-      const text = copy.text
-        ? new TextDecoder("utf-8", { fatal: true }).decode(bytes)
-        : "";
-      const filtered = copy.text
-        ? Buffer.from(redactor.push(text) + redactor.finish())
-        : bytes;
+      const filtered = this.filterBytes(copy.text, bytes);
       const descriptor = {
         hash: hash(filtered),
         byteSize: filtered.byteLength,
@@ -231,6 +392,9 @@ export class ArtifactSpool {
         path: sourcePath,
         roots: this.roots,
         filter: hash(canonicalJson(this.secrets)),
+        // Absent for rule 1, so bindings pinned before the sniffing rule keep
+        // their request identity and resolve to their original bytes.
+        ...(this.redaction === 1 ? {} : { redaction: "utf8-sniff-v2" }),
       }),
     );
     const referenceDirectory = join(
@@ -286,10 +450,45 @@ export class ArtifactSpool {
           "invalid_request",
           "Artifact must be a regular file within the capture size limit",
         );
-      const secrets = this.secrets;
+      // The source-hash pass also decides text vs. binary, so sniffing the
+      // bytes costs no extra read; a binary file fails the probe at its first
+      // invalid byte and the rest of the pass only hashes.
+      const raw = createHash("sha256");
+      const probe = new Utf8Probe();
+      for (let position = 0; position < Number(before.size);) {
+        signal?.throwIfAborted();
+        const buffer = Buffer.alloc(
+          Math.min(65536, Number(before.size) - position),
+        );
+        const { bytesRead } = await file.read(
+          buffer,
+          0,
+          buffer.length,
+          position,
+        );
+        if (!bytesRead)
+          throw new ProtocolError(
+            "precondition_failed",
+            "Artifact changed during capture",
+          );
+        const chunk = buffer.subarray(0, bytesRead);
+        raw.update(chunk);
+        probe.push(chunk);
+        position += bytesRead;
+      }
+      const utf8 = probe.finish();
+      const sourceHash = raw.digest("hex");
+      if (
+        input.expectedSourceHash !== undefined &&
+        sourceHash !== input.expectedSourceHash
+      )
+        throw new ProtocolError(
+          "precondition_failed",
+          "Historical artifact hash does not match available bytes",
+        );
+      const makeFilter = () => this.streamFilter(input.text, utf8);
       async function* bytes(): AsyncGenerator<Uint8Array> {
-        const decoder = new TextDecoder("utf-8", { fatal: true });
-        const filter = new StreamingRedactor(secrets);
+        const filter = makeFilter();
         let position = 0;
         while (position < Number(before.size)) {
           signal?.throwIfAborted();
@@ -308,43 +507,12 @@ export class ArtifactSpool {
               "Artifact changed during capture",
             );
           position += bytesRead;
-          const chunk = buffer.subarray(0, bytesRead);
-          yield input.text
-            ? Buffer.from(filter.push(decoder.decode(chunk, { stream: true })))
-            : chunk;
+          const filtered = filter.push(buffer.subarray(0, bytesRead));
+          if (filtered.byteLength) yield filtered;
         }
-        if (input.text)
-          yield Buffer.from(filter.push(decoder.decode()) + filter.finish());
+        const tail = filter.finish();
+        if (tail.byteLength) yield tail;
       }
-      const raw = createHash("sha256");
-      for (let position = 0; position < Number(before.size);) {
-        signal?.throwIfAborted();
-        const buffer = Buffer.alloc(
-          Math.min(65536, Number(before.size) - position),
-        );
-        const { bytesRead } = await file.read(
-          buffer,
-          0,
-          buffer.length,
-          position,
-        );
-        if (!bytesRead)
-          throw new ProtocolError(
-            "precondition_failed",
-            "Artifact changed during capture",
-          );
-        raw.update(buffer.subarray(0, bytesRead));
-        position += bytesRead;
-      }
-      const sourceHash = raw.digest("hex");
-      if (
-        input.expectedSourceHash !== undefined &&
-        sourceHash !== input.expectedSourceHash
-      )
-        throw new ProtocolError(
-          "precondition_failed",
-          "Historical artifact hash does not match available bytes",
-        );
       const digest = createHash("sha256");
       let byteSize = 0;
       for await (const chunk of bytes()) {

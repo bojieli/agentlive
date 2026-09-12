@@ -1,6 +1,8 @@
-export { StreamingRedactor } from "./filter.js";
+export { StreamingRedactor, StreamingByteRedactor } from "./filter.js";
 export {
   ArtifactSpool,
+  CURRENT_ARTIFACT_REDACTION,
+  type ArtifactRedactionPolicy,
   type ArtifactCapture,
   type InlineArtifactCapture,
   type CapturedAttachment,
