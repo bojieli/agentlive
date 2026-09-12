@@ -42,7 +42,7 @@ import {
   mergeKeys,
   parseManifest,
   readKeys,
-  searchKeys,
+  VerifiedKeyIndexes,
   segmentFile,
   segmentKeysFile,
   sourceKeyHash,
@@ -272,6 +272,7 @@ export class PublisherJournal {
   private closing = false;
   private failed = false;
   private readonly sourceBloom = new Uint32Array(BLOOM_WORDS);
+  private readonly keyIndexes = new VerifiedKeyIndexes();
   private adapterState: unknown = null;
   private manifest: JournalManifest | null = null;
   private readonly handles = new Map<number, Promise<OpenSegment>>();
@@ -899,18 +900,20 @@ export class PublisherJournal {
     }
     for (const segment of [...this.segments].reverse()) {
       if (!segment.sealed) continue;
-      const hit = await searchKeys(
+      const hit = await this.keyIndexes.search(
         this.path(segmentKeysFile(segment.id)),
         segment.sealed.keys,
+        segment.sealed.keysHash,
         key,
       );
       if (hit) return { entry: hit, segment };
     }
     const compacted = this.compaction;
     if (compacted) {
-      const hit = await searchKeys(
+      const hit = await this.keyIndexes.search(
         this.path(compactedKeysFile(compacted.generation)),
         compacted.keys,
+        compacted.keysHash,
         key,
       );
       if (hit) return { entry: hit, segment: null };

@@ -136,6 +136,37 @@ export function decodeKey(bytes: Buffer, offset = 0): KeyEntry {
 }
 export const keysDigest = (bytes: Uint8Array) => sha256(bytes).toString("hex");
 
+/**
+ * Sealed key files are immutable, so their checksum is verified once per file and
+ * then trusted for the life of the process. Without this a binary search could
+ * read a bit-rotted entry — same size, so no length check catches it — and miss a
+ * dedup, capturing one source record twice. Verification is per file, not per
+ * lookup, and the source bloom filter keeps most lookups from reaching a file at
+ * all. A file that fails stays failed for every later lookup.
+ */
+export class VerifiedKeyIndexes {
+  private readonly checked = new Map<string, Promise<void>>();
+  async search(
+    path: string,
+    entries: number,
+    expectedHash: string,
+    key: Buffer,
+  ): Promise<KeyEntry | undefined> {
+    if (!entries) return undefined;
+    const cacheKey = `${expectedHash}\u0000${path}`;
+    let check = this.checked.get(cacheKey);
+    if (!check) {
+      check = (async () => {
+        for await (const _ of readKeys(path, entries, expectedHash)) void _;
+      })();
+      check.catch(() => {}); // The awaiting caller reports it.
+      this.checked.set(cacheKey, check);
+    }
+    await check;
+    return searchKeys(path, entries, key);
+  }
+}
+
 /** Binary search in an immutable sorted key file without loading it. */
 export async function searchKeys(
   path: string,

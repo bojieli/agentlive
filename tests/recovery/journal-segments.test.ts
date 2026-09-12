@@ -411,3 +411,51 @@ it("uses the documented live retention budget for long-running file publishers",
   expect(LIVE_JOURNAL_RETENTION.segmentBytes).toBe(8 * 1024 * 1024);
   expect(LIVE_JOURNAL_RETENTION.retainAcknowledgedBytes).toBe(32 * 1024 * 1024);
 });
+
+it("refuses a sealed source-key index whose bytes rotted without changing size", async () => {
+  const path = await root();
+  let journal = await opened(path);
+  // Enough records to seal at least one segment, so a sealed key index exists.
+  for (let n = 1; n <= 40; n++) await journal.capture(capture(n));
+  const directory = journal.directory;
+  await journal.close();
+  open.length = 0;
+  const sealed = (await files(directory)).filter((name) =>
+    name.endsWith(".keys"),
+  );
+  expect(sealed.length).toBeGreaterThan(0);
+  const target = join(directory, sealed[0]!);
+  const original = await readFile(target);
+
+  // The clean index deduplicates a repeated source record: no second capture.
+  journal = await opened(path);
+  const before = journal.capturedThrough;
+  await journal.capture(capture(1));
+  expect(journal.capturedThrough).toBe(before);
+  await journal.close();
+  open.length = 0;
+
+  // Flip one bit of a content hash: same length, so no size check sees it, and a
+  // binary search would happily return the rotted entry.
+  const rotted = Buffer.from(original);
+  rotted[rotted.length - 1] ^= 0x01;
+  expect(rotted.length).toBe(original.length);
+  await writeFile(target, rotted);
+  journal = await opened(path);
+  await expect(journal.capture(capture(1))).rejects.toMatchObject({
+    code: "corrupt_storage",
+  });
+  // It stays refused rather than succeeding on a later attempt.
+  await expect(journal.capture(capture(1))).rejects.toMatchObject({
+    code: "corrupt_storage",
+  });
+  await journal.close();
+  open.length = 0;
+
+  // Restoring the file restores dedup.
+  await writeFile(target, original);
+  journal = await opened(path);
+  const after = journal.capturedThrough;
+  await journal.capture(capture(1));
+  expect(journal.capturedThrough).toBe(after);
+});
