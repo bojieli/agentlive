@@ -898,3 +898,124 @@ it("freezes Claude family children at complete lines and continues them live", a
     await rm(root, { recursive: true, force: true });
   }
 }, 120000);
+
+it("abandons a family live migration whose child source is gone but root is not", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-live-migrate-child-"));
+  const server = await startServer({
+    directory: join(root, "server"),
+    ownerSecret: credential,
+    port: 0,
+  });
+  try {
+    const native = fixture("claude", root);
+    const childPath = join(
+      native.native,
+      "livemig",
+      "subagents",
+      "agent-worker.jsonl",
+    );
+    const childRow = (id: string, text: string) =>
+      JSON.stringify({
+        type: "user",
+        sessionId: "livemig",
+        uuid: id,
+        agentId: "worker",
+        isSidechain: true,
+        timestamp: "2026-09-01T00:00:02Z",
+        message: { content: text },
+      }) + "\n";
+    await mkdir(dirname(childPath), { recursive: true });
+    await writeFile(native.source, native.row("main-1", "main first"));
+    await writeFile(childPath, childRow("child-1", `child ${SECRET} one`));
+    const state = ["--state-dir", root];
+    const publishArgs = [
+      "--agent",
+      "claude",
+      "--source",
+      native.source,
+      "--include-children",
+      "--server",
+      server.url,
+      ...state,
+    ];
+    await publishUntil(publishArgs, baseEnv, (events) =>
+      waitFor(async () => {
+        const publishing = events.find((event) => event.event === "publishing");
+        return (
+          publishing !== undefined &&
+          JSON.stringify(
+            (await history(server, publishing.streamId as string)).events,
+          ).includes("child ")
+        );
+      }, "child capture"),
+    );
+    await settle(state, publishArgs, baseEnv);
+    const binding = (await run(["status", ...state])).bindings[0];
+    const sourceStreamId = binding.streamId as string;
+    const inspection = await run([
+      "inspect-migration",
+      "--source",
+      binding.bindingDirectory,
+    ]);
+    const before = await snapshotFiles(binding.bindingDirectory);
+    await expect(
+      migrateLiveBinding({
+        directory: binding.bindingDirectory,
+        nativeSource: native.source,
+        operationId: "child-abandon",
+        expectedManifestHash: inspection.published.manifestHash,
+        disposition: "retain",
+        ownerCredential: credential,
+        secrets: newSecrets,
+        signal: AbortSignal.timeout(60000),
+        onPhase: (phase) => {
+          if (phase === "intent") throw new Error("died after intent");
+        },
+      }),
+    ).rejects.toThrow("died after intent");
+    const args = [
+      "migrate-live",
+      "--abandon",
+      "--source",
+      binding.bindingDirectory,
+      "--native-source",
+      native.source,
+      "--operation-id",
+      "child-abandon",
+      "--expected-manifest-hash",
+      inspection.published.manifestHash,
+      "--old-recording",
+      "retain",
+      ...state,
+    ];
+    // The whole family still reads back, so the operation is still completable.
+    await fails(args, "can still complete");
+    // Losing one pinned child kills it just as surely as losing the root: a retry
+    // cannot freeze the family again, and the root is untouched.
+    await rm(childPath);
+    const receipt = await run(args);
+    expect(receipt).toMatchObject({
+      event: "live-migration-abandoned",
+      operationId: "child-abandon",
+      sourceStreamId,
+      stagedRecording: null,
+      abandoned: true,
+    });
+    expect(await snapshotFiles(binding.bindingDirectory)).toEqual(before);
+    // The original binding keeps publishing into its own recording.
+    await appendFile(native.source, native.row("main-2", "main second"));
+    await publishUntil(publishArgs, baseEnv, () =>
+      waitFor(
+        async () =>
+          JSON.stringify(
+            (await history(server, sourceStreamId)).events,
+          ).includes("main second"),
+        "root continuation",
+      ),
+    );
+    expect((await history(server, sourceStreamId)).info.lifecycle).toBe("open");
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}, 180000);

@@ -351,11 +351,16 @@ and captured events exactly as they were, and `publish` continues it with its or
 options. A new operation ID can start a fresh migration afterwards; `migrate-live`
 refuses to reuse the abandoned operation ID.
 
-Limits: an operation blocked only because a _child_ source is gone, while the root
-source still reads back, is not recognized as dead — remove or truncate the root source
-first, or complete the migration. An operation whose replacement recording was removed
-by hand after the source recording was already ended cannot be abandoned either; rerun
-`migrate-live`, which reuses the saved intent.
+A family operation is dead when *any* pinned source is gone, not only the root. After
+the root prefix reads back, the abandon check locates the family the way the importer
+would — Claude's `<session>/subagents/agent-<id>.jsonl`, Kimi's `agents/<id>/wire.jsonl`
+under the session root, Codex's discovered rollout threads — and verifies each pinned
+child prefix. A child that is missing, unreadable or no longer covers what the intent
+pinned releases the fence, because no retry could freeze that family again.
+
+Limits: an operation whose replacement recording was removed by hand after the source
+recording was already ended cannot be abandoned; rerun `migrate-live`, which reuses the
+saved intent.
 
 ## The migration fence
 

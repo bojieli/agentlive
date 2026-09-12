@@ -10,6 +10,7 @@ import {
   importCodexRecording,
   importKimiRecording,
   importOpenCodeRecording,
+  locateFileFamilySources,
   openCodeEntityIds,
   readFrozenOpenCodeSession,
   readJsonlSource,
@@ -1344,6 +1345,40 @@ async function assertFrozenSourceLost(
   } catch {
     options.signal.throwIfAborted();
     return;
+  }
+  // A retry re-freezes the whole pinned family, so one lost child kills the
+  // operation just as surely as a lost root: the importer refuses to import
+  // without it, and the boundary cannot be narrowed after the fact.
+  if (intent.boundary.children.length > 0) {
+    let located;
+    try {
+      located = await locateFileFamilySources({
+        agent: intent.nativeAgent as "claude" | "codex" | "kimi",
+        sourcePath: resolve(path),
+        nativeSessionId: intent.nativeSessionId,
+        ...(intent.continuation.sourceRoot !== null
+          ? { familyRoot: intent.continuation.sourceRoot }
+          : {}),
+        signal: options.signal,
+      });
+    } catch {
+      options.signal.throwIfAborted();
+      return; // The family cannot be enumerated again: the migration is dead.
+    }
+    for (const child of intent.boundary.children) {
+      const childPath = located.get(child.nativeAgent);
+      if (childPath === undefined) return;
+      try {
+        await verifyPrefix(
+          childPath,
+          { offset: child.offset, prefixHash: child.prefixHash },
+          options.signal,
+        );
+      } catch {
+        options.signal.throwIfAborted();
+        return;
+      }
+    }
   }
   throw stillThere;
 }

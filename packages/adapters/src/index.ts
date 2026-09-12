@@ -44,6 +44,7 @@ export {
 } from "./kimi-history.js";
 export { importKimiRecording, type KimiImportOptions } from "./import-kimi.js";
 export { type FrozenSourceSnapshot } from "./frozen-source.js";
+export { locateFileFamilySources } from "./family-sources.js";
 export {
   inspectOpenCodeHistory,
   captureOpenCodeHistory,
