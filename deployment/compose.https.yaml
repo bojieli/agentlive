@@ -1,0 +1,163 @@
+# HTTPS overlay: a Caddy TLS reverse proxy in front of the AgentLive server.
+#
+#   docker compose -f compose.yaml -f deployment/compose.https.yaml up -d
+#
+# The server is no longer published on the host at all; only the proxy is. The
+# proxy terminates TLS for AGENTLIVE_PUBLIC_HOST and forwards to the server over
+# the private Compose network. `tls internal` issues the certificate from Caddy's
+# own local CA, which is what makes this runnable on a laptop; a public
+# deployment replaces that line with a real DNS name and a real issuer.
+#
+# scripts/probe-https.mjs drives exactly this overlay.
+services:
+  agentlive:
+    # The loopback publication from compose.yaml is removed: behind a proxy the
+    # server must not be reachable except through it.
+    ports: !reset []
+    expose:
+      - "7331"
+    # --public-origin tells the server the origin browsers actually use. Without
+    # it the server compares the browser's Origin header against its own bound
+    # http://<addr>:7331 and rejects every browser request with 403.
+    command:
+      - serve
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7331"
+      - --state-dir
+      - /data
+      - --public-origin
+      - ${AGENTLIVE_PUBLIC_ORIGIN:-https://recordings.agentlive.test}
+
+  caddy:
+    image: caddy:2.11.4-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648
+    depends_on:
+      agentlive:
+        condition: service_started
+    ports:
+      # Published on loopback only, exactly like the server was. Point a host
+      # firewall or a public interface at it deliberately.
+      - "${AGENTLIVE_HTTPS_BIND:-127.0.0.1}:${AGENTLIVE_HTTPS_PORT:-443}:443"
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
+    environment:
+      AGENTLIVE_PUBLIC_HOST: ${AGENTLIVE_PUBLIC_HOST:-recordings.agentlive.test}
+    volumes:
+      # Caddy's local CA key and the issued certificate live here; losing the
+      # volume re-issues both, which every client then has to trust again.
+      - caddy-data:/data
+      - caddy-config:/config
+    cap_drop:
+      - ALL
+    cap_add:
+      # The caddy binary carries cap_net_bind_service as a file capability; with
+      # an empty bounding set even exec() fails, so keep exactly this one.
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    stop_grace_period: 10s
+    networks:
+      default:
+        aliases:
+          # Containers on this network reach the proxy under its public name, so
+          # a publisher container uses the same URL a remote publisher would.
+          - ${AGENTLIVE_PUBLIC_HOST:-recordings.agentlive.test}
+
+  # Disposable publisher/viewer client on the proxy's network, for operators and
+  # for the probe. It reaches the server only through the proxy, under the public
+  # name, exactly as a remote publisher would:
+  #
+  #   export AGENTLIVE_OWNER_SECRET=$(docker compose exec -T agentlive \
+  #     node -e 'process.stdout.write(require("/data/owner.json").secret)')
+  #   docker compose --profile client run --rm client \
+  #     list --server https://recordings.agentlive.test
+  #
+  # AGENTLIVE_CA_DIR must hold the proxy CA as root.crt; extract it once with
+  #   docker compose exec -T caddy cat /data/caddy/pki/authorities/local/root.crt
+  client:
+    profiles:
+      - client
+    image: agentlive:local
+    depends_on:
+      caddy:
+        condition: service_started
+    environment:
+      # Certificate verification stays on; the client is told which CA to trust
+      # instead of being told to skip the check.
+      NODE_EXTRA_CA_CERTS: /run/ca/root.crt
+      # Passed through from the invoking shell so the credential never appears in
+      # argv. Empty falls back to --owner-file.
+      AGENTLIVE_OWNER_SECRET: ${AGENTLIVE_OWNER_SECRET:-}
+    volumes:
+      - ${AGENTLIVE_CA_DIR:-./probe-results/https}:/run/ca:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    entrypoint: ["node", "/opt/agentlive/cli.mjs"]
+
+configs:
+  caddyfile:
+    content: |
+      {
+      	# No public ACME account or challenge: the certificate comes from Caddy's
+      	# own local CA below. Remove this block for a real public name.
+      	auto_https disable_redirects
+      	admin off
+      	# Spelled out because long-lived WebSocket viewers are the case a proxy
+      	# usually breaks. `idle` applies between HTTP requests on a kept-alive
+      	# connection and does not close a hijacked WebSocket: a viewer held for
+      	# 65s over this 20s idle timeout keeps receiving (probe check
+      	# quiet-viewer-outlives-proxy-idle-timeout). `write` is deliberately left
+      	# unset: it is a whole-response deadline, so it would cut a large
+      	# attachment download on a slow link. (Measured on Caddy 2.11.4: `write
+      	# 10s` did not cut a 50-second WebSocket, which clears its deadlines on
+      	# hijack — but it would still cap a slow download.)
+      	servers {
+      		timeouts {
+      			read_header 15s
+      			idle 20s
+      		}
+      	}
+      }
+
+      {$$AGENTLIVE_PUBLIC_HOST} {
+      	# Locally generated CA and leaf certificate for the test name.
+      	tls internal
+
+      	# No `encode`: nothing here needs it (the viewer bundle is small and
+      	# attachments are opaque bytes), and it puts a rewriting layer in front
+      	# of every response. Adding it must not cover the attachment routes.
+      	reverse_proxy agentlive:7331 {
+      		# Stream responses through immediately instead of buffering them.
+      		flush_interval -1
+      		# Caddy already sets X-Forwarded-For/-Proto/-Host and passes
+      		# Connection/Upgrade through for WebSockets. The server needs the
+      		# public origin from --public-origin, not from a header.
+      		header_up X-Forwarded-Host {host}
+      	}
+
+      	header {
+      		# The proxy owns transport security; the application owns everything
+      		# else. Do not add a Content-Security-Policy here: the server sends a
+      		# different, deliberate one for the viewer and for each artifact
+      		# preview route, and a proxy-wide policy would flatten them.
+      		Strict-Transport-Security "max-age=31536000"
+      	}
+
+      	log {
+      		# Never log authorization headers, cookies or bodies.
+      		output stderr
+      		format console
+      	}
+      }
+
+volumes:
+  caddy-data:
+  caddy-config:
