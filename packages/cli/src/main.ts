@@ -3,6 +3,7 @@ import { migrateRecording } from "./migrate-recording.js";
 import { finishPublisher } from "@agentlive/publisher";
 import { migrateImport } from "./migrate-import.js";
 import {
+  abandonLiveMigration,
   migrateLiveBinding,
   resolveLiveMigrationDirectory,
   liveMigrationServerOrigin,
@@ -102,6 +103,8 @@ Commands:
   agentlive migrate-recording --source <binding-directory> --operation-id <id> --target-server <url> --target-owner-file <file> --old-recording retain|remove
   agentlive migrate-import --source <binding-directory> --native-source <file> --operation-id <id> --expected-manifest-hash <hash> --old-recording retain|remove [--confirm-removal] [--redact-env <name>]
   agentlive migrate-live --stream <id> | --source <binding-directory> --native-source <file> --operation-id <id> --expected-manifest-hash <hash> --old-recording retain|remove [--confirm-removal] [--title <text>] [--redact-env <name>] [--artifact-root <path>] [--artifact-base <path>]
+  agentlive migrate-live --stream <id> --native-server <origin> ...   (OpenCode bindings freeze a fresh native export instead of --native-source)
+  agentlive migrate-live --abandon --operation-id <id> --stream <id> | --source <binding-directory> [same original arguments] [--confirm-removal]
   agentlive relocate-import-sources --source <binding-directory> --native-source <file> --family-source <child-id=path> --operation-id <id> --expected-manifest-hash <hash>
   agentlive inspect-migration --source <publisher-binding-directory> [--native-source <file>] [--verify-family] [--family-source <child-id=path>]
   agentlive reports [--server <origin>] [--limit 50] [--after <report-id>]
@@ -127,6 +130,7 @@ Commands:
   agentlive backup --output <new-server-host-directory> --server <origin> [--barrier-timeout-ms 30000] [--owner-file <file>]
   agentlive serve [--host 127.0.0.1] [--port 7331] [--max-cached-sessions 128] [--shutdown-timeout-ms 30000]
                   [--max-stored-bytes <n>] [--min-free-bytes <n>] [--no-snapshot-collection]
+                  [--public-origin https://name]   (required behind a TLS reverse proxy)
                   [--metrics]   (metrics token: AGENTLIVE_METRICS_TOKEN)
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive import --agent <codex|claude|kimi> --native-session <id> [--source-root <directory>] [--native-agent <kimi-agent>]
@@ -211,7 +215,15 @@ const secrets = Object.entries(process.env)
   )
   .map(([, value]) => value!);
 /** Describe which viewer URLs actually reach a bound server; never call loopback public. */
-function reachability(bound: string) {
+function reachability(bound: string, publicOrigin?: string) {
+  // Behind a reverse proxy the bound address is private to the proxy: report the
+  // origin viewers actually use, not the loopback or container address.
+  if (publicOrigin)
+    return {
+      viewerUrls: [new URL("/", publicOrigin).toString()],
+      reachability: "public-origin",
+      note: "Served at this origin by a reverse proxy. The bound address stays private to the proxy; viewers and publishers use the public origin.",
+    };
   const url = new URL(bound);
   const host = url.hostname.replace(/^\[|\]$/g, "");
   const loopback =
@@ -343,6 +355,7 @@ async function main() {
       action: { type: "string" },
       note: { type: "string" },
       "confirm-removal": { type: "boolean" },
+      abandon: { type: "boolean" },
       speed: { type: "string" },
       "idle-cap-ms": { type: "string" },
       "from-ms": { type: "string" },
@@ -369,6 +382,7 @@ async function main() {
       "max-stored-bytes": { type: "string" },
       "min-free-bytes": { type: "string" },
       "no-snapshot-collection": { type: "boolean" },
+      "public-origin": { type: "string" },
       metrics: { type: "boolean" },
       "cancellation-timeout-ms": { type: "string" },
       agent: { type: "string" },
@@ -492,6 +506,8 @@ async function main() {
           "stream",
           "source",
           "native-source",
+          "native-server",
+          "abandon",
           "operation-id",
           "expected-manifest-hash",
           "server",
@@ -603,6 +619,7 @@ async function main() {
                               "max-stored-bytes",
                               "min-free-bytes",
                               "no-snapshot-collection",
+                              "public-origin",
                               "metrics",
                             ]
                           : command === "replay" || command === "watch"
@@ -1195,14 +1212,14 @@ async function main() {
   }
   if (command === "migrate-live") {
     if (
-      !values["native-source"] ||
       !values["operation-id"] ||
       !values["expected-manifest-hash"] ||
       !["retain", "remove"].includes(values["old-recording"] ?? "") ||
-      !!values.stream === !!values.source
+      !!values.stream === !!values.source ||
+      !!values["native-source"] === !!values["native-server"]
     )
       throw new Error(
-        "Live migration requires one of --stream or --source, --native-source, --operation-id, --expected-manifest-hash and --old-recording retain|remove",
+        "Live migration requires one of --stream or --source, one of --native-source (file agents) or --native-server (OpenCode), --operation-id, --expected-manifest-hash and --old-recording retain|remove",
       );
     const directory = values.source
       ? resolve(values.source)
@@ -1217,17 +1234,46 @@ async function main() {
     values.server = serverOrigin;
     const credential = await loadCredential();
     secrets.push(credential);
-    const result = await migrateLiveBinding({
+    // OpenCode bindings have no retained transcript: the frozen source is a fresh
+    // native export read with the same credentials `publish` uses.
+    const native = {
+      ...(values["native-source"]
+        ? { nativeSource: resolve(values["native-source"]) }
+        : {}),
+      ...(values["native-server"]
+        ? { nativeServerOrigin: values["native-server"] }
+        : {}),
+      ...(process.env.OPENCODE_SERVER_PASSWORD
+        ? { nativePassword: process.env.OPENCODE_SERVER_PASSWORD }
+        : {}),
+      ...(process.env.OPENCODE_SERVER_USERNAME
+        ? { nativeUsername: process.env.OPENCODE_SERVER_USERNAME }
+        : {}),
+    };
+    if (native.nativePassword) secrets.push(native.nativePassword);
+    const common = {
       directory,
-      nativeSource: resolve(values["native-source"]),
+      ...native,
       operationId: values["operation-id"],
       expectedManifestHash: values["expected-manifest-hash"],
       disposition: values["old-recording"] as "retain" | "remove",
       confirmRemoval: values["confirm-removal"] ?? false,
       ...(values.stream ? { sourceStreamId: values.stream } : {}),
       ownerCredential: credential,
-      secrets,
       signal: controller.signal,
+    };
+    if (values.abandon) {
+      process.stdout.write(
+        JSON.stringify({
+          event: "live-migration-abandoned",
+          ...(await abandonLiveMigration(common)),
+        }) + "\n",
+      );
+      return;
+    }
+    const result = await migrateLiveBinding({
+      ...common,
+      secrets,
       ...(values.title === undefined ? {} : { title: values.title }),
       ...(values["artifact-root"]
         ? { artifactRoots: values["artifact-root"] }
@@ -1539,8 +1585,36 @@ async function main() {
     }
     const metricsToken = process.env.AGENTLIVE_METRICS_TOKEN || undefined;
     if (metricsToken) secrets.push(metricsToken);
+    // Behind a TLS reverse proxy the browser's Origin header names the proxy, not
+    // the bound address. Without this the server rejects every browser request —
+    // including the viewer's WebSocket upgrade — with 403 "Origin is not allowed".
+    const publicOrigin = values["public-origin"];
+    if (publicOrigin !== undefined) {
+      if (hosted)
+        throw new Error(
+          "--public-origin conflicts with --hosted-config, which already sets publicOrigin",
+        );
+      let parsed: URL;
+      try {
+        parsed = new URL(publicOrigin);
+      } catch {
+        throw new Error("--public-origin must be an absolute URL");
+      }
+      if (
+        !["http:", "https:"].includes(parsed.protocol) ||
+        parsed.username ||
+        parsed.password ||
+        parsed.search ||
+        parsed.hash ||
+        parsed.origin !== publicOrigin
+      )
+        throw new Error(
+          "--public-origin must be a bare origin such as https://recordings.example.com",
+        );
+    }
     const server = await startServer({
       ...hosted,
+      ...(publicOrigin === undefined ? {} : { publicOrigin }),
       storage,
       ...(values.metrics
         ? { metrics: metricsToken ? { token: metricsToken } : {} }
@@ -1560,7 +1634,7 @@ async function main() {
         JSON.stringify({
           event: "ready",
           url: server.url,
-          ...reachability(server.url),
+          ...reachability(server.url, hosted?.publicOrigin ?? publicOrigin),
           ...(process.env.AGENTLIVE_OWNER_SECRET ? {} : { ownerFile }),
         }) + "\n",
       );

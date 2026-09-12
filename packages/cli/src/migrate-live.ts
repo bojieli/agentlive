@@ -1,14 +1,24 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readdir, rename } from "node:fs/promises";
+import { lstat, mkdir, open, readdir, rename, rm } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import {
+  freezeOpenCodeSource,
+  frozenOpenCodePath,
   importClaudeRecording,
   importCodexRecording,
   importKimiRecording,
+  importOpenCodeRecording,
+  openCodeEntityIds,
+  readFrozenOpenCodeSession,
   readJsonlSource,
+  refreezeOpenCodeSession,
+  visibleOpenCodeSnapshot,
+  type FrozenOpenCodeSource,
   type FrozenSourceSnapshot,
+  type OpenCodeNativeAccess,
+  type OpenCodeSnapshot,
 } from "@agentlive/adapters";
 import {
   canonicalJson,
@@ -44,13 +54,29 @@ const liveManifestSchema = z.object({
   visibility: z.enum(["private", "public", "unlisted"]),
   filterFingerprint: digest,
 });
+/** OpenCode live capture pins its own manifest shape: no record format or base directory. */
+const openCodeManifestSchema = z.object({
+  version: z.literal(1),
+  converterVersion: z.string().min(1).max(200),
+  artifactRoots: z.array(z.string().min(1)).max(1000),
+  includeChildren: z.boolean().optional(),
+  title: z.string().max(500),
+  visibility: z.enum(["private", "public", "unlisted"]),
+  filterFingerprint: digest,
+});
+/** Bounded view of one OpenCode converter state: which objects are currently shown. */
+const captureStateSchema = z.object({
+  nativeSessionId: z.string(),
+  createdAt: z.number().int().nonnegative().optional(),
+  entities: z.record(z.string(), z.object({ present: z.boolean() })),
+});
 const targetSchema = z.strictObject({
   streamId: idSchema,
   revision: idSchema,
   producerEvents: offset,
 });
 const continuationSchema = z.strictObject({
-  agent: z.enum(["claude", "codex", "kimi"]),
+  agent: z.enum(["claude", "codex", "kimi", "opencode"]),
   title: z.string().max(500),
   visibility: z.literal("private"),
   includeChildren: z.boolean(),
@@ -58,13 +84,16 @@ const continuationSchema = z.strictObject({
   recordFormat: z.string().nullable(),
   artifactBaseDirectory: z.string(),
   artifactRoots: z.array(z.string()),
+  /** OpenCode continuation reads the frozen export again on every restart. */
+  sourcePath: z.string().nullable().optional(),
+  nativeServerOrigin: z.string().nullable().optional(),
 });
 const intentSchema = z.strictObject({
   version: z.literal(1),
   operationId: idSchema,
   requestHash: digest,
   serverOrigin: z.string(),
-  nativeAgent: z.enum(["claude", "codex", "kimi"]),
+  nativeAgent: z.enum(["claude", "codex", "kimi", "opencode"]),
   nativeSessionId: idSchema,
   sourceStreamId: idSchema,
   sourceRevision: idSchema,
@@ -86,6 +115,14 @@ const intentSchema = z.strictObject({
   }),
   continuation: continuationSchema,
   retiredDirectory: z.string(),
+  /** Root native transcript, or the frozen OpenCode export this operation pinned. */
+  nativeSourcePath: z.string().optional(),
+  nativeServerOrigin: z.string().optional(),
+  /** Directory holding the frozen OpenCode export family for this operation. */
+  frozenDirectory: z.string().optional(),
+  /** Set once the operator abandoned this migration; `completed` follows on disposal. */
+  abandoning: z.boolean().optional(),
+  abandoned: z.boolean().optional(),
   target: targetSchema.optional(),
   completed: z.boolean(),
 });
@@ -94,7 +131,11 @@ type ImportOptions = Parameters<typeof importCodexRecording>[0];
 export type LiveMigrationPhase =
   "intent" | "imported" | "source-ended" | "lineage" | "retired" | "placed";
 
-async function readJson(path: string, optional = false): Promise<unknown> {
+async function readJson(
+  path: string,
+  optional = false,
+  limit = 1024 * 1024,
+): Promise<unknown> {
   let file;
   try {
     file = await open(
@@ -108,7 +149,7 @@ async function readJson(path: string, optional = false): Promise<unknown> {
   }
   try {
     const info = await file.stat();
-    if (!info.isFile() || info.size > 1024 * 1024)
+    if (!info.isFile() || info.size > limit)
       throw new Error(`Invalid live migration metadata: ${basename(path)}`);
     try {
       return JSON.parse(await file.readFile("utf8"));
@@ -217,6 +258,25 @@ export async function liveMigrationServerOrigin(directory: string) {
   return intent.data.serverOrigin;
 }
 
+/** The saved request an interrupted operation must be repeated with, exactly. */
+function liveMigrationRequestHash(
+  liveKey: string,
+  options: LiveMigrationSource & {
+    operationId: string;
+    expectedManifestHash: string;
+    disposition: "retain" | "remove";
+  },
+) {
+  return hash({
+    operationId: options.operationId,
+    nativeSource: options.nativeSource ? resolve(options.nativeSource) : null,
+    nativeServerOrigin: options.nativeServerOrigin ?? null,
+    liveKey,
+    expectedManifestHash: options.expectedManifestHash,
+    disposition: options.disposition,
+  });
+}
+
 function receipt(intent: Intent, liveDirectory: string) {
   return {
     operationId: intent.operationId,
@@ -239,34 +299,49 @@ function receipt(intent: Intent, liveDirectory: string) {
   };
 }
 
+/** Native access common to migration and abandonment of one binding. */
+export interface LiveMigrationSource {
+  /** Root native transcript, for Claude, Codex and Kimi bindings. */
+  nativeSource?: string;
+  /** OpenCode server the binding follows; its current export becomes the frozen source. */
+  nativeServerOrigin?: string;
+  nativePassword?: string;
+  nativeUsername?: string;
+}
+
 /**
- * Replace an existing live file-agent binding with a new private recording converted
- * from a frozen native prefix under a changed converter/filter/artifact policy.
+ * Replace an existing live binding with a new private recording converted from a
+ * frozen native source under a changed converter/filter/artifact policy.
+ *
+ * File agents freeze their transcript at the last complete line. OpenCode has no
+ * retained transcript, so its frozen source is a fresh native export written into the
+ * operation's staging directory; retries convert exactly those bytes.
  *
  * The old recording is ended (lifecycle only) and never receives replacement content.
  * Its binding is retired and the verified replacement import takes over the live key,
  * so `publish --resume-import` with the new options continues it from the boundary.
  */
-export async function migrateLiveBinding(options: {
-  directory: string;
-  nativeSource: string;
-  operationId: string;
-  expectedManifestHash: string;
-  disposition: "retain" | "remove";
-  confirmRemoval?: boolean;
-  /** Recording the operator selected (`--stream`); guards against migrating a successor. */
-  sourceStreamId?: string;
-  ownerCredential: string;
-  secrets?: readonly string[];
-  title?: string;
-  artifactRoots?: readonly string[];
-  artifactBaseDirectory?: string;
-  artifactBundles?: boolean;
-  remoteArtifacts?: ImportOptions["remoteArtifacts"];
-  signal: AbortSignal;
-  /** Called after each durable step; used to exercise interruption and resume. */
-  onPhase?: (phase: LiveMigrationPhase) => Promise<void> | void;
-}) {
+export async function migrateLiveBinding(
+  options: LiveMigrationSource & {
+    directory: string;
+    operationId: string;
+    expectedManifestHash: string;
+    disposition: "retain" | "remove";
+    confirmRemoval?: boolean;
+    /** Recording the operator selected (`--stream`); guards against migrating a successor. */
+    sourceStreamId?: string;
+    ownerCredential: string;
+    secrets?: readonly string[];
+    title?: string;
+    artifactRoots?: readonly string[];
+    artifactBaseDirectory?: string;
+    artifactBundles?: boolean;
+    remoteArtifacts?: ImportOptions["remoteArtifacts"];
+    signal: AbortSignal;
+    /** Called after each durable step; used to exercise interruption and resume. */
+    onPhase?: (phase: LiveMigrationPhase) => Promise<void> | void;
+  },
+) {
   idSchema.parse(options.operationId);
   digest.parse(options.expectedManifestHash);
   z.enum(["retain", "remove"]).parse(options.disposition);
@@ -297,14 +372,10 @@ export async function migrateLiveBinding(options: {
       if (!parsed.success) throw new Error("Invalid live migration intent");
       intent = parsed.data;
     }
-    const nativeSource = resolve(options.nativeSource);
-    const requestHash = hash({
-      operationId: options.operationId,
-      nativeSource,
-      liveKey,
-      expectedManifestHash: options.expectedManifestHash,
-      disposition: options.disposition,
-    });
+    const nativeSource = options.nativeSource
+      ? resolve(options.nativeSource)
+      : undefined;
+    const requestHash = liveMigrationRequestHash(liveKey, options);
     if (intent && intent.operationId !== options.operationId) {
       if (!intent.completed)
         throw new Error(
@@ -312,6 +383,10 @@ export async function migrateLiveBinding(options: {
         );
       intent = undefined; // Only the most recent receipt is retained.
     }
+    if (intent?.abandoning)
+      throw new Error(
+        `Live migration ${intent.operationId} was abandoned; start a new operation to migrate this binding`,
+      );
     if (intent && intent.requestHash !== requestHash)
       throw new Error(
         "Live migration request differs from the saved migration; use its original arguments",
@@ -392,12 +467,28 @@ export async function migrateLiveBinding(options: {
       try {
         const binding = journal.identity;
         const agent = binding.nativeAgent;
-        if (agent !== "claude" && agent !== "codex" && agent !== "kimi")
+        if (
+          agent !== "claude" &&
+          agent !== "codex" &&
+          agent !== "kimi" &&
+          agent !== "opencode"
+        )
           throw new Error(
-            agent === "opencode"
-              ? "Live migration does not support OpenCode bindings yet; finish the recording and replace it with import plus migrate-import"
-              : "Live migration supports Claude, Codex and Kimi bindings",
+            "Live migration supports Claude, Codex, Kimi and OpenCode bindings",
           );
+        const openCode = agent === "opencode";
+        if (openCode && !options.nativeServerOrigin)
+          throw new Error(
+            "OpenCode live migration freezes a fresh native export; pass --native-server <origin>",
+          );
+        if (openCode && options.nativeSource)
+          throw new Error(
+            "OpenCode bindings have no native transcript; use --native-server instead of --native-source",
+          );
+        if (!openCode && !nativeSource)
+          throw new Error("Live migration requires --native-source <file>");
+        if (!openCode && options.nativeServerOrigin)
+          throw new Error("--native-server applies only to OpenCode bindings");
         if (
           !binding.streamId ||
           !binding.revision ||
@@ -420,7 +511,13 @@ export async function migrateLiveBinding(options: {
           throw new Error(
             "Live migration requires a live publisher binding; use migrate-import for frozen imports",
           );
-        const published = liveManifestSchema.parse(publishedRaw);
+        const fileManifest = openCode
+          ? undefined
+          : liveManifestSchema.parse(publishedRaw);
+        const openCodeManifest = openCode
+          ? openCodeManifestSchema.parse(publishedRaw)
+          : undefined;
+        const published = (fileManifest ?? openCodeManifest)!;
         if (
           hash(publishedRaw) !==
           (intent?.sourceManifestHash ?? options.expectedManifestHash)
@@ -490,58 +587,65 @@ export async function migrateLiveBinding(options: {
             "Sharing is paused for this binding; resume it before migrating so its recording can be ended",
           );
 
-        // Everything the old recording captured must lie inside the frozen replacement prefix.
-        const rootCaptured: z.infer<typeof cursorSchema>[] = [];
-        const nativeCursor = await read("native-cursor.json");
-        if (nativeCursor !== undefined)
-          rootCaptured.push(cursorSchema.parse(nativeCursor));
+        // Everything the old recording captured must lie inside the frozen source.
         const priorImport = await read("import.json");
+        const rootCaptured: z.infer<typeof cursorSchema>[] = [];
         const childCaptured = new Map<string, z.infer<typeof cursorSchema>>();
-        if (priorImport !== undefined) {
-          const parsed = z
-            .object({
-              sourceBytes: offset,
-              sourcePrefix: digest,
-              familySources: z
-                .array(
-                  z.object({
-                    nativeAgent: idSchema,
-                    boundary: cursorSchema,
-                  }),
-                )
-                .max(199)
-                .optional(),
-            })
-            .parse(priorImport);
-          rootCaptured.push({
-            offset: parsed.sourceBytes,
-            prefixHash: parsed.sourcePrefix,
-          });
-          for (const child of parsed.familySources ?? [])
-            childCaptured.set(
-              createHash("sha256").update(child.nativeAgent).digest("hex"),
-              child.boundary,
-            );
+        const family = openCode
+          ? openCodeManifest!.includeChildren === true
+          : /-family-/.test(published.converterVersion);
+        let frozen: FrozenOpenCodeSource | undefined;
+        if (openCode) {
+          frozen = await freezeSource(family);
+          await assertFrozenCoverage(frozen, family);
+        } else {
+          const nativeCursor = await read("native-cursor.json");
+          if (nativeCursor !== undefined)
+            rootCaptured.push(cursorSchema.parse(nativeCursor));
+          if (priorImport !== undefined) {
+            const parsed = z
+              .object({
+                sourceBytes: offset,
+                sourcePrefix: digest,
+                familySources: z
+                  .array(
+                    z.object({
+                      nativeAgent: idSchema,
+                      boundary: cursorSchema,
+                    }),
+                  )
+                  .max(199)
+                  .optional(),
+              })
+              .parse(priorImport);
+            rootCaptured.push({
+              offset: parsed.sourceBytes,
+              prefixHash: parsed.sourcePrefix,
+            });
+            for (const child of parsed.familySources ?? [])
+              childCaptured.set(
+                createHash("sha256").update(child.nativeAgent).digest("hex"),
+                child.boundary,
+              );
+          }
+          const checkpointName = new RegExp(
+            `^${agent}-child-([a-f0-9]{64})\\.json$`,
+          );
+          for (const name of await readdir(journal.directory)) {
+            const match = checkpointName.exec(name);
+            if (!match) continue;
+            const cursor = cursorSchema.parse(await read(name));
+            const prior = childCaptured.get(match[1]!);
+            if (!prior || cursor.offset > prior.offset)
+              childCaptured.set(match[1]!, cursor);
+          }
+          for (const cursor of rootCaptured)
+            await verifyPrefix(nativeSource!, cursor, options.signal);
+          if (agent === "codex" && family && !fileManifest!.familyRoot)
+            throw new Error("Codex family binding lacks its source root");
+          if (!family && childCaptured.size)
+            throw new Error("Live binding has child sources outside its scope");
         }
-        const checkpointName = new RegExp(
-          `^${agent}-child-([a-f0-9]{64})\\.json$`,
-        );
-        for (const name of await readdir(journal.directory)) {
-          const match = checkpointName.exec(name);
-          if (!match) continue;
-          const cursor = cursorSchema.parse(await read(name));
-          const prior = childCaptured.get(match[1]!);
-          if (!prior || cursor.offset > prior.offset)
-            childCaptured.set(match[1]!, cursor);
-        }
-        for (const cursor of rootCaptured)
-          await verifyPrefix(nativeSource, cursor, options.signal);
-
-        const family = /-family-/.test(published.converterVersion);
-        if (agent === "codex" && family && !published.familyRoot)
-          throw new Error("Codex family binding lacks its source root");
-        if (!family && childCaptured.size)
-          throw new Error("Live binding has child sources outside its scope");
         const secrets = options.secrets ?? [];
         const titleFilter = new StreamingRedactor([
           ...secrets,
@@ -555,10 +659,19 @@ export async function migrateLiveBinding(options: {
           titleFilter.finish()
         ).slice(0, 500);
         const artifactRoots = [
-          ...(options.artifactRoots ?? published.roots),
+          ...(options.artifactRoots ??
+            (openCode ? openCodeManifest!.artifactRoots : fileManifest!.roots)),
         ].map((root) => resolve(root));
+        // Live OpenCode capture resolves artifacts against its import base, or "/".
         const artifactBaseDirectory = resolve(
-          options.artifactBaseDirectory ?? published.baseDirectory,
+          options.artifactBaseDirectory ??
+            (openCode
+              ? priorImport === undefined
+                ? "/"
+                : z
+                    .object({ artifactBaseDirectory: z.string().min(1) })
+                    .parse(priorImport).artifactBaseDirectory
+              : fileManifest!.baseDirectory),
         );
         const snapshot: FrozenSourceSnapshot = intent
           ? {
@@ -571,8 +684,9 @@ export async function migrateLiveBinding(options: {
               ),
             }
           : {};
+        const sourcePath = openCode ? frozen!.root.sourcePath : nativeSource!;
         const common: ImportOptions = {
-          sourcePath: nativeSource,
+          sourcePath,
           publisherRoot: stagingRoot,
           serverOrigin: binding.serverOrigin,
           ownerCredential: options.ownerCredential,
@@ -660,13 +774,26 @@ export async function migrateLiveBinding(options: {
                   visibility: "private",
                   includeChildren: family,
                   sourceRoot:
-                    agent === "codex" && family ? published.familyRoot! : null,
+                    agent === "codex" && family
+                      ? fileManifest!.familyRoot!
+                      : null,
                   recordFormat:
-                    agent === "codex" ? published.recordFormat : null,
+                    agent === "codex" ? fileManifest!.recordFormat : null,
                   artifactBaseDirectory,
                   artifactRoots: [...artifactRoots].sort(),
+                  sourcePath: openCode ? sourcePath : null,
+                  nativeServerOrigin: openCode
+                    ? options.nativeServerOrigin!
+                    : null,
                 },
                 retiredDirectory,
+                nativeSourcePath: sourcePath,
+                ...(openCode
+                  ? {
+                      nativeServerOrigin: options.nativeServerOrigin!,
+                      frozenDirectory: frozen!.directory,
+                    }
+                  : {}),
                 completed: false,
               });
               await options.onPhase?.("intent");
@@ -684,8 +811,12 @@ export async function migrateLiveBinding(options: {
             });
           },
         };
-        const result =
-          agent === "claude"
+        const result = openCode
+          ? await importOpenCodeRecording({
+              ...common,
+              ...(family ? { familyRoot: frozen!.directory } : {}),
+            })
+          : agent === "claude"
             ? await importClaudeRecording({
                 ...common,
                 includeChildren: family,
@@ -699,7 +830,7 @@ export async function migrateLiveBinding(options: {
                 })
               : await importCodexRecording({
                   ...common,
-                  ...(family ? { familyRoot: published.familyRoot! } : {}),
+                  ...(family ? { familyRoot: fileManifest!.familyRoot! } : {}),
                   snapshot,
                 });
         if (!intent) throw new Error("Replacement import did not save intent");
@@ -830,6 +961,149 @@ export async function migrateLiveBinding(options: {
           mode: 0o700,
         });
         await rename(journal.directory, retiredDirectory);
+
+        /**
+         * Freeze the OpenCode source: on the first attempt export the native server's
+         * current state for the bound session (plus every discoverable descendant for a
+         * family binding); afterwards convert exactly the bytes the intent pinned. A
+         * missing frozen file is restored from the server only when it reproduces those
+         * bytes, so a session that moved on can never change the target.
+         */
+        async function freezeSource(includeChildren: boolean) {
+          const directory =
+            intent?.frozenDirectory ?? join(stagingRoot, "frozen");
+          const access: OpenCodeNativeAccess = {
+            origin: options.nativeServerOrigin!,
+            nativeSessionId: binding.nativeSessionId,
+            includeChildren,
+            signal: options.signal,
+            ...(options.nativePassword
+              ? { password: options.nativePassword }
+              : {}),
+            ...(options.nativeUsername
+              ? { username: options.nativeUsername }
+              : {}),
+          };
+          if (!intent) return freezeOpenCodeSource(access, directory);
+          const pinned = [
+            {
+              nativeSessionId: binding.nativeSessionId,
+              boundary: intent.boundary.root,
+            },
+            ...intent.boundary.children.map((child) => ({
+              nativeSessionId: child.nativeAgent,
+              boundary: { offset: child.offset, prefixHash: child.prefixHash },
+            })),
+          ];
+          const sessions = [];
+          for (const entry of pinned) {
+            options.signal.throwIfAborted();
+            const path = frozenOpenCodePath(directory, entry.nativeSessionId);
+            let snapshot;
+            try {
+              snapshot = await readFrozenOpenCodeSession(path, entry.boundary);
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+                throw error;
+              snapshot = (
+                await refreezeOpenCodeSession(
+                  access,
+                  directory,
+                  entry.nativeSessionId,
+                  entry.boundary,
+                )
+              ).snapshot;
+            }
+            sessions.push({
+              nativeSessionId: entry.nativeSessionId,
+              ...(snapshot.info.parentID
+                ? { parentNativeSessionId: snapshot.info.parentID }
+                : {}),
+              sourcePath: path,
+              boundary: entry.boundary,
+              snapshot,
+            });
+          }
+          const [root, ...children] = sessions;
+          return { directory, root: root!, children };
+        }
+
+        /**
+         * OpenCode has no byte prefix to compare, so the equivalent guarantee is that the
+         * frozen snapshots still produce every converter entity this binding currently
+         * shows. A reverted, deleted or recreated native session is rejected instead of
+         * silently dropping content the old recording published.
+         */
+        async function assertFrozenCoverage(
+          source: FrozenOpenCodeSource,
+          includeChildren: boolean,
+        ) {
+          const captured = async (path: string) => {
+            const raw = await readJson(path, true, 16 * 1024 * 1024);
+            return raw === undefined
+              ? undefined
+              : captureStateSchema.parse(raw);
+          };
+          const covers = (
+            state: z.infer<typeof captureStateSchema>,
+            session: { nativeSessionId: string; snapshot: OpenCodeSnapshot },
+            child: boolean,
+          ) => {
+            const ids = openCodeEntityIds(
+              visibleOpenCodeSnapshot(session.snapshot),
+              child ? { nativeSessionId: session.nativeSessionId } : undefined,
+            );
+            for (const [id, entity] of Object.entries(state.entities))
+              if (entity.present && !ids.has(id))
+                throw new Error(
+                  "The OpenCode server no longer shows source objects this binding captured; it cannot supply a consistent frozen source",
+                );
+          };
+          const root = await captured(
+            join(journal.directory, "opencode-live", "state.json"),
+          );
+          if (root) {
+            if (
+              root.nativeSessionId !== binding.nativeSessionId ||
+              (root.createdAt !== undefined &&
+                root.createdAt !== source.root.snapshot.info.time.created)
+            )
+              throw new Error(
+                "The OpenCode native session was recreated since this binding captured it",
+              );
+            covers(root, source.root, false);
+          }
+          let names: string[] = [];
+          try {
+            names = await readdir(join(journal.directory, "opencode-children"));
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          if (names.length && !includeChildren)
+            throw new Error("Live binding has child sources outside its scope");
+          const children = new Map(
+            source.children.map((child) => [child.nativeSessionId, child]),
+          );
+          for (const name of names) {
+            const state = await captured(
+              join(journal.directory, "opencode-children", name, "state.json"),
+            );
+            if (!state) continue;
+            const child = children.get(state.nativeSessionId);
+            if (!child)
+              throw new Error(
+                "The OpenCode server no longer reports a child session this binding captured",
+              );
+            if (
+              state.createdAt !== undefined &&
+              state.createdAt !== child.snapshot.info.time.created
+            )
+              throw new Error(
+                "An OpenCode child session was recreated since this binding captured it",
+              );
+            covers(state, child, true);
+          }
+        }
       } finally {
         await journal.close();
       }
@@ -844,4 +1118,232 @@ export async function migrateLiveBinding(options: {
   } finally {
     await lock.release();
   }
+}
+
+/**
+ * Release a live-binding migration that can never complete, so the fenced native
+ * session becomes publishable again.
+ *
+ * It refuses whenever the operation could still finish: while the source binding has
+ * already been retired (only a local rename and the disposition remain), and while the
+ * frozen source it pinned can still be read. Otherwise it removes the staged private
+ * replacement recording, deletes the staging directory with its frozen exports, and
+ * marks the intent abandoned. The original binding is never written to: it keeps its
+ * recording, its visibility and its captured events exactly as they were.
+ */
+export async function abandonLiveMigration(
+  options: LiveMigrationSource & {
+    directory: string;
+    operationId: string;
+    expectedManifestHash: string;
+    disposition: "retain" | "remove";
+    confirmRemoval?: boolean;
+    sourceStreamId?: string;
+    ownerCredential: string;
+    signal: AbortSignal;
+    /** Called after each durable step; used to exercise interruption and resume. */
+    onPhase?: (
+      phase: "abandoning" | "removed" | "discarded",
+    ) => Promise<void> | void;
+  },
+) {
+  idSchema.parse(options.operationId);
+  const liveDirectory = resolve(options.directory);
+  const liveKey = basename(liveDirectory);
+  if (!/^[a-f0-9]{64}$/.test(liveKey))
+    throw new Error("Expected a publisher binding directory");
+  const publisherRoot = dirname(liveDirectory);
+  const migrationRoot = liveMigrationDirectory(publisherRoot, liveKey);
+  let lock: FileLock;
+  try {
+    lock = await FileLock.acquire(join(migrationRoot, ".migration.lock"));
+  } catch (error) {
+    if (error instanceof ProtocolError && error.code === "publisher_busy")
+      throw new Error("Another live migration is running for this binding");
+    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+      throw new Error("No live migration exists for this binding");
+    throw error;
+  }
+  try {
+    const intentPath = join(migrationRoot, "intent.json");
+    const saved = await readJson(intentPath, true);
+    if (saved === undefined)
+      throw new Error("No live migration intent exists for this binding");
+    const parsed = intentSchema.safeParse(saved);
+    if (!parsed.success) throw new Error("Invalid live migration intent");
+    let intent = parsed.data;
+    if (intent.operationId !== options.operationId)
+      throw new Error(
+        `Live migration ${intent.operationId} is pending for this binding; abandon it with its own operation ID`,
+      );
+    if (
+      options.sourceStreamId !== undefined &&
+      intent.sourceStreamId !== options.sourceStreamId
+    )
+      throw new Error("Live migration intent belongs to another recording");
+    if (intent.requestHash !== liveMigrationRequestHash(liveKey, options))
+      throw new Error(
+        "Abandon request differs from the saved migration; use its original arguments",
+      );
+    const stagingRoot = join(migrationRoot, hash(options.operationId));
+    // A crash between remote creation and the saved receipt still leaves the staged
+    // binding on disk; its identity is what has to be removed.
+    const stagedBinding = z
+      .object({ streamId: idSchema, revision: idSchema })
+      .safeParse(
+        await readJson(
+          join(intent.targetDirectory, "binding.json"),
+          true,
+        ).catch(() => undefined),
+      );
+    const replacement =
+      intent.target ?? (stagedBinding.success ? stagedBinding.data : undefined);
+    const receipt = () => ({
+      operationId: intent.operationId,
+      serverOrigin: intent.serverOrigin,
+      sourceStreamId: intent.sourceStreamId,
+      sourceRevision: intent.sourceRevision,
+      bindingDirectory: liveDirectory,
+      stagingDirectory: stagingRoot,
+      stagedRecording: replacement
+        ? { streamId: replacement.streamId, disposition: "removed" as const }
+        : null,
+      abandoned: true as const,
+      completed: true as const,
+    });
+    if (intent.abandoned) return receipt();
+    if (!intent.abandoning) {
+      if (!(await exists(liveDirectory)))
+        throw new Error(
+          "This migration already retired the source binding and ended its recording; rerun migrate-live to finish it",
+        );
+      // Exclude a publisher without opening or recovering the binding's journal.
+      const bindingLock = await FileLock.acquire(
+        join(liveDirectory, ".publisher.lock"),
+      ).catch((error: unknown) => {
+        if (error instanceof ProtocolError && error.code === "publisher_busy")
+          throw new Error(
+            "A publisher process is attached to this binding; stop it and retry",
+          );
+        throw error;
+      });
+      try {
+        const finish = await readJson(
+          join(liveDirectory, "finish-publish.json"),
+          true,
+        ).catch(() => undefined);
+        if ((finish as { completed?: unknown } | undefined)?.completed === true)
+          throw new Error(
+            "This migration already ended the source recording; rerun migrate-live to finish it",
+          );
+        await assertFrozenSourceLost(intent, options);
+      } finally {
+        await bindingLock.release();
+      }
+      if (replacement && !options.confirmRemoval)
+        throw new Error(
+          `Abandoning removes the staged private replacement recording ${replacement.streamId}; pass --confirm-removal`,
+        );
+      intent = { ...intent, abandoning: true };
+      await atomicJson(intentPath, intent);
+      await options.onPhase?.("abandoning");
+    }
+    if (replacement)
+      await removeRecording({
+        serverOrigin: intent.serverOrigin,
+        streamId: replacement.streamId,
+        revision: replacement.revision,
+        operationId: hash({
+          migration: intent.operationId,
+          action: "abandon-remove-target",
+        }),
+        credential: options.ownerCredential,
+        signal: options.signal,
+      }).catch((error: unknown) => {
+        // A removed replacement stays removed; the retry only finishes disposal.
+        if (!(error instanceof ProtocolError) || error.code !== "stream_gone")
+          throw error;
+      });
+    await options.onPhase?.("removed");
+    await rm(stagingRoot, { recursive: true, force: true });
+    await options.onPhase?.("discarded");
+    intent = { ...intent, abandoned: true, completed: true };
+    await atomicJson(intentPath, intent);
+    return receipt();
+  } catch (error) {
+    if (error instanceof z.ZodError)
+      throw new Error("Live migration metadata failed validation");
+    throw error;
+  } finally {
+    await lock.release();
+  }
+}
+
+/**
+ * Abandonment is only for operations that cannot finish. A retry converts the source
+ * the intent pinned, so the operation is still completable exactly while that source
+ * still reads back: the native prefix for a file agent, the frozen export (or a native
+ * server that still reproduces it) for OpenCode.
+ */
+async function assertFrozenSourceLost(
+  intent: Intent,
+  options: LiveMigrationSource & { signal: AbortSignal },
+) {
+  const stillThere = new Error(
+    "This migration can still complete; rerun migrate-live with its original arguments, or make the source unavailable before abandoning",
+  );
+  if (intent.nativeAgent === "opencode") {
+    const directory = intent.frozenDirectory;
+    if (directory === undefined) return; // Interrupted before any export was pinned.
+    const access: OpenCodeNativeAccess = {
+      origin: intent.nativeServerOrigin ?? options.nativeServerOrigin ?? "",
+      nativeSessionId: intent.nativeSessionId,
+      includeChildren: intent.boundary.children.length > 0,
+      signal: options.signal,
+      ...(options.nativePassword ? { password: options.nativePassword } : {}),
+      ...(options.nativeUsername ? { username: options.nativeUsername } : {}),
+    };
+    const pinned = [
+      {
+        nativeSessionId: intent.nativeSessionId,
+        boundary: intent.boundary.root,
+      },
+      ...intent.boundary.children.map((child) => ({
+        nativeSessionId: child.nativeAgent,
+        boundary: { offset: child.offset, prefixHash: child.prefixHash },
+      })),
+    ];
+    for (const entry of pinned) {
+      const path = frozenOpenCodePath(directory, entry.nativeSessionId);
+      try {
+        await readFrozenOpenCodeSession(path, entry.boundary);
+        continue;
+      } catch {
+        options.signal.throwIfAborted();
+      }
+      try {
+        await refreezeOpenCodeSession(
+          access,
+          directory,
+          entry.nativeSessionId,
+          entry.boundary,
+        );
+      } catch {
+        options.signal.throwIfAborted();
+        return; // This session cannot be frozen again: the migration is dead.
+      }
+    }
+    throw stillThere;
+  }
+  const path = intent.nativeSourcePath ?? options.nativeSource;
+  if (path === undefined) return;
+  try {
+    // The root prefix is what every retry re-reads first; child sources are
+    // rediscovered from it by the importer.
+    await verifyPrefix(resolve(path), intent.boundary.root, options.signal);
+  } catch {
+    options.signal.throwIfAborted();
+    return;
+  }
+  throw stillThere;
 }

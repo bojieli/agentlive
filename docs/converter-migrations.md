@@ -1,6 +1,6 @@
 # Converter and import migration implementation audit
 
-Status: implemented so far are inspection, frozen-import child-source relocation, replacement import with changed converter/filter/artifact settings (optionally on another server), and replacement of existing live Claude/Codex/Kimi bindings (`migrate-live`, below). Compatible in-place continuation, OpenCode live-binding migration and archive-only server transfer remain unfinished. Existing mismatched-option checks remain in force. This audit identifies the state that a migration must handle before native converter behavior can change safely.
+Status: implemented so far are inspection, frozen-import child-source relocation, replacement import with changed converter/filter/artifact settings (optionally on another server), and replacement of existing live Claude/Codex/Kimi/OpenCode bindings (`migrate-live`, below), including abandoning a migration that can never complete. Compatible in-place continuation and archive-only server transfer remain unfinished. Existing mismatched-option checks remain in force. This audit identifies the state that a migration must handle before native converter behavior can change safely.
 
 ## Inspect an existing binding
 
@@ -171,7 +171,7 @@ agentlive publish --agent AGENT --source ROOT_FILE --resume-import \
   --title NEW_TITLE [same new filter/artifact options]
 ```
 
-Use this command when a live Claude, Codex or Kimi binding (one with `publish.json`, including a resumed import) must change its converter, filter, title or artifact policy. Restarting `publish` with changed options is still rejected. `--source BINDING_DIR` can be used instead of `--stream`. `--native-source` must be the transcript the binding follows. The binding's saved native cursor (and any earlier import boundary) must still be a prefix of that file. Use `published.manifestHash` from inspection. Options that are not given keep the binding's current values: the title and the artifact base and roots. Bundle and remote-artifact policies are not recorded in `publish.json`, so pass them again if you still want them. The effective filter is the automatic environment-secret filter, plus the owner credential, plus the `--redact-env` values. `publish` now accepts `--redact-env` too, so the same filter can be supplied when you continue.
+Use this command when a live Claude, Codex, Kimi or OpenCode binding (one with `publish.json`, including a resumed import) must change its converter, filter, title or artifact policy. Restarting `publish` with changed options is still rejected. `--source BINDING_DIR` can be used instead of `--stream`. For the file agents `--native-source` must be the transcript the binding follows; OpenCode uses `--native-server` instead (below). The binding's saved native cursor (and any earlier import boundary) must still be a prefix of that file. Use `published.manifestHash` from inspection. Options that are not given keep the binding's current values: the title and the artifact base and roots. Bundle and remote-artifact policies are not recorded in `publish.json`, so pass them again if you still want them. The effective filter is the automatic environment-secret filter, plus the owner credential, plus the `--redact-env` values. `publish` now accepts `--redact-env` too, so the same filter can be supplied when you continue.
 
 Order of operations. The command holds a per-key migration lock throughout. It also holds the source binding's publisher lock from validation until the binding is retired.
 
@@ -180,9 +180,8 @@ Order of operations. The command holds a per-key migration lock throughout. It a
    - any captured event is unacknowledged;
    - the manifest hash is different;
    - a credential rotation, import resume, family expansion, archive transfer or someone else's pending finish is still in progress;
-   - sharing is paused (the old recording cannot be ended then);
-   - the binding belongs to OpenCode.
-2. **Freeze and import.** The root is frozen at its last complete line, and each current family child is frozen the same way. Incomplete trailing lines, and children that appear later, are left for live capture. The frozen prefix must cover everything the old binding captured, including every child cursor. The current converter imports exactly that prefix as a new private recording, under the new policy and with fresh event mappings. The import goes into a staging binding under `publisher/live-migrations/<key>/<sha256(operation)>/`. Before the replacement recording is created, `publisher/live-migrations/<key>/intent.json` records: the source recording, revision, epoch and captured count; the manifest hash; the frozen root and child boundaries; the target policy hash; the disposition; and the staging and retirement paths. Retries import with exactly those saved offsets, so a native file that keeps growing does not change the target.
+   - sharing is paused (the old recording cannot be ended then).
+2. **Freeze and import.** For the file agents the root is frozen at its last complete line, and each current family child is frozen the same way. OpenCode freezes a native export instead (below). Incomplete trailing lines, and children that appear later, are left for live capture. The frozen prefix must cover everything the old binding captured, including every child cursor. The current converter imports exactly that prefix as a new private recording, under the new policy and with fresh event mappings. The import goes into a staging binding under `publisher/live-migrations/<key>/<sha256(operation)>/`. Before the replacement recording is created, `publisher/live-migrations/<key>/intent.json` records: the source recording, revision, epoch and captured count; the manifest hash; the frozen root and child boundaries; the target policy hash; the disposition; and the staging and retirement paths. Retries import with exactly those saved offsets, so a native file that keeps growing does not change the target.
 3. **Verify and end.** The command checks that the replacement is a private, ended recording. It then ends the old recording at its captured boundary, which appends only a lifecycle event.
 4. **Record lineage.** It posts immutable server lineage (`migrationOrigin`, using the source and target converter versions). It writes `live-migration.json` into the old binding and moves that binding to `publisher/retired/<key>-live-migration-<id>` while still holding its lock.
 5. **Hand over the key.** It renames the staged replacement into the live key.
@@ -205,7 +204,9 @@ Retry and restart behaviour:
 - A different operation ID is rejected while an intent is unfinished. Changed title, filter or artifact options are rejected once the intent exists.
 - After completion, a new operation ID can migrate the replacement once it has been continued live. Only the latest receipt is kept.
 
-Current evidence (`tests/recovery/migrate-live.test.ts`, 5 tests, real CLI and HTTP server, synthetic native files):
+Current evidence (`tests/recovery/migrate-live.test.ts`, 5 tests, and
+`tests/recovery/migrate-live-opencode.test.ts`, 4 tests; real CLI, real AgentLive HTTP
+server, synthetic native files and a synthetic OpenCode server):
 
 - Claude, Codex and Kimi root bindings, plus a Claude family binding.
 - A secret newly redacted through the environment filter, and a changed title. A public source is replaced by a private target.
@@ -216,14 +217,151 @@ Current evidence (`tests/recovery/migrate-live.test.ts`, 5 tests, real CLI and H
 - Interruptions after the intent, after the import, after lineage and after retirement are resumed through the CLI. Publishing is fenced while an intent is pending.
 - Wrong manifest hash, missing `--confirm-removal`, an attached publisher, undelivered events, a conflicting operation ID, a changed policy on retry and an OpenCode binding are all rejected; the rejection cases leave the binding files unchanged.
 - `publish --resume-import` with the new options continues live capture into the replacement for every agent, and the old recording stays unchanged.
+- OpenCode: a live family binding (root plus one child, with attachments) is migrated
+  from a frozen native export under a newly redacted secret and a changed title; the
+  replacement equals a fresh `agentlive import --agent opencode --include-children` of
+  the same frozen export family; the native session is changed after the intent is saved
+  and the pinned target does not move; interruptions after the intent, the import,
+  lineage and retirement all resume; a concurrent `agentlive import` of the same session
+  between retirement and hand-over is refused by the fence and the hand-over still
+  succeeds; and `publish --resume-import --source <frozen export>` continues the
+  replacement live.
+- OpenCode rejections: a native server that has forgotten captured messages, a session
+  recreated under the same identity, and `--native-source` for an OpenCode binding (or
+  `--native-server` for a file binding); the binding files are unchanged and no intent
+  is written.
+- Abandonment: refused while the frozen source still reads back, refused once the source
+  binding has been retired, and refused for a different operation ID; then, after the
+  source is genuinely gone, it removes the staged private replacement (with
+  `--confirm-removal`), deletes the staging directory, releases the fence, leaves the
+  original binding byte-for-byte unchanged and publishing into the same recording, is a
+  no-op when repeated, refuses to restart the abandoned operation ID, and allows a new
+  operation ID to migrate the binding afterwards. Covered for OpenCode (staged
+  replacement removed) and for a Claude binding whose transcript was deleted before any
+  replacement existed.
 
 Limits:
 
-- **OpenCode is not supported.** Its live capture follows a native server rather than a file, so a frozen export boundary is not yet defined for it.
-- **No abandon command.** An intent that can never complete (for example, because the native source was deleted) blocks publishing for that session until the operator removes `publisher/live-migrations/<key>/intent.json` by hand. A staged replacement recording created before that point stays private and can be removed with `agentlive remove`.
-- **The fence covers `publish` only.** A concurrent `import` of the same session during the short gap between retirement and hand-over would make the hand-over fail rather than overwrite that binding.
 - **Children are not fully frozen.** A child with no complete line at freeze time fails the first attempt; retry once it has one.
 - **Titles.** Titles containing newly filtered values are redacted, so continue with the receipt's `continuation.title`.
 - **Moved sources.** Moved Kimi exports that need an explicit `--native-agent` identity are not supported.
 - **Cross-server replacement is not supported** for live bindings.
 - **Converter output.** Compatibility is not proven: the replacement is the current converter's projection, not an equivalence proof.
+
+## Replace a live OpenCode binding
+
+```sh
+agentlive migrate-live --stream OLD_RECORDING_ID --native-server http://127.0.0.1:4096 \
+  --operation-id UNIQUE_ID --expected-manifest-hash LIVE_MANIFEST_HASH \
+  --old-recording retain [--title NEW_TITLE] [--redact-env NAME]
+agentlive publish --agent opencode --native-server ORIGIN --native-session ID \
+  --source FROZEN_EXPORT --resume-import --title NEW_TITLE [--include-children]
+```
+
+OpenCode live capture follows a native server, not a file, so there is no retained
+transcript to freeze at a byte boundary. **Freezing an OpenCode source means exporting
+the native server's current state for the bound session** — `GET /session/:id` plus
+`GET /session/:id/message`, the same pair `opencode export` serializes — canonicalizing
+it and writing it as an immutable file under
+`publisher/live-migrations/<key>/<sha256(operation)>/frozen/<sha256(session)>.json`. For
+a binding published with `--include-children`, every descendant discovered at that
+moment is frozen into the same directory. The replacement is then an ordinary frozen
+import of those files (`opencode-snapshot-4`, or `opencode-snapshot-4-family-import-1`
+with the frozen directory as its family root), which is why a fresh
+`agentlive import --agent opencode --source <the frozen file>` under the same policy
+produces exactly the same content.
+
+`OPENCODE_SERVER_PASSWORD` and `OPENCODE_SERVER_USERNAME` authorize the native read, as
+they do for `publish`; the password is part of the redaction dictionary. `--server` is
+still the binding's AgentLive origin, and `--native-source` is rejected for OpenCode
+bindings (as `--native-server` is for the file agents).
+
+Why this is safe:
+
+- The export is written once, before the intent is saved, and the intent pins each
+  file's byte length and SHA-256. Every retry converts exactly those bytes; a session
+  that keeps changing cannot change the target. A frozen file that has been lost is
+  re-read from the native server only when the server reproduces the pinned bytes
+  exactly.
+- A migration still requires a detached publisher and a fully acknowledged binding, so
+  the converter state it is compared against is quiescent and complete.
+- OpenCode import and OpenCode live capture are the same converter (`OpenCodeCapture`,
+  one `opencode-live/state.json` per binding). The frozen snapshots must therefore
+  still produce **every converter entity the binding currently shows**: the migration
+  recomputes the entity identities for the frozen snapshots and rejects the operation
+  when any object recorded as present is missing. A reverted, truncated or recreated
+  native session is refused ("the OpenCode server no longer shows source objects this
+  binding captured") instead of silently dropping content the old recording published.
+  The native `time.created` of the session, and of every captured child, must be
+  unchanged.
+- Every child the binding captured must still be discoverable under the same parent;
+  children discovered for the first time are included in the frozen family, exactly as
+  live capture would have picked them up.
+- Because the replacement is a normal frozen import, continuation is the existing,
+  tested OpenCode import-to-live path: `publish --resume-import` reopens it and
+  reconciles the current native snapshots against the imported entities.
+
+The receipt's `continuation` carries `sourcePath` (the frozen root export) and
+`nativeServerOrigin`. Keep the frozen directory: `publish` re-reads the frozen root
+export on **every** start of the continued binding, not only the first, and a family
+continuation re-reads each frozen child at the path `import.json` recorded.
+
+Limits specific to OpenCode: artifact roots default to the live manifest's
+`artifactRoots` and the artifact base to the previous import's base (or `/`, which is
+what live capture uses) unless `--artifact-base` is given; a native server that cannot
+be reached, returns a different session, or no longer shows captured objects is
+rejected rather than migrated; and an OpenCode binding whose _original_ export is gone
+is unaffected, because the frozen source is taken from the server rather than from the
+old import.
+
+## Abandon a live migration
+
+```sh
+agentlive migrate-live --abandon --operation-id UNIQUE_ID --stream OLD_RECORDING_ID \
+  --native-source ROOT_FILE --expected-manifest-hash LIVE_MANIFEST_HASH \
+  --old-recording retain [--confirm-removal]
+```
+
+An intent that can never complete fences `publish` and `import` for that native
+session. `--abandon` releases it. Repeat the operation's original arguments: the saved
+request hash is recompared, so a different operation, recording or source cannot
+release someone else's fence.
+
+It **refuses while the migration could still complete**:
+
+- while the source binding is still at the live key and the source the intent pinned
+  still reads back — the file agents' frozen root prefix, or an OpenCode frozen export
+  (or a native server that still reproduces its exact bytes);
+- once the source binding has been retired, because only a local rename and the
+  disposition remain, and the old recording has already been ended and linked;
+- once this migration has ended the source recording;
+- while a publisher is attached to the binding.
+
+When it proceeds it: marks the intent `abandoning` (durably, before any disposal);
+removes the staged private replacement recording, if one was created, with a
+deterministic operation ID — `--confirm-removal` is required in that case and the
+receipt reports `stagedRecording: {streamId, disposition: "removed"}`; deletes the
+staging directory with its staged binding and any frozen exports; and marks the intent
+`abandoned`, which releases the fence. Each step is idempotent, so an interrupted
+abandon is finished by repeating it; a `stream_gone` removal response is treated as
+already removed.
+
+The original binding is never written to. It keeps its recording, visibility, journal
+and captured events exactly as they were, and `publish` continues it with its original
+options. A new operation ID can start a fresh migration afterwards; `migrate-live`
+refuses to reuse the abandoned operation ID.
+
+Limits: an operation blocked only because a _child_ source is gone, while the root
+source still reads back, is not recognized as dead — remove or truncate the root source
+first, or complete the migration. An operation whose replacement recording was removed
+by hand after the source recording was already ended cannot be abandoned either; rerun
+`migrate-live`, which reuses the saved intent.
+
+## The migration fence
+
+While `publisher/live-migrations/<key>/intent.json` exists and is not `completed`,
+`agentlive publish` (file agents and OpenCode) and `agentlive import` both refuse to
+start for that native session, before either of them can create a binding at the key
+the migration is about to hand over. A concurrent `import` is therefore rejected up
+front rather than colliding with the hand-over. Replacement imports run under the
+operation's own staging root, so an in-flight migration never fences itself.

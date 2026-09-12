@@ -54,6 +54,17 @@ export {
   importOpenCodeRecording,
   type OpenCodeImportOptions,
 } from "./import-opencode.js";
+export {
+  freezeOpenCodeSource,
+  frozenOpenCodePath,
+  readFrozenOpenCodeSession,
+  refreezeOpenCodeSession,
+  type FrozenOpenCodeBoundary,
+  type FrozenOpenCodeSession,
+  type FrozenOpenCodeSource,
+  type OpenCodeNativeAccess,
+} from "./opencode-freeze.js";
+export { openCodeEntityIds } from "./opencode-capture.js";
 
 export type { FileArtifactResolver } from "./artifact-types.js";
 
@@ -75,6 +86,7 @@ export {
 } from "./observe-opencode.js";
 export {
   parseOpenCodeSnapshot,
+  visibleOpenCodeSnapshot,
   type OpenCodeSnapshot,
 } from "./opencode-history.js";
 export { OpenCodeCapture } from "./opencode-capture.js";

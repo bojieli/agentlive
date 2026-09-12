@@ -685,7 +685,7 @@ it("resumes a Kimi live migration interrupted between retirement and placement",
   }
 }, 120000);
 
-it("rejects undelivered events and OpenCode bindings without changing them", async () => {
+it("rejects undelivered events and file sources for OpenCode without changing them", async () => {
   const s = await setup("claude");
   const { server, native, state, root } = s;
   try {
@@ -733,9 +733,10 @@ it("rejects undelivered events and OpenCode bindings without changing them", asy
     });
     const directory = opencode.directory;
     await opencode.close();
+    // OpenCode bindings migrate from a native export, not from a transcript.
     await fails(
       args.map((value) => (value === s.bindingDirectory ? directory : value)),
-      "does not support OpenCode",
+      "pass --native-server",
     );
   } finally {
     await server.close();

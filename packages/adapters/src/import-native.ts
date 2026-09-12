@@ -1,4 +1,7 @@
-import { assertPublisherNotFinished } from "@agentlive/publisher";
+import {
+  assertPublisherNotFinished,
+  assertNoPendingLiveMigration,
+} from "@agentlive/publisher";
 import {
   validateRemoteArtifactPolicy,
   remoteArtifactSecrets,
@@ -94,11 +97,16 @@ export async function importNativeRecording<Report>(
       ],
     };
   const source = adapter.source;
-  const journal = await PublisherJournal.open(options.publisherRoot, {
+  const binding = {
     serverOrigin: options.serverOrigin,
     agent: adapter.agent,
     nativeSessionId: source.nativeSessionId,
-  });
+  };
+  // Checked before open, which would otherwise create a binding at a key a live
+  // migration is about to hand over. Replacement imports use their own staging
+  // root, so an in-flight migration never fences itself.
+  await assertNoPendingLiveMigration(options.publisherRoot, binding);
+  const journal = await PublisherJournal.open(options.publisherRoot, binding);
   let artifacts: Awaited<ReturnType<typeof localArtifactResolver>> | undefined;
   try {
     await assertPublisherNotFinished(journal.directory);

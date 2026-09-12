@@ -57,6 +57,51 @@ async function readBounded(path: string, limit: number) {
     throw new Error("OpenCode capture checkpoint exceeds its limit");
   return JSON.parse(await readFile(path, "utf8"));
 }
+/**
+ * Every converter entity identity a visible snapshot produces, in one place so that
+ * `convert` (which decides what disappeared) and live-binding migration (which checks
+ * that a frozen source still covers everything a binding captured) cannot drift apart.
+ * Malformed tool state yields no attachment identities; `convert` rejects it instead.
+ */
+export function openCodeEntityIds(
+  snapshot: OpenCodeSnapshot,
+  child?: { nativeSessionId: string },
+): Set<string> {
+  const entityId = (value: unknown) =>
+    child ? hash({ child: child.nativeSessionId, entity: value }) : hash(value);
+  const ids = new Set<string>([entityId("session")]);
+  if (snapshot.info.parentID) ids.add(entityId("session-lineage"));
+  for (const message of snapshot.messages) {
+    ids.add(entityId(message.info.id));
+    for (const part of message.parts) {
+      if (
+        ["text", "reasoning", "step-start", "step-finish"].includes(part.type)
+      )
+        continue;
+      ids.add(entityId(part.id));
+      if (part.type !== "tool") continue;
+      const state = part.state;
+      const attachments =
+        state && typeof state === "object"
+          ? (state as { attachments?: unknown }).attachments
+          : undefined;
+      if (!Array.isArray(attachments)) continue;
+      for (const [index, value] of attachments.entries()) {
+        const id =
+          value && typeof value === "object"
+            ? (value as { id?: unknown }).id
+            : undefined;
+        ids.add(
+          entityId({
+            tool: part.id,
+            attachment: typeof id === "string" ? id : index,
+          }),
+        );
+      }
+    }
+  }
+  return ids;
+}
 /** Converts mutable native snapshots into durably numbered per-entity revisions. No raw snapshots are persisted. */
 export class OpenCodeCapture {
   private tail: Promise<unknown> = Promise.resolve();
@@ -436,7 +481,8 @@ export class OpenCodeCapture {
         ? hash({ child: this.child.nativeSessionId, entity: value })
         : hash(value);
     const sessionId = entityId("session");
-    const seen = new Set([sessionId]);
+    // One traversal decides both what is revised and what disappeared.
+    const seen = openCodeEntityIds(snapshot, this.child);
     const gap = (reason: string): EventContent => ({
       kind: "capture.gap",
       payload: { reason, recoveredState: false },
@@ -462,7 +508,6 @@ export class OpenCodeCapture {
     );
     const lineageId = entityId("session-lineage");
     if (snapshot.info.parentID) {
-      seen.add(lineageId);
       await this.revise(
         lineageId,
         snapshot.info.parentID,
@@ -501,7 +546,6 @@ export class OpenCodeCapture {
     for (const message of snapshot.messages) {
       signal?.throwIfAborted();
       const id = entityId(message.info.id);
-      seen.add(id);
       const complete =
         message.info.role === "user" ||
         message.info.time.completed !== undefined;
@@ -574,7 +618,6 @@ export class OpenCodeCapture {
         )
           continue;
         const partId = entityId(part.id);
-        seen.add(partId);
         if (part.type === "tool") {
           const native = z.record(z.string(), z.unknown()).parse(part.state);
           const status = z
@@ -668,7 +711,6 @@ export class OpenCodeCapture {
                 attachment:
                   typeof attachment.id === "string" ? attachment.id : index,
               });
-              seen.add(attachmentId);
               await this.revise(
                 attachmentId,
                 {
