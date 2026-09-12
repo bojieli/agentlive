@@ -293,7 +293,18 @@ export async function startServer(options: ServerOptions) {
     for (const check of [...socketChecks]) check();
   };
   accountSessions?.onRevoke(revalidateTransfers);
-  accounts?.onStatusChange(revalidateTransfers);
+  /** Hosted moderation: a disabled account's recordings are suspended whole. They accept
+   * no publishing and are not served or listed until the account is enabled again; only
+   * the operator credential can still read them, to review the reported content. The
+   * local owner ("local") has no account record and a standalone server has no account
+   * store, so neither is ever suspended. */
+  const suspended = (ownerId: string) => accounts?.isDisabled(ownerId) ?? false;
+  store.setOwnerSuspension(suspended);
+  accounts?.onStatusChange((id) => {
+    // Anonymous public read lifetimes are not in the transfer registry; end them here.
+    if (suspended(id)) store.suspendOwner(id);
+    revalidateTransfers();
+  });
   const ownerHash = digest(options.ownerSecret);
   const isOwner = (secret: string) =>
     !!secret && timingSafeEqual(digest(secret), ownerHash);
@@ -319,11 +330,17 @@ export async function startServer(options: ServerOptions) {
     accountId?: string,
   ) => {
     session.assertAvailable();
+    // The operator reads any recording, including a suspended one, to review it.
+    if (isOwner(secret)) return;
+    if (suspended(session.info.ownerId))
+      throw new ProtocolError(
+        "forbidden",
+        "Recording is unavailable while its owner account is disabled",
+      );
     accountId ??= accountSessions?.authenticateDevice(secret)?.account.id;
     if (
       session.info.visibility !== "private" ||
       (accountId !== undefined && session.info.ownerId === accountId) ||
-      isOwner(secret) ||
       grants.authorize(secret, session.info.id, session.info.revision)
     )
       return;
@@ -1651,6 +1668,8 @@ export async function startServer(options: ServerOptions) {
     let cancelViewing: (() => void) | undefined;
     let accountActive: (() => boolean) | undefined;
     let authorizeView: (() => void) | undefined;
+    /** Set once a publisher holds a lease; throws when the owning account is disabled. */
+    let authorizePublish: (() => void) | undefined;
     const role = publishing ? "publisher" : "viewer";
     let counted = false;
 
@@ -1658,9 +1677,15 @@ export async function startServer(options: ServerOptions) {
       if (ended || !socket) return;
       try {
         authorizeView?.();
+        authorizePublish?.();
       } catch {
         cleanup();
-        socket.close(1008, "Viewing authorization ended");
+        socket.close(
+          1008,
+          publishing
+            ? "Publishing authorization ended"
+            : "Viewing authorization ended",
+        );
         return;
       }
       if (accountActive && !accountActive()) {
@@ -1704,6 +1729,7 @@ export async function startServer(options: ServerOptions) {
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     const releaseSession = () => {
       authorizeView = undefined;
+      authorizePublish = undefined;
       if (cancelViewing)
         viewing?.signal.removeEventListener("abort", cancelViewing);
       cancelViewing = undefined;
@@ -1800,6 +1826,7 @@ export async function startServer(options: ServerOptions) {
                   session = target;
                   acquired = undefined;
                   lease = result.lease;
+                  authorizePublish = () => target.assertPublishable();
                   send({
                     type: "resumed",
                     protocolVersion: 1,

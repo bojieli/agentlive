@@ -179,6 +179,9 @@ export class RecordingSession {
     private readonly blobs: BlobStore,
     private readonly barrier?: WriteBarrier,
     private readonly usage?: RecordingUsage,
+    /** Hosted moderation gate, evaluated per call from in-memory account state.
+     * Absent for the local owner and for servers without hosted accounts. */
+    private readonly suspended?: () => boolean,
   ) {
     this.snapshots = new RecordingSnapshots(join(directory, "snapshots"), {
       streamId: metadata.id,
@@ -189,6 +192,7 @@ export class RecordingSession {
     directory: string,
     barrier?: WriteBarrier,
     usage?: RecordingUsage,
+    suspended?: () => boolean,
   ): Promise<RecordingSession> {
     const metadata = sessionMetadataSchema.parse(
       JSON.parse(await readFile(join(directory, "metadata.json"), "utf8")),
@@ -210,6 +214,7 @@ export class RecordingSession {
       blobs,
       barrier,
       usage,
+      suspended,
     );
     try {
       const verified = new Map<string, number>();
@@ -399,6 +404,21 @@ export class RecordingSession {
         "Invalid stream publishing credential",
       );
   }
+  /** Hosted moderation gate. A recording owned by a disabled account accepts no new
+   * events, lifecycle changes or attachments, whichever credential is presented;
+   * enabling the account again restores publishing. Never set for the local owner. */
+  assertPublishable(): void {
+    if (this.suspended?.())
+      throw new ProtocolError(
+        "forbidden",
+        "Recording owner account is disabled",
+      );
+  }
+  /** End anonymous public read lifetimes after the owning account is disabled;
+   * those lifetimes are not registered with the revocable transfer registry. */
+  suspendPublicReads(): void {
+    this.cancelPublicReads();
+  }
   get publisherCredentialState() {
     return {
       streamId: this.metadata.id,
@@ -522,8 +542,10 @@ export class RecordingSession {
     },
   ): Promise<{ lease: Lease; ack: PublisherAck }> {
     this.authorize(secret);
+    this.assertPublishable();
     return this.mutate(async () => {
       this.authorize(secret);
+      this.assertPublishable();
       if (input.revision !== this.metadata.revision)
         throw new ProtocolError(
           "revision_changed",
@@ -601,6 +623,7 @@ export class RecordingSession {
       return Promise.reject(error);
     }
     return this.mutate(async () => {
+      this.assertPublishable();
       this.checkLease(lease);
       let expected = this.producerThrough + 1;
       let nextServer = this.log.boundary.sequence;
@@ -885,6 +908,7 @@ export class RecordingSession {
     signal?: AbortSignal,
   ): Promise<BlobDescriptor> {
     this.authorize(secret);
+    this.assertPublishable();
     if (this.closing)
       throw new ProtocolError("stream_gone", "Session is closing");
     // Reserve the declared size before reading any body bytes; an already
@@ -898,6 +922,7 @@ export class RecordingSession {
       try {
         return await this.mutate(async () => {
           this.authorize(secret);
+          this.assertPublishable();
           const before = this.blobs.usage.storedBytes;
           try {
             return await this.blobs.install(staged);
@@ -994,9 +1019,11 @@ export class RecordingSession {
     >,
   ): Promise<StoredEvent> {
     this.authorize(secret);
+    this.assertPublishable();
     idSchema.parse(operationId);
     return this.mutate(async () => {
       this.authorize(secret);
+      this.assertPublishable();
       const digest = sha256(canonicalJson(content));
       const existing = this.operations.get(operationId);
       if (existing) {

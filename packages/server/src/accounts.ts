@@ -143,6 +143,11 @@ export class Accounts {
     const record = this.records.get(id);
     return record && publicAccount(record);
   }
+  /** Allocation-free moderation status for hot paths (every publish and read).
+   * Unknown IDs, including the local owner, are never disabled. */
+  isDisabled(id: string): boolean {
+    return this.records.get(id)?.disabled ?? false;
+  }
   private serial<T>(action: () => Promise<T>): Promise<T> {
     if (this.closing)
       return Promise.reject(new Error("Account store is closing"));

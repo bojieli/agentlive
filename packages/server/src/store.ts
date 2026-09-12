@@ -61,6 +61,9 @@ export class RecordingStore {
   >();
   private clock = 0;
   private removedCount = 0;
+  /** Hosted moderation gate; replaced by the server once hosted accounts are open.
+   * A standalone server and the local owner ("local") are never suspended. */
+  private suspended: (ownerId: string) => boolean = () => false;
   private constructor(
     readonly directory: string,
     private readonly lock: FileLock,
@@ -185,6 +188,17 @@ export class RecordingStore {
       await lock.release();
       throw error;
     }
+  }
+  /** Install the hosted moderation gate: recordings owned by a disabled account are
+   * neither publishable nor discoverable until the account is enabled again. The check
+   * reads in-memory account state, so it is safe on every publish and every listing. */
+  setOwnerSuspension(check: (ownerId: string) => boolean): void {
+    this.suspended = check;
+  }
+  /** End anonymous public read lifetimes of a just-disabled account's cached recordings. */
+  suspendOwner(ownerId: string): void {
+    for (const { session } of this.sessions.values())
+      if (session.info.ownerId === ownerId) session.suspendPublicReads();
   }
   private serial<T>(operation: () => Promise<T>): Promise<T> {
     if (this.closed)
@@ -312,7 +326,13 @@ export class RecordingStore {
             "corrupt_storage",
             "Recording listing identity mismatch",
           );
-        if (metadata.removed || metadata.visibility !== "public") continue;
+        // A disabled account's recordings leave public discovery until it is enabled again.
+        if (
+          metadata.removed ||
+          metadata.visibility !== "public" ||
+          this.suspended(metadata.ownerId)
+        )
+          continue;
         selected.push({
           id: metadata.id,
           revision: metadata.revision,
@@ -733,6 +753,7 @@ export class RecordingStore {
         join(this.directory, "sessions", id),
         this.barrier,
         this.quotas.forRecording(id, metadata.ownerId),
+        () => this.suspended(metadata.ownerId),
       );
       // Reconcile the startup estimate with the recovered committed state.
       this.quotas.track(
