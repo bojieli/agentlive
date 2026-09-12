@@ -374,8 +374,15 @@ export async function prepareOnlineBackup(options: {
   }
   let started = false;
   const release = async () => {
-    await rm(output, { recursive: true, force: true });
-    running.delete(barrier);
+    try {
+      // The plaintext owner credential goes first, so a directory that cannot
+      // be removed never keeps the secret. Admission is always reopened: a
+      // failed cleanup must not wedge every later backup.
+      await rm(join(output, "owner.json"), { force: true });
+      await rm(output, { recursive: true, force: true });
+    } finally {
+      running.delete(barrier);
+    }
   };
   return {
     output,
@@ -450,7 +457,8 @@ export async function prepareOnlineBackup(options: {
         running.delete(barrier);
         return { ...result, barrierMs };
       } catch (error) {
-        await release();
+        // Report why the backup failed, not why its cleanup did.
+        await release().catch(() => {});
         throw error;
       }
     },
