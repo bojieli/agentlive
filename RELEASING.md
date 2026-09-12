@@ -1,6 +1,6 @@
 # Releasing AgentLive
 
-AgentLive has not been released yet. This checklist is the intended path for the first and later releases. The exit gates in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) decide _whether_ a release should be called production-ready; this document covers _how_ to cut one.
+`0.1.0` was published on 2026-09-12. This checklist is the path for that release and later ones. The exit gates in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) decide _whether_ a release should be called production-ready; this document covers _how_ to cut one.
 
 ## Before tagging
 

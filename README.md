@@ -6,6 +6,13 @@
 </p>
 
 <p align="center">
+  <a href="https://www.npmjs.com/package/agentlive"><img alt="npm" src="https://img.shields.io/npm/v/agentlive?color=2f855a"></a>
+  <a href="https://github.com/bojieli/agentlive/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/bojieli/agentlive/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <img alt="Node" src="https://img.shields.io/badge/node-26.x-5a5a5a">
+</p>
+
+<p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="docs/">Documentation</a> ·
   <a href="docs/compatibility.md">Compatibility</a> ·
@@ -24,7 +31,7 @@ It captures **structured events** — messages, tool calls and results, file cha
 ![The browser viewer showing a recorded session](docs/browser/desktop.png)
 
 > [!IMPORTANT]
-> **Pre-release.** Everything described here is implemented and covered by 789 offline tests running on Linux and macOS in CI. It has been deployed to a real host, driven against real installed agents, and given a security review. It has **not** had a public pilot or outside testers, and several limits are measured and published rather than solved. See [implementation status](IMPLEMENTATION_STATUS.md) for what is verified and what is not, and [limits](docs/limits.md) for numbers. No npm release yet.
+> **Pre-release — `0.1.0` is the first published version.** Everything described here is implemented and covered by 807 offline tests running on Linux and macOS in CI. It has been deployed to a real host, driven against real installed agents, and given a security review. It has **not** had a public pilot or outside testers, and several limits are measured and published rather than solved. `0.x` makes no production-readiness claim: see [implementation status](IMPLEMENTATION_STATUS.md) for what is verified and what is not, and [limits](docs/limits.md) for the numbers.
 
 ## Why
 
@@ -37,42 +44,53 @@ A coding agent's work is mostly invisible to everyone but the person running it.
 
 ## Quick start
 
-Requires [Node.js 26.8.1+](https://nodejs.org) on Linux or macOS. Full detail: [installing](docs/install.md).
+Needs [Node.js 26.x](https://nodejs.org) (26.8.1 or newer) on Linux or macOS, and nothing else — no database, no account, no API key.
 
 ```sh
-git clone https://github.com/bojieli/agentlive.git && cd agentlive
-npx --yes pnpm@12.3.4 install --frozen-lockfile
-npx --yes pnpm@12.3.4 package:build
-npm install --global ./dist/release/agentlive-0.1.0.tgz
+npm install --global agentlive
 ```
 
-**See it work immediately**, with no server and no agent:
+### 1. See it work — no server, no agent, 20 seconds
 
 ```sh
-agentlive replay --source docs/sample/agentlive-sample.agentlive --interactive
+curl -LO https://raw.githubusercontent.com/bojieli/agentlive/main/docs/sample/agentlive-sample.agentlive
+agentlive replay --source agentlive-sample.agentlive --interactive
 ```
 
-**Record your own session.** Start a server, then launch an agent under it:
+That is a real recording playing back from a single file. Press `space` to pause, `[` to rewind, `q` to quit.
+
+### 2. Record your own session
+
+Two terminals. In the first, start a server that keeps your recordings:
 
 ```sh
-agentlive serve                                   # in one terminal
-agentlive publish --agent claude --launch --cwd ~/my-project   # in another
+agentlive serve
 ```
 
-Your agent runs normally. AgentLive prints a `viewerUrl` — open it in a browser, or watch from a third terminal:
+In the second, launch your agent under AgentLive and work exactly as you normally would:
+
+```sh
+agentlive publish --agent claude --launch --cwd ~/my-project
+```
+
+It prints a `viewerUrl`. Open it in a browser — or watch from a third terminal:
 
 ```sh
 agentlive watch <viewer-url> --interactive
 ```
 
-Then pause, press `[` to rewind thirty seconds, and `l` to catch back up while the agent is still working.
+Pause it. Press `[` to rewind thirty seconds, then `l` to catch back up. The agent never noticed; your clock is yours.
+
+### 3. Keep it
 
 ```sh
-agentlive status                    # what is being published from this machine
+agentlive status                    # what this machine is publishing
 agentlive finish --stream <id>      # deliver everything captured, then end it
 agentlive export --stream <id> --output session.agentlive
 agentlive doctor                    # check runtime, credentials, server, agents
 ```
+
+`--agent` takes `claude`, `codex`, `kimi` or `opencode`. Already have sessions on disk? `agentlive import --agent claude --source <transcript>` turns past work into a recording. Full detail: [installing](docs/install.md) · [recording](docs/recording.md).
 
 ## What it captures
 
