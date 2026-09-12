@@ -29,11 +29,7 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 
 ### Changed
 
-- The platform statement now rests on evidence: a manually triggered Windows probe workflow records exactly what works there and what does not.
-
-- Published [limits and measured performance](docs/limits.md): every enforced limit with its source, the measured playback numbers, and an explicit list of what is not measured.
-
-- A tag-triggered release workflow builds a publishable manifest (`build-package.mjs --release`) and publishes `agentlive` to npm with provenance; see RELEASING.md.
-
 - The standalone package is named `agentlive` and licensed under MIT.
-- Documentation reorganized: concise README, detailed [usage guide](docs/usage.md), [compatibility matrix](docs/compatibility.md), contribution and security policies. Historical status logs moved to `docs/history/`.
+- Documentation reorganized: a concise README, a detailed [usage guide](docs/usage.md), a [compatibility matrix](docs/compatibility.md), [published limits and measured performance](docs/limits.md), and contribution and security policies. Historical status logs moved to `docs/history/`, and `pnpm check` now validates every documentation link.
+- A tag-triggered release workflow builds a publishable manifest (`build-package.mjs --release`) and publishes `agentlive` to npm with provenance; see [RELEASING.md](RELEASING.md).
+- The platform statement now rests on evidence: a manually triggered Windows probe workflow records exactly what works there and what does not.
