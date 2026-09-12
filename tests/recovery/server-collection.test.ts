@@ -14,6 +14,7 @@ import type {
 } from "../../packages/server/src/session.js";
 import type { SnapshotScheduleOptions } from "../../packages/server/src/snapshot-scheduler.js";
 import type { ContentPins } from "../../packages/storage/src/index.js";
+import { ProtocolError } from "../../packages/protocol/src/index.js";
 import type {
   PublishedEvent,
   SnapshotDescriptor,
@@ -111,12 +112,31 @@ async function recording(options: SnapshotScheduleOptions = manual) {
 /** The in-process read/export pins of a recording's snapshot store. */
 const pinsOf = (session: RecordingSession): ContentPins =>
   (session as unknown as { snapshots: { pins: ContentPins } }).snapshots.pins;
-const manifest = (session: RecordingSession, descriptor: SnapshotDescriptor) =>
-  session.readSnapshotContent(
-    descriptor.ref,
-    0,
-    Math.min(descriptor.ref.units, 65536),
-  );
+/** An unleased read is refused while a collection pass holds the retention
+ * barrier, exactly as a client sees it; retry rather than race the scheduler. */
+const manifest = async (
+  session: RecordingSession,
+  descriptor: SnapshotDescriptor,
+) => {
+  const deadline = Date.now() + 20_000;
+  for (;;) {
+    try {
+      return await session.readSnapshotContent(
+        descriptor.ref,
+        0,
+        Math.min(descriptor.ref.units, 65536),
+      );
+    } catch (error) {
+      if (
+        !(error instanceof ProtocolError) ||
+        error.code !== "retry_later" ||
+        Date.now() > deadline
+      )
+        throw error;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+  }
+};
 
 it("reclaims superseded generations while the head, a live lease and a pinned read stay exactly readable", async () => {
   const { root, store, session } = await recording();
