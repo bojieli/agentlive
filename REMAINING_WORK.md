@@ -57,7 +57,8 @@ The user-directed order remains: finish missing product features, then performan
 - Broader archive failure and version acceptance; derived snapshot/content entries are omitted by the current format.
 - Compatible recording-format upgrades and tested rollback.
 - Docker/Compose and HTTPS proxy validation on an actual target host and remaining architectures.
-- All four adapters through the standalone installation; Windows/WSL support statement.
+- All four adapters through the standalone installation.
+- Windows support, if wanted: the probe shows install, build and native locks work, but directory fsync is rejected (`EPERM`) and POSIX file-mode/symlink checks have no Windows equivalent. It needs an explicit, fault-tested durability and permission story, not a suppression of the failing calls. WSL is untested.
 
 ## 7. Centralized service and deployed pilot — M6
 
