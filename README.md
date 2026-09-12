@@ -83,6 +83,7 @@ agentlive replay --source session.agentlive --interactive
 | --- | --- |
 | Commands, publishing, viewers, limits | [Usage guide](docs/usage.md) |
 | Per-agent capture fidelity | [Compatibility](docs/compatibility.md) |
+| Enforced limits and measured performance | [Limits](docs/limits.md) |
 | Docker, HTTPS reverse proxy | [Deployment](deployment/README.md) |
 | Backup, restore and publisher recovery | [Server backups](docs/server-backups.md) |
 | Hosted accounts and OIDC | [Hosted identity](docs/hosted-identity.md) |

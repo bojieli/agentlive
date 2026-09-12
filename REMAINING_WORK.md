@@ -66,6 +66,6 @@ The user-directed order remains: finish missing product features, then performan
 
 ## 8. Release acceptance and publication — M7
 
-- Run the cross-client fault matrix and publish measured latency, throughput, seek, memory and disk limits.
+- Run the cross-client fault matrix, and extend [the published limits](docs/limits.md) with concurrent-load latency/throughput and the cached (IndexedDB) playback path at scale.
 - Provenance/signing, npm publication of `agentlive` and repository release notes.
 - External testers complete publish → watch → rewind → catch up → replay in both deployment modes.
