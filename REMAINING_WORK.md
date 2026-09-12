@@ -51,7 +51,7 @@ The 2026-09-12 review probed the authorization layer route by route and found it
 - Import bindings keep the whole converted journal: the completeness notice is computed by reducing the full captured prefix at the end of an import, so nothing can be pruned while one runs. That prefix is bounded by the native transcript, and resuming the import live puts the binding under normal retention, but a finished, never-resumed import still holds a copy of everything it converted.
 - Unavailable artifact work must not block unrelated capture/delivery indefinitely.
 - Explicit publisher epoch handoff and the remaining lifecycle/recovery fault matrix.
-- A single-step `publish --new-stream` (today: `finish`, then `retire`, then `publish`), and a way to start a new recording from the current native position instead of the retained beginning.
+- A way to start a new recording from the current native position instead of the retained beginning. `publish --new-stream` is implemented; cutting at the native tail is not, because a projection starting mid-object emits appends whose objects never started, which the reducers reject. It needs a per-adapter safe-boundary rule.
 - Actual laptop suspension and long offline periods within documented capacity limits.
 
 ## 5. Multi-session server and access lifecycle — M2/M5/M6

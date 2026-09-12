@@ -23,6 +23,10 @@ export {
   assertNoPendingLiveMigration,
   liveMigrationDirectory,
 } from "./migration-fence.js";
+export {
+  startNewPublisherStream,
+  type NewStreamReceipt,
+} from "./new-stream.js";
 export type {
   PublisherBinding,
   CaptureInput,

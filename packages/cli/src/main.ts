@@ -138,6 +138,7 @@ Commands:
   agentlive import --agent <codex|claude|kimi> --native-session <id> [--source-root <directory>] [--native-agent <kimi-agent>]
   agentlive import --source <recording.agentlive> [--server <origin>]
   agentlive publish --agent <codex|claude|kimi> --source <file> [--record-format structured|legacy]
+  agentlive publish ... --new-stream   (end and set aside this session's existing recording, then record a new one)
   agentlive publish --agent <codex|claude|kimi> --native-session <id> [--source-root <directory>] [--native-agent <kimi-agent>]
   agentlive publish --agent <codex|claude|kimi> --native-session <id> --launch [--cwd <project>] [--source-root <directory>]
   agentlive publish --agent <claude|codex|kimi> --launch [--cwd <project>] [--source-root <directory>]
@@ -367,6 +368,7 @@ async function main() {
       "restart-view": { type: "boolean" },
       "restart-rotation": { type: "boolean" },
       "resume-import": { type: "boolean" },
+      "new-stream": { type: "boolean" },
       "record-format": { type: "string" },
       stream: { type: "string" },
       output: { type: "string" },
@@ -658,6 +660,7 @@ async function main() {
                                   ? [
                                       "record-format",
                                       "resume-import",
+                                      "new-stream",
                                       "expand-family",
                                       "native-server",
                                       "launch",
@@ -725,6 +728,13 @@ async function main() {
       "--expand-family requires publishing with --include-children, without --resume-import or --launch",
     );
   if (values.cwd && !values.launch) throw new Error("--cwd requires --launch");
+  if (
+    values["new-stream"] &&
+    (values["resume-import"] || values["expand-family"])
+  )
+    throw new Error(
+      "--new-stream starts a separate recording; it cannot continue an import or expand an existing one",
+    );
   if (
     values["include-children"] &&
     values.agent !== "opencode" &&
@@ -1961,6 +1971,13 @@ async function main() {
         : {}),
       ...(values.source ? { sourcePath: resolve(values.source) } : {}),
       resumeImport: values["resume-import"] ?? false,
+      newStream: values["new-stream"] ?? false,
+      onNewStream: (retired) => {
+        process.stdout.write(
+          JSON.stringify({ event: "previous-recording-retired", ...retired }) +
+            "\n",
+        );
+      },
       publisherRoot: join(stateDir, "publisher"),
       serverOrigin: values.server ?? "http://127.0.0.1:7331",
       ownerCredential: secret,
@@ -2126,6 +2143,15 @@ async function main() {
         recordFormat,
         resumeImport: values["resume-import"] ?? false,
         expandFamily: values["expand-family"] ?? false,
+        newStream: values["new-stream"] ?? false,
+        onNewStream: (retired) => {
+          output.write(
+            JSON.stringify({
+              event: "previous-recording-retired",
+              ...retired,
+            }) + "\n",
+          );
+        },
         ...(codexFamily
           ? {
               familyRoot: resolve(

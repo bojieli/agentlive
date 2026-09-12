@@ -2,6 +2,7 @@ import {
   assertPublisherNotFinished,
   assertNoPendingLiveMigration,
   LIVE_JOURNAL_RETENTION,
+  startNewPublisherStream,
 } from "@agentlive/publisher";
 import {
   validateRemoteArtifactPolicy,
@@ -58,6 +59,11 @@ export interface OpenCodePublishOptions {
   finishRequested?: () => boolean;
   includeChildren?: boolean;
   expandFamily?: boolean;
+  /** End and set aside an existing binding for this session, then record anew. */
+  newStream?: boolean;
+  onNewStream?: (
+    retired: import("@agentlive/publisher").NewStreamReceipt,
+  ) => Promise<void> | void;
 }
 /** Attach to a supported native server; publisher and native connections recover independently. */
 export async function publishOpenCodeRecording(
@@ -77,6 +83,15 @@ export async function publishOpenCodeRecording(
   };
   // Checked before open, which would otherwise create a binding at a retired key.
   await assertNoPendingLiveMigration(options.publisherRoot, binding);
+  if (options.newStream) {
+    const retired = await startNewPublisherStream({
+      publisherRoot: options.publisherRoot,
+      binding,
+      ownerCredential: options.ownerCredential,
+      signal: options.signal,
+    });
+    if (retired) await options.onNewStream?.(retired);
+  }
   // Like file publishers, an OpenCode publisher runs unattended for days. Its
   // converter state is durable per converter, so the acknowledged prefix is not
   // needed to rebuild it and can be compacted away.

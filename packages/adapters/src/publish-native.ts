@@ -15,6 +15,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
   LIVE_JOURNAL_RETENTION,
+  startNewPublisherStream,
   PublisherJournal,
   PublisherNetwork,
   type PublisherStatus,
@@ -29,6 +30,11 @@ import { reportWhenBound, settleBinding } from "./bound-recording.js";
 export interface NativePublishOptions extends NativeImportOptions {
   resumeImport?: boolean;
   expandFamily?: boolean;
+  /** End and set aside an existing binding for this session, then record anew. */
+  newStream?: boolean;
+  onNewStream?: (
+    retired: import("@agentlive/publisher").NewStreamReceipt,
+  ) => Promise<void> | void;
   finishRequested?: () => boolean;
   onProgress?: (progress: {
     sourceCursor: SourceCursor;
@@ -87,6 +93,15 @@ export async function publishNativeRecording(
   };
   // Checked before open, which would otherwise create a binding at a retired key.
   await assertNoPendingLiveMigration(options.publisherRoot, binding);
+  if (options.newStream) {
+    const retired = await startNewPublisherStream({
+      publisherRoot: options.publisherRoot,
+      binding,
+      ownerCredential: options.ownerCredential,
+      signal: options.signal,
+    });
+    if (retired) await options.onNewStream?.(retired);
+  }
   // Live file publishers run unattended for days: bound retention compacts the
   // acknowledged prefix instead of growing one capture file without limit.
   const journal = await PublisherJournal.open(options.publisherRoot, binding, {

@@ -2,7 +2,14 @@ import { expect, it } from "vitest";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { createInterface } from "node:readline";
-import { mkdtemp, writeFile, readFile, rm, appendFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  writeFile,
+  readFile,
+  readdir,
+  rm,
+  appendFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -499,3 +506,104 @@ it("reads and changes recording visibility from the CLI", async () => {
     await rm(root, { recursive: true, force: true });
   }
 }, 60_000);
+
+it("starts a new recording in one step with --new-stream", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-publication-new-"));
+  let server: Awaited<ReturnType<typeof start>> | undefined;
+  try {
+    server = await start(root);
+    const owner = JSON.parse(await readFile(server.ownerFile, "utf8"));
+    const source = join(root, "source.jsonl");
+    await writeFile(source, row("first", "FIRST_RECORDING"));
+    const publishArgs = [
+      "--agent",
+      "claude",
+      "--source",
+      source,
+      "--server",
+      server.url,
+      "--state-dir",
+      root,
+    ];
+    const state = ["--state-dir", root];
+    // On a session with no binding yet it is simply the first publication.
+    const started = await publishUntilLive([...publishArgs, "--new-stream"]);
+    expect(
+      started.find((event) => event.event === "previous-recording-retired"),
+    ).toBeUndefined();
+    const first = started.find((event) => event.event === "publishing")!
+      .streamId as string;
+
+    await appendFile(source, row("second", "SECOND_RECORDING"));
+    const again = await publishUntilLive([...publishArgs, "--new-stream"]);
+    // finish, retire and publish, reported as one step.
+    expect(
+      again.find((event) => event.event === "previous-recording-retired"),
+    ).toMatchObject({ streamId: first, ended: true });
+    const second = again.find((event) => event.event === "publishing")!
+      .streamId as string;
+    expect(second).not.toBe(first);
+
+    // The old recording is ended and keeps only what it captured; the new one
+    // records the retained native history from the beginning.
+    const headers = { authorization: `Bearer ${owner.secret}` };
+    const read = async (streamId: string) => {
+      const info = await (
+        await fetch(`${server!.url}/api/v1/streams/${streamId}`, { headers })
+      ).json();
+      const events = await (
+        await fetch(
+          `${server!.url}/api/v1/streams/${streamId}/events?revision=${info.revision}&afterServerSeq=0&throughServerSeq=${info.serverSeq}`,
+          { headers },
+        )
+      ).text();
+      return { info, events };
+    };
+    const before = await read(first);
+    expect(before.info.lifecycle).toBe("ended");
+    expect(before.events).toContain("FIRST_RECORDING");
+    expect(before.events).not.toContain("SECOND_RECORDING");
+    const after = await read(second);
+    expect(after.info.lifecycle).toBe("open");
+    expect(after.events).toContain("FIRST_RECORDING");
+    expect(after.events).toContain("SECOND_RECORDING");
+
+    // Only one live binding remains, and the old one is set aside, not deleted.
+    const bindings = (await run(["status", ...state])).bindings;
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]).toMatchObject({ streamId: second, lifecycle: "open" });
+    expect((await readdir(join(root, "publisher", "retired"))).length).toBe(1);
+  } finally {
+    server?.child.kill("SIGTERM");
+    await server?.exited;
+    await rm(root, { recursive: true, force: true });
+  }
+}, 90_000);
+
+it("refuses --new-stream together with options that continue a recording", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-publication-new-bad-"));
+  try {
+    await expect(
+      exec(
+        process.execPath,
+        [
+          cli,
+          "publish",
+          "--agent",
+          "claude",
+          "--source",
+          join(root, "missing.jsonl"),
+          "--state-dir",
+          root,
+          "--new-stream",
+          "--resume-import",
+        ],
+        { env },
+      ),
+    ).rejects.toMatchObject({
+      stderr: expect.stringContaining("cannot continue an import"),
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
