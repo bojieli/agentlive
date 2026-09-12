@@ -40,7 +40,7 @@ Local tests use synthetic fixtures and make no model calls. They are correctness
 - In-flight HTTP transfer revocation for account sessions, devices, account disable, publisher credentials, viewing grants, visibility changes and removal; open viewing WebSockets are rechecked at the same points and close immediately. Tests: `tests/recovery/transfer-revocation.test.ts`. See [hosted identity](docs/hosted-identity.md).
 - Persisted `capture.completeness` notices emitted by importers at a frozen boundary, rendered by both viewers and carried in archive provenance, with legacy import bindings left unchanged. Tests: `tests/recovery/completeness-notice.test.ts`, `import-completeness.test.ts`. See [converter migrations](docs/converter-migrations.md).
 - A synthetic [sample recording](docs/sample/README.md) generated through the real CLI and replayed by the offline suite; `replay | head` now exits quietly instead of crashing on a closed pipe.
-- Publication documents: rewritten [README](README.md), [usage guide](docs/usage.md), [compatibility matrix](docs/compatibility.md), [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md), [CHANGELOG](CHANGELOG.md), MIT [LICENSE](LICENSE); the release package is renamed `agentlive`.
+- Publication documents: rewritten [README](README.md), [usage guides](docs/README.md), [compatibility matrix](docs/compatibility.md), [CONTRIBUTING](CONTRIBUTING.md), [SECURITY](SECURITY.md), [CHANGELOG](CHANGELOG.md), MIT [LICENSE](LICENSE); the release package is renamed `agentlive`.
 
 ## Added since (2026-09-12)
 

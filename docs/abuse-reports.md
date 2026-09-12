@@ -24,7 +24,6 @@ The ledger is a private server file under the exclusive server lock. Writes comm
 
 Focused HTTP tests cover viewing authorization, operator-only listing, pagination, receipt retry, conflicting retry, restart, private file permissions, input limits and intake limits. Full abuse resistance, retention, operator controls, broader browser lifecycle acceptance and production verification remain open.
 
-
 ## Browser operator review
 
 Enter the server operator credential in **Access key**, then open **Review reports (operator)**. The panel shows one page at a time, with **Refresh reports** returning to the first page and **Next report page** advancing. Ordinary account sign-in does not grant operator access.
@@ -71,7 +70,6 @@ Dismissal records the decision without changing the recording. Removal durably r
 The report's revision also protects recordings restored under a new revision. An old pending decision cannot silently remove that restored recording. Restore reconciliation preserves original report evidence and requires the operator to review the current recording and its restore history. Report decisions do not imply physical cleanup of backups or client copies.
 
 HTTP tests cover operator-only decisions, revision mismatch, dismissal, conflicting retries, and restart retries with injected interruptions before/after recording removal. Actual process-death and storage-failure review acceptance remains open.
-
 
 ## Reports after restore
 

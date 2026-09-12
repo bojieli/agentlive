@@ -2,12 +2,12 @@
 
 `OrderedContentMap` from `@agentlive/playback` stores an immutable map from supported keys to durable content references. It uses a `SnapshotContent` provider such as TextStore. It reads metadata without loading the value payloads.
 
-| Operation | Result |
-| --- | --- |
-| `get(root, key, signal?)` | A content reference, or undefined for an absent key. |
-| `entries(root, offset, limit, signal?)` | Up to 32 key/reference pairs in insertion order. |
-| `set(root, key, reference, signal?)` | A new root with the value inserted or updated. |
-| `delete(root, key, signal?)` | A root without the key, retaining its ordinal counter. |
+| Operation                               | Result                                                 |
+| --------------------------------------- | ------------------------------------------------------ |
+| `get(root, key, signal?)`               | A content reference, or undefined for an absent key.   |
+| `entries(root, offset, limit, signal?)` | Up to 32 key/reference pairs in insertion order.       |
+| `set(root, key, reference, signal?)`    | A new root with the value inserted or updated.         |
+| `delete(root, key, signal?)`            | A root without the key, retaining its ordinal counter. |
 
 Pass null for the initial empty map. Roots contain `version`, `size`, `nextOrdinal`, `byKey` and `byOrder`. Publish the entire root atomically inside the recording's bound state; publishing one index independently can produce an inconsistent map.
 

@@ -50,6 +50,6 @@ None of this is unfixable, but Windows support means choosing an explicit durabi
 
 - [Live transport probes](adapters/LIVE_PROBES.md) and [native history corpus](adapters/NATIVE_HISTORY_CORPUS.md): conversion, reducer and terminal-render passes over local histories (aggregate counts only; no transcript content is committed).
 - Synthetic end-to-end tests in `tests/recovery` cover import, live publish, restart deduplication, family capture, artifacts and archives for all four agents without model calls.
-- Opt-in probes (`scripts/probe-*.mjs`) exercise installed agents and may incur provider charges; see the [usage guide](usage.md#live-integration-probes).
+- Opt-in probes (`scripts/probe-*.mjs`) exercise installed agents and may incur provider charges; see [CONTRIBUTING](../CONTRIBUTING.md#live-integration-probes).
 
 Real interactive acceptance across supported native versions, provider failures and interrupted native work remain release gates tracked in [implementation status](../IMPLEMENTATION_STATUS.md).

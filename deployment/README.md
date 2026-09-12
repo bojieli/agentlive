@@ -113,7 +113,7 @@ The certificate comes from Caddy's local CA, not a public one: no ACME issuance,
 
 ## Monitoring and storage limits
 
-Add `--max-stored-bytes` and `--min-free-bytes` to the container command to bound what the server stores and to stop durable growth before the volume fills; `/readyz` reports not-ready while the free-space floor is breached. See [storage limits and metrics](../docs/usage.md#storage-limits-and-metrics) for the exact semantics.
+Add `--max-stored-bytes` and `--min-free-bytes` to the container command to bound what the server stores and to stop durable growth before the volume fills; `/readyz` reports not-ready while the free-space floor is breached. See [storage limits and metrics](../docs/operating.md#storage-limits-and-metrics) for the exact semantics.
 
 `--metrics` enables `GET /metrics` in the Prometheus text format. Scrapes must present the owner credential or `AGENTLIVE_METRICS_TOKEN`; set that variable in the container environment and give it to the scraper rather than sharing the owner credential:
 
@@ -134,6 +134,28 @@ command:
 ```
 
 Do not expose `/metrics` publicly. Keep the published port on loopback as configured here and let the scraper reach it over the private network, or block `/metrics` at the reverse proxy for anything but your monitoring source. The endpoint exports aggregates only — no recording IDs, titles, account IDs, credentials or event content — and the container probe does not yet exercise it.
+
+## Publish through a Cloudflare Tunnel
+
+A tunnel is often the easiest way to put AgentLive on a real name: `cloudflared` dials out, so no inbound port is opened, nothing already listening on 80 or 443 is disturbed, no firewall rule changes, and Cloudflare issues and renews the certificate.
+
+**Understand the trade-off first.** Cloudflare terminates TLS at its edge, so it can see everything passing through: recording content, attachment bytes and the access keys viewers present. AgentLive records coding sessions, which routinely contain source code and sometimes secrets. For a public demo recording that is fine. For private sessions, prefer a reverse proxy you run yourself ([above](#https-and-reverse-proxy)), where TLS terminates on your own host.
+
+Create the tunnel in the Cloudflare dashboard (Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared). Add a public hostname routing to `http://agentlive:7331`. The dashboard gives you a **tunnel token**, which authorizes running that one tunnel and nothing else — prefer it to an account API token. Then, on the host:
+
+```sh
+export AGENTLIVE_PUBLIC_ORIGIN=https://agentlive.example.com
+read -rs CLOUDFLARE_TUNNEL_TOKEN && export CLOUDFLARE_TUNNEL_TOKEN   # not in shell history
+docker compose -p agentlive -f compose.yaml -f deployment/compose.cloudflared.yaml up -d
+```
+
+`--public-origin` is required: the server checks a browser's `Origin` against the origin it believes it serves, and behind a tunnel that is the public name, not the container's address. Without it every WebSocket upgrade is refused and the viewer cannot watch anything.
+
+Known limits of this path:
+
+- Cloudflare's proxy caps request bodies (100 MB on the free plan), so archive **imports** larger than that fail through the tunnel even though the server accepts up to 9 GiB. Import large archives over a direct connection or an SSH tunnel. Downloads and exports are not affected.
+- WebSockets must be enabled for the zone (they are by default). AgentLive's viewers heartbeat every 20 seconds, which keeps a paused viewer's connection alive through the edge's idle timeout.
+- The tunnel token is a credential: keep it out of shell history and committed files, and revoke it in the dashboard when the deployment ends.
 
 ## Stop, replace and preserve data
 

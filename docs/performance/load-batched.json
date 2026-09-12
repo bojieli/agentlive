@@ -10,13 +10,7 @@
   "startedAt": "2026-09-12T09:28:44.893Z",
   "fixture": "load-v1",
   "options": {
-    "shapes": [
-      "1x1@10",
-      "10x10@10",
-      "10x16@10",
-      "10x20@10",
-      "10x24@15"
-    ],
+    "shapes": ["1x1@10", "10x10@10", "10x16@10", "10x20@10", "10x24@15"],
     "seconds": 15,
     "rampMs": 4000,
     "eventBytes": 1024,
@@ -32,12 +26,7 @@
     "attachmentBytes": 16777216,
     "socketProbe": 300,
     "cacheProbe": 160,
-    "skip": [
-      "history",
-      "attachment",
-      "slow-viewer",
-      "capacity"
-    ]
+    "skip": ["history", "attachment", "slow-viewer", "capacity"]
   },
   "limits": {
     "publishBatch": "100 events or 256 KiB",

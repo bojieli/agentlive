@@ -41,7 +41,6 @@ Static WebP previews verify RIFF size/chunk bounds, VP8 or VP8L dimensions and o
 
 Ordinary `text/html` attachments now use the same static renderer after their attachment hash is verified, even without bundle capture. Inline styles and supported markup render; separate images/stylesheets are not fetched and generate missing-dependency notices. Files exceeding preview limits retain their verified original download. This preview does not turn a single file into a published bundle or claim its dependencies were captured.
 
-
 ## Explicit interactive HTML previews
 
 The attachment inspector offers **Run interactive preview** for verified HTML attachments and selected HTML bundle files. Scripts execute only after that action. **Stop interactive preview** removes the executing frame; running it again starts from captured state. Closing the inspector or changing the selected bundle file also removes the interactive frame.
@@ -51,7 +50,6 @@ The supported subset includes classic inline scripts, captured external JavaScri
 The trusted `/artifact-interactive` wrapper and its child use opaque sandbox origins with script permission but no same-origin permission. The wrapper accepts markup only from its parent at the application origin and passes no viewer credentials. Its inherited policy blocks network connections, fetched scripts, frame navigation and form submission; generated document policy further restricts resources. The application page's script policy is unchanged. A blocked self-navigation can leave an error document in the artifact frame; Stop and Run recreate it.
 
 The Chrome probe covers an interactive counter, a captured external deferred script, standalone HTML execution mode, parent-document isolation, blocked fetches and external/service self-navigation, stopping and rerunning. It records no external or service requests from the test artifact. This is local Chrome evidence for that subset, not full browser/device/resource-exhaustion or security acceptance. The full production gate remains open.
-
 
 ### Captured JavaScript modules
 

@@ -1,0 +1,193 @@
+# Recording a session
+
+How AgentLive captures a coding-agent session: importing history you already have, attaching to a running session, launching an agent under AgentLive, and controlling a publication once it exists.
+
+Commands use the installed `agentlive` binary. From a source checkout, run `npx --yes pnpm@12.3.4 build` and substitute `npx --yes pnpm@12.3.4 agentlive`. See [compatibility](compatibility.md) for what each agent actually exposes.
+
+## Importing native history
+
+In another terminal, import a retained session:
+
+```sh
+agentlive import --agent codex --source /path/to/session.jsonl
+agentlive import --agent claude --source /path/to/session.jsonl
+agentlive import --agent kimi --source /path/to/session_ID/agents/main/wire.jsonl
+agentlive import --agent opencode --source /path/to/opencode-export.json
+```
+
+Imports are private by default. Use `--visibility unlisted` or `--visibility public` to make a completed import readable without credentials. Import output includes the recording ID and conversion report; unsupported source objects remain visible in the report. Open the server URL in a browser and join using the recording ID. Private recordings require an access key; the owner secret in your local owner credential file can be used for viewing and listing. Keys stay in browser memory and are not included in share URLs.
+
+Use `--state-dir` on both commands for isolated state, `--server` on imports for another server, and `--owner-file` for its credential JSON. An existing owner secret may instead be supplied through `AGENTLIVE_OWNER_SECRET`. Local artifact access defaults to the source directory; add explicit `--artifact-root` paths where needed. Moved Kimi exports require both `--native-session` and `--native-agent`. See `agentlive --help` for all options.
+
+## Discovering and selecting native sessions
+
+List native sessions with `agentlive discover --agent codex` (also `claude` or `kimi`). Use `--source-root <directory>` for a custom installation or copied history. Defaults are `$CODEX_HOME/sessions` (or `~/.codex/sessions`), `$CLAUDE_CONFIG_DIR/projects` (or `~/.claude/projects`), and `~/.kimi-code/sessions`. For OpenCode, use `agentlive discover --agent opencode --native-server http://127.0.0.1:4096`; authentication uses `OPENCODE_SERVER_PASSWORD` and optional `OPENCODE_SERVER_USERNAME`.
+
+Discovery emits JSON identity/path metadata, with no transcript or title. Pass a file candidate's `source` to the existing `import` or `publish --agent <agent> --source <path>` command; OpenCode candidates provide `nativeServer` and `nativeSessionId` for publishing. Multiple histories for one identity remain separate candidates. Discovery does not launch agents or merge parent/subagent logs.
+
+To select by identity directly, use `agentlive publish --agent claude --native-session <id>` (also `codex` or `kimi`), optionally with `--source-root <directory>`. The same selection works for native `import`. A missing session, multiple matching histories, or a truncated scan fails before creating a recording. Narrow the root or supply an explicit source path; Kimi also supports `--native-agent <id>` to select one agent log. Selection uses the same durable import/publishing binding as an explicit source path, including `--resume-import`. It attaches to retained file history and follows new complete records; it does not start or control the native agent process.
+
+Results are sorted by modification time and limited to 50 by default (`--limit` accepts 1–200). File discovery skips symlinks, scans at most 10,000 entries through eight directory levels, and inspects at most 128 lines within a 256 KiB prefix per file. `truncated` reports result, depth or scan limits; `skipped` counts unreadable or unrecognized sources. Missing roots return an empty list. OpenCode discovery lists the native server's workspace scope; broader workspace discovery remains open. A discovered candidate still requires full validation during import/publish.
+
+## Publishing live sessions
+
+Follow a retained Codex JSONL history and publish subsequent appends:
+
+```sh
+agentlive publish --agent codex --source /path/to/session.jsonl
+```
+
+Start `serve` first using the same state directory. Publishing defaults to private visibility. Use `--record-format legacy` for older histories without structured item records. Stop with Ctrl-C and run the same command to resume the same recording; it stays open, and pending captured events remain on disk. The initial retained history is included. Source catch-up and remote delivery are separate states: `source-caught-up` reports local conversion, while publisher status reports network progress.
+
+File following supports Codex, Claude Code, and Kimi Code; OpenCode uses its native server as described below. Initial recording creation needs connectivity; an existing binding can capture text while disconnected. Attachment upload can pause conversion until connectivity returns. Compatible ended imports can continue live with `--resume-import` and their original import options.
+
+Claude Code uses the same durable publication path:
+
+```sh
+agentlive publish --agent claude --source /path/to/session.jsonl
+```
+
+It backfills retained messages and tool state, then follows complete appended records. Partial trailing writes remain deferred until the next append. Restarting reconstructs tool state before processing new results. Native inline images/documents use the existing attachment spool; unsupported native objects retain explicit capture gaps. Token deltas absent from the native history are not reconstructed. Use `--include-children` to capture subagent transcripts in the same recording (see family capture below).
+
+Kimi Code can publish one retained agent wire log:
+
+```sh
+agentlive publish --agent kimi \
+  --source /path/to/session_ID/agents/main/wire.jsonl
+```
+
+The adapter derives native identity from the session directory. For a moved wire file, provide both `--native-session <id>` and `--native-agent <name>`. Goals, tasks, recorded interactions, and plans share the same stateful conversion used by historical import. Without `--include-children` a binding follows one agent file; see family capture below to combine the main agent and its sibling agent logs.
+
+Continue an imported session as a live recording:
+
+```sh
+agentlive publish --agent claude \
+  --source /path/to/session.jsonl --resume-import
+```
+
+Use the same state directory, server, source prefix, filtering policy, title, visibility, and artifact settings as the import. With `--resume-import`, the default title matches the import command's default. For Codex, select the same structured/legacy format as the imported prefix. The transition preserves the recording ID, producer sequence, and existing attachment identities. Its durable intent and idempotent reopen operation allow retrying the same command after a lost response or process restart.
+
+The import must already be fully uploaded and ended. Changed converters or filtering policies still require a separate migration. OpenCode imports continue through the native server as described below. Once the transition starts, the import command rejects that binding to avoid ending a recording being continued live.
+
+Publish an existing OpenCode session through its native headless server:
+
+```sh
+# Start OpenCode with your configured provider and existing server credentials.
+opencode serve --pure --hostname 127.0.0.1 --port 4096
+
+# In another terminal, attach AgentLive to the native session.
+agentlive publish --agent opencode \
+  --native-server http://127.0.0.1:4096 --native-session <session-id>
+```
+
+Use `OPENCODE_SERVER_PASSWORD` (and `OPENCODE_SERVER_USERNAME` when configured) in the publisher's environment for native server authentication. `--server` selects the AgentLive destination separately. Initial attachment validates native identity/authentication before creating the remote recording. Repeat the command to resume the same publisher binding; native-server reconnect and AgentLive-server reconnect run independently. An existing binding keeps capturing available native snapshots while AgentLive is offline, then sends its durable backlog.
+
+OpenCode publishing currently preserves observed snapshots, not every native text delta. It captures base64 data-URL files and tool attachments; local `file:` references require explicit `--artifact-root` access. Authenticated remote artifact URLs (`--remote-artifact-policy`) and import continuation (`--resume-import`) are supported; revert presentation is described in [OpenCode revert](opencode-revert.md). The installed-agent integration test covers three native turns, native server restart, a turn while publication is detached, and deduplicated publisher restart:
+
+OpenCode local artifact access is disabled by default. Allow a directory explicitly when its native references point to files available on this machine:
+
+```sh
+agentlive publish --agent opencode \
+  --native-server http://127.0.0.1:4096 --native-session <session-id> \
+  --artifact-root /path/to/allowed/artifacts
+```
+
+Inline files retain their embedded bytes; local files without a recorded original hash are labeled as current-file copies. Captured bytes are filtered for known secrets before storage, under the rule described in [attachments and artifacts](#attachments-and-artifacts). Upload completes before an available attachment/link event is published, and retries reuse immutable captured bytes even if the original file disappears. Raw data URLs are not copied into broadcast reference events. Returning to a previously captured file version reuses that version's reference without announcing it twice.
+
+Historical OpenCode imports use converter version `opencode-export-2` for the same file and tool-attachment support. Existing imports pinned to the older converter still require migration or a separate publisher state directory.
+
+New OpenCode snapshot imports can continue in the same shared recording:
+
+```sh
+agentlive import --agent opencode --source session-export.json --title "My session"
+agentlive publish --agent opencode --native-server http://127.0.0.1:4096 --native-session <native-session-id> --source session-export.json --resume-import --title "My session"
+```
+
+Use the same state directory, target server, title, visibility, filtering secrets, and artifact settings. Retain the original export unchanged. After the first successful transition, publishing can restart with the same arguments; `--resume-import` is then optional, but `--source` remains required to verify the imported prefix. Native authentication secrets must already be included in the import’s filtering policy if they add to that policy. The importer now uses converter `opencode-snapshot-4`; earlier export converters still require migration before continuation.
+
+## Managed launch
+
+Add `--launch --cwd <project>` to resume the selected Codex, Claude or Kimi session in its native terminal while publishing. AgentLive validates and captures retained history before invoking `codex resume <id>`, `claude --resume <id>` or `kimi --session <id>` with inherited terminal input/output. Publication diagnostics go to stderr. Kimi managed resume requires the main agent log; use `--native-agent main` when discovery also finds subagents. Native permissions and provider configuration remain controlled by the installed agent.
+
+After the native process exits, AgentLive waits up to 30 seconds for its remaining source bytes to reach the local durable journal, then detaches without ending the recording. Server delivery may still be pending and resumes on reattach. An incomplete final native record or a blocked capture causes an explicit drain/recovery error. Capture failure leaves the native terminal usable until it exits; interrupting AgentLive terminates its owned native process.
+
+For a new Codex session, use `agentlive publish --agent codex --launch --cwd <project>`, optionally with `--include-children`. AgentLive creates an empty native thread using the app-server's `historyMode: legacy` rollout contract, saves its identity under `<state-dir>/launches/<id>.json`, and names it using `--title` before closing the server. Naming materializes the rollout; AgentLive verifies its identity, starts file capture, and invokes `codex resume <id>` in your terminal. No model turn is submitted during creation. Model and permission settings use native defaults. This rollout storage contract is separate from AgentLive's structured event conversion. Installed-version support for these app-server calls is required; unsupported creation, missing rollouts, or mismatched identities fail before terminal launch. The saved ID is available for diagnosis/recovery, but a failed materialization may not leave a resumable native session. The opt-in `node scripts/probe-codex-launch.mjs` creates a named empty verification thread in native history and checks separate-process resume without inference or publication. Real interactive/version acceptance remains open.
+
+For a new Kimi session, use `agentlive publish --agent kimi --launch --cwd <project>`, optionally with `--include-children`. AgentLive uses ACP protocol 1 `session/new`, saves the returned native ID and its existing file-adapter identity under `<state-dir>/launches/<id>.json`, closes ACP, and verifies the matching main wire log before capture and terminal launch. Kimi's protocol ID has a `session_` prefix; the AgentLive recording/discovery ID retains the existing suffix convention. Fresh terminal launch passes the full native protocol ID. No prompt is submitted during creation, and native folder trust, model and approval flows remain in the terminal. Discovery defaults to `~/.kimi-code/sessions`; `--source-root` can select another retained-log location but does not reconfigure native Kimi storage. Missing or ambiguous discovery and invalid metadata fail before terminal launch, retaining any saved identity for diagnosis. The opt-in `node scripts/probe-kimi-launch.mjs` leaves an empty native verification session and checks its wire log and separate-process listing without inference or publication. Actual terminal trust/resume, supported-version and provider acceptance remain open.
+
+For a new Claude session, omit `--native-session`: `agentlive publish --agent claude --launch --cwd <project>`. AgentLive generates a UUID, saves it under `<state-dir>/launches/<uuid>.json` before spawning, and invokes `claude --session-id <uuid>`. It waits for a matching retained transcript before binding capture. The `native-identity-saved` diagnostic contains the UUID to use with `--native-session` on restart. An exit without an identified transcript reports an error and retains the launch record. Discovery limits still apply; a truncated or ambiguous scan requires narrowing `--source-root`. Native transcripts retain capture until the publisher can bind; first-time offline durable AgentLive capture remains an open gate. Arbitrary native argument forwarding and real interactive acceptance across supported versions remain open.
+
+OpenCode managed launch is `agentlive publish --agent opencode --launch --cwd <project>`, optionally with `--native-session <id>` to resume. AgentLive starts an authenticated loopback native server, creates or verifies the session through its API, saves its identity in `<state-dir>/launches`, captures the first snapshot, and opens `opencode attach` with inherited terminal I/O. The managed-server password is stored privately in `<state-dir>/managed-opencode-credential.json` and reused across launches so the capture policy remains stable. Keep this file with the publisher state; deleting or rotating it requires capture-policy migration. Passwords are passed through the environment, not command arguments or launch records.
+
+When the OpenCode terminal exits, AgentLive fetches and durably captures one final snapshot before closing its owned native server. The recording remains resumable; server upload can remain pending. A final-reconciliation failure reports recovery required. Closing the terminal also stops this managed server and can interrupt native work still running there. Capture failure leaves the terminal available until exit; native-server failure terminates the owned terminal. This path does not adopt an external server or continue an imported export; use the existing `--native-server` publishing path for those workflows. Real interactive/provider and native-work interruption acceptance remain open.
+
+## Parent and subagent (family) capture
+
+When an OpenCode session declares `parentID`, capture preserves that explicit relationship as linked agent entries. The parent entry has unknown status; its messages and tools are not fetched by single-session capture. The child entry also remains unknown rather than inferring completion from a completed turn. Repeated snapshots and publisher restarts preserve the same relationship without duplicate events. Invalid, self-referencing, changed or disappearing parent identities are rejected. Single-session capture does not merge related transcripts; use the explicit family option below.
+
+Discover a selected OpenCode session's direct children with `agentlive discover --agent opencode --native-server <origin> --parent-session <id>`. This queries the native children endpoint and validates each returned child's parent identity. Results include `parentNativeSessionId`; normal OpenCode discovery also preserves this field when present. Limits and truncation reporting still apply. This command lists one generation; it does not recursively publish descendants. Each returned child can currently be selected for a separate recording.
+
+For one recording containing an OpenCode session and its descendants, add `--include-children` to external-server publishing or managed launch. Each root reconciliation discovers the current descendant tree and captures child snapshots into the same durable journal. Child converter state and message/tool/attachment identities are isolated by native session, and child messages/tools carry their owning agent reference. Restart reuses the same child state and suppresses duplicate revisions. Managed terminal exit reconciles the family before shutdown.
+
+Family capture is bounded to 200 sessions including the root, eight descendant levels, and 199 retained child converters per publisher process. Truncated, invalid, cyclic, reparented or conflicting sources stop capture with a recovery error. Discovery and snapshots are sequential observations, not an atomic native family snapshot; newly created children may appear on the next reconciliation. Children absent from later listings retain their captured history without an inferred completion or deletion. The family option is pinned in the publishing manifest: changing an existing recording's scope, or continuing a single-session import as a family, requires migration. Native failure/deletion/attachment coverage and rendered family acceptance remain open.
+
+Kimi multi-agent capture uses `agentlive publish --agent kimi --source <session-dir>/agents/main/wire.jsonl --include-children`. The session directory must be named `session_<native-id>`, with logs at `agents/<agent-id>/wire.jsonl`. AgentLive combines these logs into one recording, keeps agent-scoped message/tool identities, discovers new logs on each poll, and saves an independently verified source cursor per child. Child updates are captured even while the main log is idle. Shared session membership does not establish parent ownership, so no parent relationship is inferred from a sibling directory.
+
+To expand an existing live Codex, Claude or main-agent Kimi recording, publish with `--include-children --expand-family` and its original source, title, visibility, filtering and artifact options. Codex also uses `--source-root <rollouts-directory>`. This explicitly changes only the capture scope: recording identity and existing events stay intact, and child history is appended. The new family scope is atomically pinned before capture, so retry with `--include-children` after interruption. Concurrent title, filtering, artifact or conversion changes are rejected. Scope cannot shrink again. This command requires an existing live file publication and cannot combine with `--launch` or `--resume-import`; for file recordings originating from single-session imports, first resume with the original single-session options, then detach and run the explicit expansion command. AgentLive retains the verified original resume identity in an expansion record; subsequent family attaches preserve both that provenance and the expanded policies. For an existing live OpenCode recording, use `publish --agent opencode --native-server <origin> --native-session <id> --include-children --expand-family` with its original capture policies. It preserves the main capture state and appends child history; the native authentication/filter policy must match the existing publication. For OpenCode recordings originating from single-session imports, first complete the original single-session resume, then detach and expand with the same original export, title, visibility, artifact roots and filtering settings. The expansion record pins the prior live policies and verified import transition; interrupted manifest updates can be completed on the next family attach. General converter/filter migration remains pending.
+
+Historical Kimi family import is available with `agentlive import --agent kimi --source <session-dir>/agents/main/wire.jsonl --include-children`, or with `--native-session <id> --native-agent main --source-root <directory> --include-children`. It freezes the selected main log and every discovered sibling log, preserves their separate agent identities, uploads privately, and ends the recording before applying the requested visibility. The import manifest pins child paths and prefix hashes; retrying an unchanged family reuses the recording, while changed children, membership or capture scope require an explicit new import/migration. Logs created after discovery and bytes appended beyond each frozen boundary are outside that import. This is a set of per-file boundaries, not an atomic native multi-agent snapshot. Export and offline replay include captured child events. Continue the same Kimi family with `publish --agent kimi --source <main-wire-log> --include-children --resume-import` and the original import title, visibility, artifact and filtering options. Before reopening, AgentLive verifies every imported child prefix and seeds its live checkpoint; rewritten, missing or relocated imported children stop continuation. Newly appended output and newly discovered children can then join the same recording. Later attaches retain the same family scope.
+
+Kimi family capture accepts at most 199 child logs. Unexpected layouts, incomplete discovery, replaced/missing captured logs and changed retained prefixes report recovery errors. The publishing scope is pinned; changing an existing single-log binding or resuming its import as a family requires migration. Native version/fidelity and artifact acceptance remain open. Managed family resume is available with `--launch --native-session <id> --native-agent main --include-children`, optionally `--source-root <directory>`. After native exit, a fresh discovery pass drains each child and the main log through their observed byte boundaries. An incomplete final record produces a recovery error. The native process can have independently running descendants; logs written after the final scan require a later reattach.
+
+Historical Claude family import is available with `agentlive import --agent claude --source <main-transcript.jsonl> --include-children`, or explicit native-session discovery with the same flag. It freezes the main transcript and up to 199 `subagents/agent-<id>.jsonl` files, validates session and child ownership, and captures child messages, tools and inline attachments into one ended recording. Child identities stay separate even when native UUIDs repeat. Import retries pin the discovered child paths and prefix hashes; changed membership, contents or scope require a new import/migration. Each file has its own frozen boundary, so this is not an atomic native snapshot. A child transcript cannot serve as the family root. Continue the same Claude family with `publish --agent claude --source <main-transcript.jsonl> --include-children --resume-import`, retaining the original title, visibility, artifact and filtering options. Every imported child prefix is validated before reopen; missing, changed or relocated sources fail explicitly. Existing checkpoints never move backward during converter reconstruction. Later output and new subagents are captured into the same recording.
+
+Claude family capture uses `agentlive publish --agent claude --source <main-transcript.jsonl> --include-children`, or adds `--include-children` to managed fresh launch/resume. It follows `<main-transcript-directory>/<session-id>/subagents/agent-<agent-id>.jsonl`. Child records must explicitly match the owning session, filename agent ID and `isSidechain: true`. Message/tool/attachment/monitor identities and clocks are scoped to the subagent; child messages and tools refer to their agent entry. No immediate parent is inferred when the source supplies only shared session membership.
+
+Claude discovery labels sidechain candidates with `nativeAgent`; selecting a main session by ID excludes those candidates. Family capture retains independent child cursors, discovers new logs while the main transcript is idle, and performs a post-exit family drain during managed launch. Limits are 199 child logs and 10,000 directory entries per scan. Changed prefixes, conflicting ownership, replaced/missing captured logs and incomplete final records report recovery errors. Existing single-transcript bindings/imports require scope migration; live native fidelity, artifact and rendered acceptance remain open.
+
+Historical Codex family import is available with `agentlive import --agent codex --source <main-rollout> --source-root <rollouts-directory> --include-children`, or explicit `--native-session <root-id>` selection. The default family root is `$CODEX_HOME/sessions` or `~/.codex/sessions`. Bounded discovery validates each descendant's path to the selected root; import freezes every file and pins child paths/prefix hashes in its manifest. Structured children may contain copied ancestor metadata, and empty children may contain metadata only. Unrelated metadata, ambiguous sources and broken lineage fail explicitly; mixed-thread legacy response history still requires reconciliation. Child objects retain separate identities when native item IDs repeat. Unchanged import retries reuse the ended recording; changed history/membership/scope require a new import/migration. File boundaries are independent, not an atomic native snapshot. Continue a Codex family import with `publish --agent codex --source <main-rollout> --source-root <rollouts-directory> --include-children --resume-import`, retaining the original import title, visibility, artifact and filtering options. Each imported child prefix and the discovered parent chain are verified before reopening; child checkpoints retain their greatest committed offsets during reconstruction. The selected `--record-format` must match captured content in both the main and child imports. Metadata-only prefixes permit either format, while incompatible mixtures require reconciliation. New descendants and appended output can then join the same recording.
+
+Historical OpenCode family import accepts native per-session exports: `agentlive import --agent opencode --source <root-export.json> --source-root <exports-directory> --include-children`. Produce each file with the native `opencode export <sessionID>` command. The directory must contain only the selected family's JSON exports (other non-JSON files are ignored); nested directories are supported within eight levels, with at most 200 exports and 10,000 scanned entries. Symlinks, duplicate session exports, malformed JSON exports, unrelated sessions and broken parent chains are rejected. Every export is validated and hash-pinned before capture, then read against that hash. Import reads retained files and requires no native server. Messages, tools, inline/local attachments and explicit parent links use the same isolated child capture as live publication. Unchanged retries reuse the ended recording; changed exports or scope require a new import/migration. These are independently exported snapshots, not an atomic native family snapshot. Continue with `publish --agent opencode --native-server <origin> --native-session <root-id> --source <original-root-export.json> --include-children --resume-import`. Keep every original child export at its saved path. Before reopening, AgentLive verifies export hashes, discovers the native family, checks imported session creation times and parents, and validates retained child capture policies. Missing/reparented native children, changed exports and conflicting filtering options leave the recording ended. Retain the original title, visibility, artifact and filtering options; if native server authentication is used, its password must already be included in the import filtering policy. Later snapshots and newly discovered children can join the same recording.
+
+Codex discovery distinguishes the shared logical `nativeSessionId` from `nativeThreadId` and optional `parentNativeThreadId`. Selecting a main session by ID excludes separate child-thread rollouts that share its logical identity. Inspection preserves parent-thread metadata, rejects self-parenting or contradictory lineage, and allows newly appended threads with consistent ownership. Codex family capture is available with `publish --agent codex --native-session <id> --include-children --source-root <rollouts-directory>`, optionally adding `--launch` for managed resume. An explicit `--source <main-rollout>` may also be combined with the family source root. The default discovery root is `$CODEX_HOME/sessions` or `~/.codex/sessions`. Parent chains must lead to the selected root; ambiguous thread files, missing/cyclic lineage, changed retained prefixes, and incomplete final records fail explicitly. Capture is bounded to 200 discovered threads, eight descendant levels and 199 retained child converters. The family root is pinned in the publishing manifest; changing it requires migration. Managed exit performs a fresh family scan and drains observed child/main boundaries. Structured child rollouts may contain copied ancestor metadata: the coordinator verifies those thread IDs against the selected parent chain and omits their duplicate metadata during child conversion. Foreign-thread structured items are rejected. Mixed-thread legacy child rollouts remain unsupported because they lack the structured ownership guarantees. `node scripts/validate-codex-children.mjs` performs read-only conversion validation of four installed child rollouts containing ancestor metadata, printing only aggregate counts. Native family fidelity, artifacts and rendered acceptance remain open.
+
+## Attachments and artifacts
+
+Codex, Claude, Kimi and OpenCode import and publishing can capture HTTP(S) attachments with `--remote-artifact-policy <file>`, using explicit allowed origins and credentials from named environment variables. Captured bytes survive source disappearance and portable archive round trips. See [configuration, provenance, and current limits](remote-artifacts.md). Add `--artifact-bundles` to capture supported HTML dependencies into one portable attachment; see [bundle capture and current limits](artifact-bundles.md).
+
+Every captured artifact is filtered for the recording's known secrets before it is stored, uploaded, served or exported. What decides the filtering is the captured bytes, never the file extension or the media type a transcript declares:
+
+- Bytes that decode as strict UTF-8 are filtered as text. This covers any extension, including `.py`, `.sh`, `.env`, `.xml`, `.toml`, `.pem` and files with no extension at all.
+- Bytes that do not decode are stored as bytes, but are first scanned for the UTF-8 encoding of each secret, so a secret embedded in a binary container is replaced too. Replacing bytes inside a container can leave it structurally malformed; that is preferred to serving the secret. Content with no secret in it is stored byte for byte, so images and other binaries round-trip unchanged.
+
+Filtering is exact-substring replacement of values you named (`--redact-env NAME`), the credentials AgentLive itself uses, and environment values matched by the automatic `*KEY|TOKEN|SECRET|PASSWORD*` filter. An encoded (base64, UTF-16, percent-escaped, gzipped), split or case-shifted copy of a secret is a different byte sequence and still survives, as does any secret you never named. Artifact roots default to the source directory, so review what is in scope before publishing.
+
+The rule is pinned per publisher binding, in `policy.json` inside the binding's artifact capture directory, so retries of an existing binding keep producing the same bytes under the same pinned request identity. A binding that had already captured artifacts before this rule was installed keeps the older one, which filtered only artifacts whose extension or declared media type classified them as text. Move such a binding onto the current rule with `migrate-live` or `migrate-import` (see [converter migrations](converter-migrations.md)); both create a new binding under the installed policy. Capture costs roughly the same per byte whichever branch applies; scanning bytes that are not text costs about 1.8x copying them.
+
+## Publication control
+
+Every live `publish` prints a `publishing` event containing the recording ID and its stable browser `viewerUrl` (`<server>/?stream=<id>`). The server also redirects the short form `<server>/s/<id>` to it. Either URL can be passed directly to terminal viewers: `agentlive watch <viewer-url>` and `agentlive replay <viewer-url>` select both the server and the recording.
+
+Local publisher bindings live under `<state-dir>/publisher/<hash>`. These commands inspect and control them without printing credentials or recorded content:
+
+```sh
+agentlive status [--stream <recording-id>]   # JSON list of bindings
+agentlive pause --stream <recording-id>      # persist paused sharing
+agentlive resume --stream <recording-id>     # re-enable sharing
+agentlive finish --stream <recording-id>     # deliver captured events, then end
+agentlive reopen --stream <recording-id>     # reopen a recording finished here
+agentlive retire --stream <recording-id>     # set a finished binding aside
+agentlive doctor [--server <origin>]         # runtime/credential/server/agent checks
+```
+
+`status` reports, per binding: agent and native session, server and recording, the viewer URL, whether a publisher process is currently attached (it holds the binding's kernel lock), sharing intent, lifecycle (`open`, `finishing`, `finished`, `reopening` or `transferred`), captured/acknowledged/pending event counts, the oldest undelivered event's capture time, local journal and artifact-spool sizes, and any pending credential rotation. Counts that require the journal lock are `null` while a publisher is attached.
+
+`pause` and `resume` change the durable sharing intent of a detached binding; stop a running `publish` (Ctrl-C) first. While paused, AgentLive neither captures new native records nor delivers already captured events, and `publish` refuses to start with `Publishing is paused`. The native agent and its own history are unaffected. **Pause withholds rather than discards:** after `resume`, file adapters catch up from their saved cursor, so native history written while paused is captured and delivered (OpenCode captures the then-current snapshot). To keep that period out of the recording, finish the binding instead of resuming it. Select a binding with `--stream` or, when several bindings publish the same recording, with `--source <binding-directory>`.
+
+`finish` drains the already captured journal to the server and appends a `recording.ended` lifecycle event at that exact producer boundary; it does not read native sources again. Its operation ID is persisted before the remote request, so rerunning `finish` after an interruption completes the same operation. A finished binding refuses further `publish`. `reopen` persists its own intent, appends `recording.reopened` to the same recording, and retires the finish record, after which the original `publish` command continues capture into the same URL. Imports are continued with `publish --resume-import` instead. The lower-level `finish-publisher --source <dir> --operation-id <id>` remains available for scripted use.
+
+`retire` moves a finished, transferred or fully delivered imported binding to `<state-dir>/publisher/retired/` while holding its lock. Bindings are keyed by server, agent and native session, so this is how to start a _new_ recording of a native session that already has one: the next `publish` creates a fresh binding and recording and, for file agents, captures the retained native history from the beginning. Retired directories are kept for inspection and are not listed by `status`.
+
+To change the redaction filter, title or artifact policy of a live Claude, Codex or Kimi binding, don't restart it with new options (that is rejected). Use `migrate-live` instead. It builds a verified private replacement recording from the retained native history under the new policy and puts it in the binding's place. You then continue it with `publish --resume-import` and the new options; see [live-binding migration](converter-migrations.md#replace-a-live-binding-with-a-new-projection).
+
+`doctor` checks the Node version, state-directory and owner-credential permissions, server `/healthz` and `/readyz`, local publisher bindings needing attention, and whether each native agent is on `PATH` with its default history root. It prints JSON and exits nonzero when a check fails.

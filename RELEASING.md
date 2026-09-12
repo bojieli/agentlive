@@ -8,7 +8,7 @@ AgentLive has not been released yet. This checklist is the intended path for the
 2. Run the local evidence that CI does not cover and record results in `IMPLEMENTATION_STATUS.md`:
    - `node scripts/probe-browser.mjs` (rendered Chrome checks)
    - `docker build -t agentlive:production-gate-local . && node scripts/probe-container.mjs`
-   - Opt-in native probes for each agent you advertise (they use real agents and may incur provider charges): see the [usage guide](docs/usage.md#live-integration-probes).
+   - Opt-in native probes for each agent you advertise (they use real agents and may incur provider charges): see [CONTRIBUTING](CONTRIBUTING.md#live-integration-probes).
 3. Run the release acceptance rehearsal (below) and record its report.
 4. Update [compatibility](docs/compatibility.md) with the native versions actually exercised.
 5. Move the `Unreleased` entries in [CHANGELOG.md](CHANGELOG.md) under the new version and date.

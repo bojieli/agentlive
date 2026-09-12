@@ -4,11 +4,11 @@ The user authorized read-only testing against all discoverable local sessions. R
 
 The first inventory on 2026-09-09 used the bounded JSONL source reader:
 
-| Source | JSONL files | Parsed records | Largest record, bytes | Parser failures |
-| --- | ---: | ---: | ---: | ---: |
-| Claude project histories, including nested files | 1,588 | 435,207 | 8,605,789 | 0 |
-| Codex current session directory | 506 | 602,412 | 16,761,972 | 0 |
-| Kimi Code session directory | 458 | 158,248 | 213,117 | 0 |
+| Source                                           | JSONL files | Parsed records | Largest record, bytes | Parser failures |
+| ------------------------------------------------ | ----------: | -------------: | --------------------: | --------------: |
+| Claude project histories, including nested files |       1,588 |        435,207 |             8,605,789 |               0 |
+| Codex current session directory                  |         506 |        602,412 |            16,761,972 |               0 |
+| Kimi Code session directory                      |         458 |        158,248 |               213,117 |               0 |
 
 A further archived Codex file (194,465 bytes at inventory) was discovered and added to the scanner's roots. OpenCode's session-list/export interface enumerated and exported both local sessions; those exports contain four messages and two text parts. The initial OpenCode export inventory used the locally installed CLI. The compatibility matrix separately records the latest npm version used for live probes.
 
@@ -23,7 +23,6 @@ These counts are structural inventory, not successful import/rendering assertion
 - Monitor, credit/authentication error, resumed-session, subagent, image, document, and artifact cases need actual conversion and viewer assertions. Their presence in an inventory is not test coverage.
 
 Run `npx --yes pnpm@12.3.4 build` then `node scripts/inventory-native-history.mjs` to refresh local structural reports. This is opt-in local work and is not part of model-free CI. It reads source files without rewriting them and stores per-file reports using hashed path identifiers. The report content excludes transcript text and credentials.
-
 
 ## Codex conversion and private-import pass
 
@@ -89,12 +88,12 @@ The installed CLI freshly listed and exported both local sessions using `session
 
 `node scripts/validate-native-replay.mjs` invokes every converter, constructs sequential stored-event envelopes with reconstructed timing, applies the playback reducer, and calls the terminal event renderer. It checks event schemas, output frame limits, source-effect conflicts, replacement completion, and absence of terminal control sequences. It does not publish these histories or resolve source attachments. Raw rendered text is hashed and discarded; private aggregate reports are under `probe-results/native-replay-validation`. The command returns nonzero when any file fails.
 
-| Agent | Files checked | Passed | Rejected | Normalized events | Messages | Tools |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Codex | 510 | 510 | 0 | 263,228 | 19,508 | 56,987 |
-| Claude | 1,588 | 1,553 | 35 | 409,036 | 43,804 | 96,918 |
-| Kimi | 458 | 458 | 0 | 97,503 | 13,771 | 19,445 |
-| OpenCode | 2 | 2 | 0 | 16 | 4 | 0 |
+| Agent    | Files checked | Passed | Rejected | Normalized events | Messages |  Tools |
+| -------- | ------------: | -----: | -------: | ----------------: | -------: | -----: |
+| Codex    |           510 |    510 |        0 |           263,228 |   19,508 | 56,987 |
+| Claude   |         1,588 |  1,553 |       35 |           409,036 |   43,804 | 96,918 |
+| Kimi     |           458 |    458 |        0 |            97,503 |   13,771 | 19,445 |
+| OpenCode |             2 |      2 |        0 |                16 |        4 |      0 |
 
 The rejected files are the previously classified Claude bridge/bookkeeping and started/result ledgers with missing standalone identity or time. The pass produced 1,294,172,567 bytes of terminal text for hashing, without retaining that text. It includes 89,828 explicit gaps and 1,840 unavailable artifact states, so passing does not imply complete raw-object support. This run is evidence for normalized event/reducer/render compatibility. Full source semantics, ledger/parent-child association, attachment conversion, the CLI's large-recording capacity, and browser/interactive playback still require work. Original sources were unchanged.
 
@@ -118,12 +117,12 @@ The normalized Kimi corpus pass succeeded for all 458 files, producing 98,061 ev
 
 After adding reopened-object and presence transitions, the read-only conversion → reducer → terminal pass was repeated against every file discovered by the configured local roots:
 
-| Source | Files | Passed | Failed | Normalized events | Explicit gaps | Unavailable artifacts |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Codex, including archived histories | 512 | 512 | 0 | 267,758 | 1,488 | 1,467 |
-| Claude, including nested histories | 1,591 | 1,556 | 35 | 409,111 | 72,730 | 409 |
-| Kimi wire histories | 460 | 460 | 0 | 98,117 | 9,686 | 7 |
-| OpenCode exports from discovered workspaces | 12 | 12 | 0 | 129 | 0 | 1 |
+| Source                                      | Files | Passed | Failed | Normalized events | Explicit gaps | Unavailable artifacts |
+| ------------------------------------------- | ----: | -----: | -----: | ----------------: | ------------: | --------------------: |
+| Codex, including archived histories         |   512 |    512 |      0 |           267,758 |         1,488 |                 1,467 |
+| Claude, including nested histories          | 1,591 |  1,556 |     35 |           409,111 |        72,730 |                   409 |
+| Kimi wire histories                         |   460 |    460 |      0 |            98,117 |         9,686 |                     7 |
+| OpenCode exports from discovered workspaces |    12 |     12 |      0 |               129 |             0 |                     1 |
 
 The 35 Claude failures still report missing standalone session identity or timestamp; parent-session association remains required. The validator correctly exits nonzero for those failures. Passing files may contain explicit unsupported gaps and unavailable attachments; this is not complete semantic coverage or attachment-download validation. OpenCode discovery is workspace scoped, not a claim of exhaustive discovery of every unknown workspace. Local reports are refreshed in ignored `probe-results/native-replay-validation`; transcript rendering is hashed and discarded.
 
@@ -131,12 +130,12 @@ The 35 Claude failures still report missing standalone session identity or times
 
 The corpus validator now also renders each final reconstructed state, checks terminal-control escaping, and retains only byte counts and hashes for that rendering. It covers the same reducer state used by initial timeline seeking. The refreshed results are:
 
-| Source | Passed / files | Snapshot bytes hashed |
-| --- | ---: | ---: |
-| Codex | 512 / 512 | 691,136,409 |
-| Claude | 1,556 / 1,591 | 326,816,302 |
-| Kimi | 460 / 460 | 81,212,536 |
-| Discovered OpenCode exports | 12 / 12 | 12,230 |
+| Source                      | Passed / files | Snapshot bytes hashed |
+| --------------------------- | -------------: | --------------------: |
+| Codex                       |      512 / 512 |           691,136,409 |
+| Claude                      |  1,556 / 1,591 |           326,816,302 |
+| Kimi                        |      460 / 460 |            81,212,536 |
+| Discovered OpenCode exports |        12 / 12 |                12,230 |
 
 The 35 Claude failures retain the missing identity/timing category. Unsupported source gaps and unavailable artifacts remain explicit; successful snapshot rendering does not establish complete native-object coverage. Byte counts are cumulative across files, not peak memory claims. No rendered corpus transcript is saved or uploaded.
 
@@ -160,10 +159,10 @@ The refreshed full Claude pass processed 1,593 files: 1,558 passed and the same 
 
 `node scripts/validate-native-replay.mjs` (reference reducer and terminal render; no publication, no model calls; aggregate counts only) ran against every local history with converters at `d0e2370`:
 
-| Agent | Files | Passed | Rejected | Normalized events | Messages | Tools | Gaps | Unavailable artifacts |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Codex | 575 | 575 | 0 | 314,037 | 23,603 | 70,644 | 1,670 | 1,981 |
-| Claude | 1,684 | 1,649 | 35 | 444,720 | 47,091 | 103,161 | 78,799 | 1,816 |
-| Kimi | 500 | 494 → 500 | 6 → 0 | 103,244 | 14,135 | 21,207 | 10,606 | 7 |
+| Agent  | Files |    Passed | Rejected | Normalized events | Messages |   Tools |   Gaps | Unavailable artifacts |
+| ------ | ----: | --------: | -------: | ----------------: | -------: | ------: | -----: | --------------------: |
+| Codex  |   575 |       575 |        0 |           314,037 |   23,603 |  70,644 |  1,670 |                 1,981 |
+| Claude | 1,684 |     1,649 |       35 |           444,720 |   47,091 | 103,161 | 78,799 |                 1,816 |
+| Kimi   |   500 | 494 → 500 |    6 → 0 |           103,244 |   14,135 |  21,207 | 10,606 |                     7 |
 
 The 35 Claude rejections are the previously classified histories without standalone session identity or timestamps. The run found a new Kimi 1.5 shape: 27 `tool.result` records in six files whose `output` is a single content-part object (inline `image/png` data URLs) rather than an array, which the converter rejected. Conversion now treats a single object as a one-element array; the image is reported as the same explicit `tool_result/image` gap as images inside array outputs, so output for previously converting histories is unchanged and the Kimi converter identity stays `kimi-history-4`. After the fix all 500 Kimi files pass (the Kimi row above is the rerun). Capturing tool-result images as attachments needs a future converter version. No OpenCode exports were present in the local inventory directory for this run.

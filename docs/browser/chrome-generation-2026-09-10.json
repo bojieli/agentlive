@@ -28,9 +28,7 @@
           "id": "color-contrast",
           "nodes": [
             {
-              "target": [
-                "a"
-              ],
+              "target": ["a"],
               "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
             }
           ]
@@ -45,9 +43,7 @@
           "id": "color-contrast",
           "nodes": [
             {
-              "target": [
-                "a"
-              ],
+              "target": ["a"],
               "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
             }
           ]
