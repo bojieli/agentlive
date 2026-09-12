@@ -41,143 +41,143 @@
   "timings": [
     {
       "name": "cached private join",
-      "elapsedMs": 182.10820799999988
+      "elapsedMs": 185.111042
     },
     {
       "name": "fresh IndexedDB imports server snapshot blobs",
-      "elapsedMs": 75.01199999999994
+      "elapsedMs": 73.44495800000004
     },
     {
       "name": "exact tied previous event",
-      "elapsedMs": 87.08850000000007
+      "elapsedMs": 104.92991599999982
     },
     {
       "name": "idle cap control",
-      "elapsedMs": 3.5437919999999394
+      "elapsedMs": 3.254790999999841
     },
     {
       "name": "live receipt preserves paused prefix",
-      "elapsedMs": 30.11983299999997
+      "elapsedMs": 29.031499999999824
     },
     {
       "name": "IndexedDB survives page reload with exact selection",
-      "elapsedMs": 182.1311250000001
+      "elapsedMs": 184.7901670000001
     },
     {
       "name": "renderer crash preserves committed cached selection",
-      "elapsedMs": 557.866041
+      "elapsedMs": 589.9989170000001
     },
     {
       "name": "keyboard next event",
-      "elapsedMs": 28.660207999999784
+      "elapsedMs": 27.62737500000003
     },
     {
       "name": "active generation recovery preserves paused presentation",
-      "elapsedMs": 731.1542080000004
+      "elapsedMs": 708.160875
     },
     {
       "name": "follow live",
-      "elapsedMs": 29.13320799999974
+      "elapsedMs": 35.68608300000005
     },
     {
       "name": "activity keyboard navigation retains row focus",
-      "elapsedMs": 30.34737499999983
+      "elapsedMs": 31.200290999999652
     },
     {
       "name": "desktop viewport has no document overflow",
-      "elapsedMs": 357.0224169999997
+      "elapsedMs": 356.26012500000024
     },
     {
       "name": "mobile viewport has no document overflow",
-      "elapsedMs": 289.86645799999997
+      "elapsedMs": 291.2181660000001
     },
     {
       "name": "paged activity search",
-      "elapsedMs": 58.618291999999656
+      "elapsedMs": 58.27033299999994
     },
     {
       "name": "clear persistent playback cache",
-      "elapsedMs": 50.11604200000011
+      "elapsedMs": 49.2494999999999
     },
     {
       "name": "uncached fallback joins and steps",
-      "elapsedMs": 251.38237500000014
+      "elapsedMs": 268.2260830000005
     },
     {
       "name": "multi-row virtualized keyboard navigation in both cache modes",
-      "elapsedMs": 28033.573708
+      "elapsedMs": 27448.204875
     },
     {
       "name": "tool disclosure and text page choices survive cached reopen",
-      "elapsedMs": 1403.0241669999996
+      "elapsedMs": 1384.9999160000043
     },
     {
       "name": "attachment inspector restores exact version and rejects unavailable history",
-      "elapsedMs": 996.0749159999978
+      "elapsedMs": 983.172040999998
     },
     {
       "name": "automatic latest text survives paused virtual remount in both cache modes",
-      "elapsedMs": 1345.7530000000042
+      "elapsedMs": 1443.870707999995
     },
     {
       "name": "attachment version pages survive remount, cached reopen and history clamping",
-      "elapsedMs": 4420.332291999999
+      "elapsedMs": 4410.708749999998
     },
     {
       "name": "keyboard-only join reaches the private form and enters playback",
-      "elapsedMs": 132.43079099999886
+      "elapsedMs": 189.7534999999989
     },
     {
       "name": "every visible control is reachable by Tab and has a name",
-      "elapsedMs": 96.50720800000272
+      "elapsedMs": 86.1017920000013
     },
     {
       "name": "player controls follow Tab order and announce playback state",
-      "elapsedMs": 1745.494458000001
+      "elapsedMs": 1757.028584000007
     },
     {
       "name": "accessibility tree exposes landmarks, headings and alternatives",
-      "elapsedMs": 9.984542000005604
+      "elapsedMs": 13.847374999997555
     },
     {
       "name": "activity announcements are polite, atomic and outside the feed",
-      "elapsedMs": 7608.289833000003
+      "elapsedMs": 7610.973250000003
     },
     {
       "name": "row focus survives virtualized remounting during live receipt",
-      "elapsedMs": 123.48516599999857
+      "elapsedMs": 120.11008299999958
     },
     {
       "name": "focus stays with a row scrolled out of view and returns on arrow keys",
-      "elapsedMs": 802.6478329999954
+      "elapsedMs": 801.3000830000019
     },
     {
       "name": "keyboard search opens a result and moves focus to the row",
-      "elapsedMs": 832.0700419999994
+      "elapsedMs": 832.4027090000018
     },
     {
       "name": "tool disclosure and text paging operate from the keyboard",
-      "elapsedMs": 171.28262499999983
+      "elapsedMs": 185.99820799999725
     },
     {
       "name": "attachment dialog labels, traps and restores keyboard focus",
-      "elapsedMs": 216.92004099999758
+      "elapsedMs": 236.24116700000013
     },
     {
       "name": "leaving with the keyboard returns focus to the join form",
-      "elapsedMs": 4.819500000005064
+      "elapsedMs": 5.406582999996317
     },
     {
       "name": "reduced motion keeps every transition and scroll instant",
-      "elapsedMs": 156.96712500000285
+      "elapsedMs": 139.0207089999967
     },
     {
       "name": "reflow-320 keeps controls visible without horizontal scrolling",
-      "elapsedMs": 514.098874999996
+      "elapsedMs": 513.8162910000028
     },
     {
       "name": "zoom-200 keeps controls visible without horizontal scrolling",
-      "elapsedMs": 522.1363750000019
+      "elapsedMs": 520.8273340000014
     }
   ],
   "phase": "complete",

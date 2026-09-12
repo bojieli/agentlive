@@ -6,6 +6,9 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 
 ### Added
 
+- `agentlive publish --new-stream` ends the existing recording of a native session, sets its binding aside and publishes a fresh recording in one step, reporting the retirement before the new recording.
+- `agentlive migrate-live` accepts `--target-server` with `--target-owner-file` or `--target-account-file`, so a live binding can be replaced on another server and continued there; the replacement is placed at the destination's binding key and both keys are fenced while the migration is unfinished.
+- The server reports when it is past its fan-out delivery capacity instead of quietly queueing: `/readyz` returns 503 with a reason, new viewer connections are refused with `retry_later` (existing viewers and publishers are not), and `agentlive_delivery_*`, `agentlive_event_loop_delay_seconds` and `agentlive_websocket_buffered_bytes` report it. `serve --overload-event-loop-delay-ms` sets the threshold.
 - `agentlive visibility --stream <id> [--visibility public|unlisted|private]` reads and changes a recording's visibility from the command line.
 - The server reclaims superseded snapshot content automatically, keeping the current head, every unexpired lease and every pinned read; `serve --no-snapshot-collection` disables it.
 - Live file publishing keeps a bounded, segmented journal instead of an ever-growing `capture.jsonl`, and captures durably before the recording exists, so a session started while the server is unreachable is recorded and delivered when it returns.
@@ -29,6 +32,12 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 
 ### Fixed
 
+- A publisher stops rather than publishing a value it was told to filter: every capture is checked against the publisher's own dictionary over the whole encoded event, not only the fields an adapter treats as text, so a value that reached an identifier or a path no longer escapes silently.
+- A recording containing an event no reducer can apply (an append to a message or tool that never started) no longer wedges the snapshot builder in a silent retry loop. The builder names the exact event, stops building that recording, and reports it through `agentlive_snapshot_blocked_recordings` and the owner's `publisher-state`.
+- One public recording can no longer starve viewing tickets or abuse-report intake for every other recording: both are partitioned per recording, unauthenticated ticket requests hold at most half the table, and already reviewed reports never occupy intake capacity.
+- An OpenCode publisher compacts its acknowledged journal prefix like a file publisher instead of growing one capture file for as long as it runs.
+- The per-capture deduplication lookup verifies a sealed source-key index before searching it, so same-size bit rot can no longer cause a missed deduplication and a duplicate capture.
+- Abandoning a live-binding migration recognizes a lost *family child* source, not only a lost root, so an operation that can never complete no longer leaves the native session fenced.
 - The viewer is usable from the keyboard and to assistive technology: arriving events no longer destroy focus, the activity feed is a single roving tab stop, activity and playback changes are announced politely, and fourteen further defects are fixed.
 
 - The browser viewer works behind a reverse proxy: `serve --public-origin` tells the server the origin it is actually served at, without which every WebSocket upgrade from a proxied name was refused.
