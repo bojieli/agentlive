@@ -29,6 +29,8 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 
 ### Fixed
 
+- The viewer is usable from the keyboard and to assistive technology: arriving events no longer destroy focus, the activity feed is a single roving tab stop, activity and playback changes are announced politely, and fourteen further defects are fixed.
+
 - The browser viewer works behind a reverse proxy: `serve --public-origin` tells the server the origin it is actually served at, without which every WebSocket upgrade from a proxied name was refused.
 
 - Archive imports and exports stage inside the server directory instead of the system temporary directory, and an upload is bounded by the owner's remaining storage quota, so staging bytes can no longer escape every limit.
