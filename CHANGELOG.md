@@ -33,7 +33,7 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 - `agentlive watch` finishes on its own once an ended recording has been shown, instead of waiting forever; `--follow` keeps waiting for a reopen, and `q` now quits a non-interactive watch in a terminal.
 
 - Disabling a hosted account now suspends its recordings in both directions: publishing is refused, publisher sockets close, and reads and the public listing exclude them until the account is enabled again (the operator credential can still review them).
-- Secret redaction no longer depends on a file extension or a transcript-supplied media type (security finding; see the commit for the exact rule).
+- Secret redaction now decides from the captured bytes: anything that decodes as UTF-8 is redacted as text, and anything else is scanned for each secret's literal byte sequence. Previously a file extension or a transcript-supplied media type decided, so a secret in a `.py`, `.sh`, `.env` or extension-less file, or in content declared `application/octet-stream`, was stored and served verbatim.
 - `recover-publisher` works against a pruned journal; previously it replayed from sequence zero and would have failed on any publisher that had compacted.
 - A failed online-backup cleanup no longer wedges every later backup or leaves the plaintext owner credential in the partial output.
 
