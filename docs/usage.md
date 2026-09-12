@@ -204,7 +204,7 @@ Codex discovery distinguishes the shared logical `nativeSessionId` from `nativeT
 
 ## Attachments and artifacts
 
-Codex, Claude, Kimi and OpenCode import and publishing can capture HTTP(S) attachments with `--remote-artifact-policy <file>`, using explicit allowed origins and credentials from named environment variables. Captured bytes survive source disappearance and portable archive round trips. See [configuration, provenance, and current limits](docs/remote-artifacts.md). Add `--artifact-bundles` to capture supported HTML dependencies into one portable attachment; see [bundle capture and current limits](docs/artifact-bundles.md).
+Codex, Claude, Kimi and OpenCode import and publishing can capture HTTP(S) attachments with `--remote-artifact-policy <file>`, using explicit allowed origins and credentials from named environment variables. Captured bytes survive source disappearance and portable archive round trips. See [configuration, provenance, and current limits](remote-artifacts.md). Add `--artifact-bundles` to capture supported HTML dependencies into one portable attachment; see [bundle capture and current limits](artifact-bundles.md).
 
 ## Terminal replay
 
@@ -312,7 +312,7 @@ Package builds use the reviewed dependency tree in `packaging/runtime-lock.json`
 
 ## Docker deployment
 
-Standalone container deployment is available through the root Dockerfile and Compose configuration. See [Docker deployment](deployment/README.md) for build/start commands, persistent storage, owner credentials, HTTPS proxy guidance and the scope of local validation.
+Standalone container deployment is available through the root Dockerfile and Compose configuration. See [Docker deployment](../deployment/README.md) for build/start commands, persistent storage, owner credentials, HTTPS proxy guidance and the scope of local validation.
 
 ## Live integration probes
 
