@@ -57,7 +57,7 @@ The 2026-09-12 review probed the authorization layer route by route and found it
 ## 5. Multi-session server and access lifecycle — M2/M5/M6
 
 - Past its fan-out knee (~51,000–60,000 deliveries/s measured) the server queues rather than sheds. It now *says* so — readiness, metrics and refusal of new viewers on event-loop delay or aggregate socket backlog — but the knee itself is unchanged, and the published load rows were measured before the signal existed and have not been re-measured with it.
-- Automatic snapshot builds hit their 30-second deadline under that saturation, so snapshot freshness degrades exactly when a recording is busiest; only a metrics counter reports it.
+- Automatic snapshot builds hit their 30-second deadline under that saturation, so snapshot freshness degrades exactly when a recording is busiest. The cost is now measured — `agentlive_snapshot_behind_events` and `agentlive_snapshot_behind_seconds` — but the builds themselves are not faster, and nothing yet prioritizes a recording that has fallen far behind.
 - Durable capture serializes with the delivery loop's read of the same journal and fsyncs per capture, which caps a publisher at ~15 captures/s when many share a volume. Batching hides it; a fast native source would not.
 - An event whose reducer preconditions are unmet (an append before its start) is still accepted at publish; the snapshot builder now names it, stops building that recording and reports it through metrics and the owner's publisher-state instead of retrying forever, but paged playback for that recording stays at its last good snapshot and the only repair is republishing the session.
 

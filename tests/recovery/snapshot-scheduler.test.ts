@@ -151,6 +151,8 @@ it("flushes ended tails promptly and cancels active work on shutdown", async () 
     active: 0,
     failures: 0,
     blocked: 0,
+    behindEvents: 0,
+    behindMs: 0,
     collecting: 0,
     collections: 0,
     collectionFailures: 0,
@@ -362,3 +364,49 @@ it("stops building a recording whose event can never be reduced, and names it", 
     await scheduler.close();
   }
 });
+
+it("reports how far behind the furthest snapshot is, and not blocked recordings", async () => {
+  let stalling = true;
+  const slow = session(2, async (_through, signal) => {
+    if (!stalling) return;
+    await new Promise<void>((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), {
+        once: true,
+      });
+    });
+  });
+  const scheduler = new SnapshotScheduler({
+    batchEvents: 1,
+    pollMs: 5,
+    intervalMs: 10,
+    timeoutMs: 30,
+  });
+  try {
+    scheduler.add(slow);
+    expect(scheduler.status.behindEvents).toBe(2);
+    // Its build keeps hitting the deadline while new events keep arriving.
+    await expect
+      .poll(() => scheduler.status.failures, { timeout: 2000 })
+      .toBeGreaterThan(0);
+    slow.info.serverSeq = 60;
+    expect(scheduler.status.behindEvents).toBe(60);
+    expect(scheduler.status.behindMs).toBeGreaterThan(0);
+    stalling = false;
+    await expect
+      .poll(() => scheduler.status.behindEvents, { timeout: 10000 })
+      .toBe(0);
+    expect(scheduler.status.behindMs).toBe(0);
+    // A recording nothing can build is not counted as merely behind.
+    const wedged = session(9, async () => {
+      throw new SnapshotReductionError(2, "event_conflict", "already started");
+    });
+    scheduler.add(wedged);
+    await expect
+      .poll(() => scheduler.status.blocked, { timeout: 2000 })
+      .toBe(1);
+    expect(scheduler.status.behindEvents).toBe(0);
+  } finally {
+    stalling = false;
+    await scheduler.close();
+  }
+}, 30000);

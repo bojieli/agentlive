@@ -31,6 +31,8 @@ Archive imports and exports stage their bytes under `<state-dir>/server/staging`
 
 The server also reclaims superseded snapshot content automatically: a pass keeps the current head, every unexpired lease and every pinned read, prunes the catalog to exactly those, and sweeps the rest. It is scheduled on measured growth (64 MiB since that recording's last pass) on the same single worker as snapshot builds, and `serve --no-snapshot-collection` disables it. Older checkpoints stop being selectable once a pass runs, so a viewer that must keep reading one exact checkpoint holds a lease on it; the browser and terminal viewers already do. See [snapshots](protocol/SNAPSHOTS.md#automatic-collection-of-superseded-content).
 
+Snapshot freshness is measured, not inferred from failures: `agentlive_snapshot_behind_events` and `agentlive_snapshot_behind_seconds` report the furthest a cached recording's newest built snapshot is behind it. Under saturation an automatic build can hit its 30-second deadline, halve its batch and fall further behind — the failure counter says a build failed, these say what that cost the recordings. A recording whose builds stopped for good (below) is excluded, because it is not merely behind.
+
 An event the reducer can never apply — an append to a message or tool that never
 started, a second start for one id — is accepted by the server (each such event is
 valid protocol on its own) and only fails when the snapshot builder reaches it. That

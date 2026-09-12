@@ -78,12 +78,33 @@ export class SnapshotScheduler {
     if (typeof this.collecting !== "boolean")
       throw new RangeError("Invalid snapshot collection setting");
   }
+  /**
+   * How far the newest built snapshot is behind the recording, worst case across
+   * the registered sessions. Builds that time out under load halve their batch and
+   * fall further behind, which was previously visible only as a failure count; this
+   * measures the freshness those failures actually cost.
+   */
+  private staleness() {
+    let events = 0,
+      ms = 0;
+    const now = Date.now();
+    for (const job of this.jobs.values()) {
+      if (job.blocked !== undefined) continue;
+      events = Math.max(events, job.session.info.serverSeq - job.sequence);
+      if (job.session.info.serverSeq > job.sequence)
+        ms = Math.max(ms, now - job.checkedAt);
+    }
+    return { events, ms };
+  }
   get status() {
+    const behind = this.staleness();
     return {
       registered: this.jobs.size,
       active: this.active && !this.active.collect ? 1 : 0,
       failures: this.failures,
       blocked: this.blocked,
+      behindEvents: behind.events,
+      behindMs: behind.ms,
       collecting: this.active?.collect ? 1 : 0,
       collections: this.collections,
       collectionFailures: this.collectionFailures,
