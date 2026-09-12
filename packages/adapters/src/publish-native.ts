@@ -217,6 +217,9 @@ export async function publishNativeRecording(
       options.ownerCredential,
       journal.identity.writeSecret,
     ];
+    // The net under per-field redaction: nothing carrying a filtered value is
+    // written to the journal, whichever field an adapter put it in.
+    journal.enforceRedaction(secrets);
     artifacts = await localArtifactResolver({
       ...(options.artifactBundles ? { artifactBundles: true } : {}),
       ...(options.remoteArtifacts

@@ -207,15 +207,13 @@ export async function importNativeRecording<Report>(
       writeSecret: journal.identity.writeSecret,
       signal: options.signal,
     });
-    const report = await adapter.capture(
-      journal,
-      [
-        ...(options.secrets ?? []),
-        options.ownerCredential,
-        journal.identity.writeSecret,
-      ],
-      artifacts,
-    );
+    const importSecrets = [
+      ...(options.secrets ?? []),
+      options.ownerCredential,
+      journal.identity.writeSecret,
+    ];
+    journal.enforceRedaction(importSecrets);
+    const report = await adapter.capture(journal, importSecrets, artifacts);
     if (noticeVersion !== undefined)
       await captureCompletenessNotice(
         journal,

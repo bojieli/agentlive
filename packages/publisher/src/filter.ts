@@ -172,3 +172,47 @@ export class StreamingByteRedactor {
     return Buffer.concat(output);
   }
 }
+
+/**
+ * A standing check that nothing a publisher captures still contains one of the
+ * values it filters. Adapters redact field by field; this is the net under that,
+ * because a single field an adapter forgot would otherwise leak silently and no
+ * layer below the adapters enforced anything.
+ *
+ * It searches the canonical encoding of the whole event, so identifiers, paths,
+ * artifact names and any field an adapter does not treat as text are covered too.
+ * There is nothing safe to rewrite at this level — replacing bytes inside an id
+ * would corrupt it — so a hit stops the capture instead.
+ */
+export class RedactionGuard {
+  private readonly secrets: readonly string[];
+  constructor(secrets: readonly string[]) {
+    // The redaction marker itself, and anything shorter than a token, would match
+    // ordinary text; the dictionary is exact values a publisher declared.
+    this.secrets = [...new Set(secrets)].filter(
+      (secret) => secret.length >= 8 && secret.length <= 4096,
+    );
+    if (this.secrets.length > 1024)
+      throw new RangeError("Invalid secret dictionary");
+  }
+  get size() {
+    return this.secrets.length;
+  }
+  /** The first declared value present in `text`, or undefined. Never returns it. */
+  private find(text: string): number | undefined {
+    for (const [index, secret] of this.secrets.entries())
+      if (text.includes(secret)) return index;
+    return undefined;
+  }
+  /**
+   * Throws when `value`'s encoding contains a filtered value. The message names
+   * neither the value nor the text around it.
+   */
+  assertClean(value: string, what: string): void {
+    if (!this.secrets.length) return;
+    if (this.find(value) !== undefined)
+      throw new Error(
+        `${what} still contains a value this publisher filters; capture stopped instead of publishing it`,
+      );
+  }
+}

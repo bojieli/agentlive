@@ -1,4 +1,8 @@
-export { StreamingRedactor, StreamingByteRedactor } from "./filter.js";
+export {
+  StreamingRedactor,
+  StreamingByteRedactor,
+  RedactionGuard,
+} from "./filter.js";
 export {
   ArtifactSpool,
   CURRENT_ARTIFACT_REDACTION,

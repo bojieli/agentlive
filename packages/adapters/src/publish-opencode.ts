@@ -166,6 +166,9 @@ export async function publishOpenCodeRecording(
       journal.identity.writeSecret,
       ...(options.nativePassword ? [options.nativePassword] : []),
     ];
+    // The net under per-field redaction: nothing carrying a filtered value is
+    // written to the journal, whichever field the converter put it in.
+    journal.enforceRedaction(secrets);
     const roots = (options.artifactRoots ?? imported?.artifactRoots ?? [])
       .map((root) => resolve(root))
       .sort();

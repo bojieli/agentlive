@@ -23,6 +23,7 @@ import {
   FileLock,
   syncDirectory,
 } from "@agentlive/storage";
+import { RedactionGuard } from "./filter.js";
 import {
   advancePublisherChain,
   atomicBytes,
@@ -273,6 +274,7 @@ export class PublisherJournal {
   private failed = false;
   private readonly sourceBloom = new Uint32Array(BLOOM_WORDS);
   private readonly keyIndexes = new VerifiedKeyIndexes();
+  private guard: RedactionGuard | undefined;
   private adapterState: unknown = null;
   private manifest: JournalManifest | null = null;
   private readonly handles = new Map<number, Promise<OpenSegment>>();
@@ -958,9 +960,22 @@ export class PublisherJournal {
    * captured source key returns its stored events, or `[]` when that record has been
    * compacted after acknowledgement (its content hash is still checked).
    */
+  /**
+   * Install the values this publisher filters. Every later capture is checked
+   * against them, so a field an adapter forgot to redact stops the publisher
+   * instead of reaching the server. Call it once, with the same dictionary the
+   * adapters redact with.
+   */
+  enforceRedaction(secrets: readonly string[]): void {
+    this.guard = new RedactionGuard(secrets);
+  }
   capture(input: CaptureInput): Promise<readonly PublishedEvent[]> {
-    const frozen = JSON.parse(canonicalJson(input)) as CaptureInput;
+    const encoded = canonicalJson(input);
+    const frozen = JSON.parse(encoded) as CaptureInput;
     return this.serial(async () => {
+      // Before anything is written, and over the whole encoding rather than the
+      // fields an adapter happened to treat as text.
+      this.guard?.assertClean(encoded, "A captured event");
       if (this.failed)
         throw new ProtocolError(
           "storage_failed",
