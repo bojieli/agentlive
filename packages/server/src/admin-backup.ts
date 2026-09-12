@@ -149,6 +149,10 @@ export function adminBackups(options: {
         },
       });
     },
+    /** Online backups currently running (content-free, for metrics). */
+    get active() {
+      return tasks.size;
+    },
     /** Cancel running backups (deleting partial output) and wait for cleanup. */
     async close() {
       closed = true;

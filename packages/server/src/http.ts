@@ -7,8 +7,16 @@ import { hostedAuth } from "./hosted-auth.js";
 import { viewingResponse } from "./viewing-response.js";
 import { TransferAuthority } from "./transfer-authority.js";
 import { adminBackups } from "./admin-backup.js";
-import { quotaLimitsSchema, type QuotaLimits } from "./quotas.js";
+import {
+  quotaLimitsSchema,
+  storageLimitsSchema,
+  type QuotaLimits,
+  type StorageLimits,
+} from "./quotas.js";
+import type { StatfsProbe } from "./free-space.js";
+import { RequestMetrics, renderMetrics } from "./metrics.js";
 import { Hono } from "hono";
+import { matchedRoutes } from "hono/route";
 import { getCookie } from "hono/cookie";
 import {
   serve,
@@ -65,6 +73,18 @@ export interface ServerOptions {
   };
   /** Hosted per-account limits; absent fields are unlimited. The local owner is never limited. */
   quotas?: QuotaLimits;
+  /**
+   * Server-wide storage limits for every writer, including the local owner:
+   * `maxStoredBytes` caps committed event log plus attachment bytes of all
+   * recordings; `minFreeBytes` refuses growth that would leave less free space on
+   * the server filesystem. `statfs` replaces the filesystem probe (tests/embedding).
+   */
+  storage?: StorageLimits & { statfs?: StatfsProbe };
+  /**
+   * Enables `GET /metrics` (Prometheus text). Scrapes authenticate with the owner
+   * credential or, when set, this separate bearer token. Absent: no route.
+   */
+  metrics?: { token?: string };
   maxConnections?: number;
   maxCachedSessions?: number;
   snapshots?: import("./snapshot-scheduler.js").SnapshotScheduleOptions;
@@ -181,8 +201,27 @@ export async function startServer(options: ServerOptions) {
     !quotaLimitsSchema.safeParse(options.quotas).success
   )
     throw new Error("Invalid per-account quota configuration");
+  if (options.storage !== undefined) {
+    const { statfs, ...limits } = options.storage;
+    if (
+      !storageLimitsSchema.safeParse(limits).success ||
+      (statfs !== undefined && typeof statfs !== "function")
+    )
+      throw new Error(
+        "Invalid server storage limit configuration: maxStoredBytes must be an integer from 4096 to 2^50 and minFreeBytes from 0 to 2^50",
+      );
+  }
+  const metricsToken = options.metrics?.token;
+  if (
+    metricsToken !== undefined &&
+    !/^[A-Za-z0-9._~+/=-]{32,512}$/.test(metricsToken)
+  )
+    throw new Error(
+      "Metrics token must be 32 to 512 URL-safe or base64 characters",
+    );
   const store = await RecordingStore.open(options.directory, {
     ...(options.quotas === undefined ? {} : { quotas: options.quotas }),
+    ...(options.storage === undefined ? {} : { storage: options.storage }),
     ...(options.maxCachedSessions === undefined
       ? {}
       : { maxCachedSessions: options.maxCachedSessions }),
@@ -297,6 +336,23 @@ export async function startServer(options: ServerOptions) {
       );
     }
   };
+  // Content-free request accounting by registered route template (never the raw
+  // path, which carries recording IDs), method and status class.
+  const metrics = new RequestMetrics();
+  app.use("*", async (c, next) => {
+    try {
+      await next();
+    } finally {
+      let route = "unmatched";
+      try {
+        const matched = matchedRoutes(c).filter(
+          (candidate) => candidate.method !== "ALL",
+        );
+        route = matched[matched.length - 1]?.path ?? route;
+      } catch {}
+      metrics.record(c.req.method, route, c.res?.status ?? 500);
+    }
+  });
   app.use("*", async (c, next) => {
     const supplied = c.req.header("origin");
     if (supplied && supplied !== origin)
@@ -598,8 +654,14 @@ export async function startServer(options: ServerOptions) {
   app.get("/healthz", (c) => c.json({ ok: true }));
   const checkStorage = storageReadiness(options.directory);
   app.get("/readyz", async (c) => {
-    const ready = !closing && (await checkStorage());
-    return c.json({ ready: ready && !closing }, ready && !closing ? 200 : 503);
+    // Below the configured free-space floor the server refuses growth, so it
+    // reports not-ready; reads keep working.
+    const [storageReady, spaceReady] = await Promise.all([
+      checkStorage(),
+      store.quotas.freeSpace?.ready() ?? true,
+    ]);
+    const ready = !closing && storageReady && spaceReady;
+    return c.json({ ready }, ready ? 200 : 503);
   });
   let activeImports = 0;
   app.post("/api/v1/imports", async (c) => {
@@ -853,6 +915,60 @@ export async function startServer(options: ServerOptions) {
     isOwner,
   });
   app.post("/api/v1/admin/backup", (c) => backups.handle(c.req.raw));
+  if (options.metrics) {
+    const tokenHash =
+      metricsToken === undefined ? undefined : digest(metricsToken);
+    app.get("/metrics", (c) => {
+      const secret = token(c.req.header("authorization"));
+      if (
+        !isOwner(secret) &&
+        !(tokenHash && secret && timingSafeEqual(digest(secret), tokenHash))
+      ) {
+        c.header("WWW-Authenticate", 'Bearer realm="agentlive-metrics"');
+        throw new ProtocolError(
+          "unauthorized",
+          "Metrics authorization required",
+        );
+      }
+      const totals = store.quotas.totals;
+      const memory = process.memoryUsage();
+      c.header("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+      return c.body(
+        renderMetrics({
+          uptimeSeconds: metrics.uptimeSeconds,
+          memory: {
+            rss: memory.rss,
+            heapUsed: memory.heapUsed,
+            heapTotal: memory.heapTotal,
+          },
+          recordings: {
+            live: totals.recordings,
+            open: totals.activeRecordings,
+            removed: store.removedRecordings,
+          },
+          cachedSessions: store.cacheSize,
+          cachedSessionCapacity: store.cacheCapacity,
+          sockets: { ...metrics.sockets },
+          websocketHandlerErrors: metrics.websocketHandlerErrors,
+          httpInFlight: requests.size,
+          transfers: transfers.size,
+          imports: activeImports,
+          exports: activeExports,
+          storedBytes: totals.storedBytes,
+          reservedBytes: totals.reservedBytes,
+          maxStoredBytes: store.quotas.storageLimits.maxStoredBytes,
+          freeSpace: store.quotas.freeSpace?.status,
+          accountLimits: store.quotas.publicLimits,
+          accounts: totals.accounts,
+          quotaRejections: totals.rejections,
+          snapshots: store.snapshotStatus,
+          backupsInProgress: backups.active,
+          writeBarrierPaused: store.barrier.paused,
+          requests: metrics.requests,
+        }),
+      );
+    });
+  }
   const operatorAccounts = (secret: string) => {
     if (!isOwner(secret))
       throw new ProtocolError(
@@ -1535,6 +1651,8 @@ export async function startServer(options: ServerOptions) {
     let cancelViewing: (() => void) | undefined;
     let accountActive: (() => boolean) | undefined;
     let authorizeView: (() => void) | undefined;
+    const role = publishing ? "publisher" : "viewer";
+    let counted = false;
 
     const recheck = () => {
       if (ended || !socket) return;
@@ -1603,6 +1721,10 @@ export async function startServer(options: ServerOptions) {
       clearInterval(heartbeat);
       unsubscribe?.();
       unsubscribe = undefined;
+      if (counted) {
+        counted = false;
+        metrics.sockets[role]--;
+      }
       drained = queue.then(releaseSession, (error) => {
         releaseSession();
         throw error;
@@ -1629,6 +1751,8 @@ export async function startServer(options: ServerOptions) {
           ws.close(1001, "Server is closing");
           return;
         }
+        counted = true;
+        metrics.sockets[role]++;
         heartbeat = setInterval(() => {
           if (Date.now() - lastSeen > 60_000) {
             cleanup();
@@ -1845,27 +1969,36 @@ export async function startServer(options: ServerOptions) {
           );
         await next();
       },
-      upgradeWebSocket((c) => {
-        let ticketStream: string | undefined;
-        let ticketSecret: string | undefined;
-        let accountCookie: string | undefined;
-        const value = c.req.query("ticket");
-        if (value) {
-          const ticket = tickets.get(value);
-          tickets.delete(value);
-          if (!ticket || ticket.expires < Date.now())
-            throw new ProtocolError("unauthorized", "Viewing ticket expired");
-          ticketStream = ticket.streamId;
-          ticketSecret = ticket.grantToken;
-          accountCookie = ticket.accountCookie;
-        }
-        return connection(
-          publishing,
-          ticketSecret ?? token(c.req.header("authorization")),
-          ticketStream,
-          accountCookie,
-        );
-      }),
+      upgradeWebSocket(
+        (c) => {
+          let ticketStream: string | undefined;
+          let ticketSecret: string | undefined;
+          let accountCookie: string | undefined;
+          const value = c.req.query("ticket");
+          if (value) {
+            const ticket = tickets.get(value);
+            tickets.delete(value);
+            if (!ticket || ticket.expires < Date.now())
+              throw new ProtocolError("unauthorized", "Viewing ticket expired");
+            ticketStream = ticket.streamId;
+            ticketSecret = ticket.grantToken;
+            accountCookie = ticket.accountCookie;
+          }
+          return connection(
+            publishing,
+            ticketSecret ?? token(c.req.header("authorization")),
+            ticketStream,
+            accountCookie,
+          );
+        },
+        {
+          // The adapter's default prints the raw exception to stderr; count it
+          // instead so no socket data can reach logs.
+          onError: () => {
+            metrics.websocketHandlerErrors++;
+          },
+        },
+      ),
     );
   }
   let server: ReturnType<typeof serve>;

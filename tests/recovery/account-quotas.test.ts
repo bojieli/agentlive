@@ -609,12 +609,18 @@ it("reserves concurrent writes and derives lifecycle from the last complete log 
     activeRecordings: 0,
     storedBytes: 0,
   });
-  // The local owner is never counted or limited.
-  expect(quotas.forRecording("r2", "local")).toBeUndefined();
+  // The local owner is never counted or limited per account; it counts only
+  // toward the server-wide totals.
   quotas
     .reserveRecording("local", { bytes: 10 ** 9, open: true })
     .commit("r2", 10 ** 9);
   expect(quotas.usage("local").storedBytes).toBe(0);
+  expect(quotas.totals).toMatchObject({
+    recordings: 1,
+    activeRecordings: 1,
+    storedBytes: 10 ** 9,
+  });
+  quotas.forget("r2");
 
   const root = await temporaryRoot("agentlive-quota-scan-");
   const line = (kind: string) =>

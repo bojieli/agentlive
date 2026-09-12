@@ -18,7 +18,7 @@ Open `http://127.0.0.1:7331`. The base image is pinned by version and multi-plat
 
 The server runs as UID 1000, with a read-only root filesystem, a 256 MiB temporary filesystem and a named volume mounted at `/data`. The volume stores `/data/owner.json` and `/data/server`; the server generates the owner credential on first startup with owner-only permissions. Do not delete or share that file. Avoid multiple server containers mounting the same data directory. A bind mount can replace the named volume, but its directory must be writable by UID 1000.
 
-Compose publishes port 7331 only on the host loopback interface. The server listens on all interfaces *inside* the container so Docker forwarding works. `/readyz` checks storage readiness; `/healthz` only confirms the HTTP process is responding. Docker's health status does not restart an unhealthy but still-running container; configure monitoring separately.
+Compose publishes port 7331 only on the host loopback interface. The server listens on all interfaces _inside_ the container so Docker forwarding works. `/readyz` checks storage readiness; `/healthz` only confirms the HTTP process is responding. Docker's health status does not restart an unhealthy but still-running container; configure monitoring separately.
 
 ## Use the server from a publisher machine
 
@@ -44,6 +44,30 @@ recordings.example.com {
 ```
 
 Caddy handles WebSocket upgrades. Keep request streaming enabled and avoid proxy response buffering or short timeouts on live WebSocket connections. Preserve Authorization, Content-Type and response security headers. The artifact preview routes intentionally have different CSPs; do not replace them with the main application CSP. Do not log authorization headers, cookies or request bodies. Use `https://recordings.example.com` as the publisher/viewer server origin. Actual DNS/TLS/remote-host acceptance is not established by the local container probe.
+
+## Monitoring and storage limits
+
+Add `--max-stored-bytes` and `--min-free-bytes` to the container command to bound what the server stores and to stop durable growth before the volume fills; `/readyz` reports not-ready while the free-space floor is breached. See [storage limits and metrics](../docs/usage.md#storage-limits-and-metrics) for the exact semantics.
+
+`--metrics` enables `GET /metrics` in the Prometheus text format. Scrapes must present the owner credential or `AGENTLIVE_METRICS_TOKEN`; set that variable in the container environment and give it to the scraper rather than sharing the owner credential:
+
+```yaml
+environment:
+  AGENTLIVE_METRICS_TOKEN: ${AGENTLIVE_METRICS_TOKEN:?set a random 32+ character token}
+command:
+  [
+    "serve",
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "7331",
+    "--state-dir",
+    "/data",
+    "--metrics",
+  ]
+```
+
+Do not expose `/metrics` publicly. Keep the published port on loopback as configured here and let the scraper reach it over the private network, or block `/metrics` at the reverse proxy for anything but your monitoring source. The endpoint exports aggregates only — no recording IDs, titles, account IDs, credentials or event content — and the container probe does not yet exercise it.
 
 ## Stop, replace and preserve data
 

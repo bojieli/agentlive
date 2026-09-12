@@ -121,6 +121,7 @@ Commands:
   agentlive backup --output <new-backup-directory> [--state-dir <directory>] [--owner-file <file>]
   agentlive backup --output <new-server-host-directory> --server <origin> [--barrier-timeout-ms 30000] [--owner-file <file>]
   agentlive serve [--host 127.0.0.1] [--port 7331] [--max-cached-sessions 128] [--shutdown-timeout-ms 30000]
+                  [--max-stored-bytes <n>] [--min-free-bytes <n>] [--metrics]   (metrics token: AGENTLIVE_METRICS_TOKEN)
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
   agentlive import --agent <codex|claude|kimi> --native-session <id> [--source-root <directory>] [--native-agent <kimi-agent>]
   agentlive import --source <recording.agentlive> [--server <origin>]
@@ -356,6 +357,9 @@ async function main() {
       port: { type: "string" },
       "max-cached-sessions": { type: "string" },
       "shutdown-timeout-ms": { type: "string" },
+      "max-stored-bytes": { type: "string" },
+      "min-free-bytes": { type: "string" },
+      metrics: { type: "boolean" },
       "cancellation-timeout-ms": { type: "string" },
       agent: { type: "string" },
       source: { type: "string" },
@@ -583,6 +587,9 @@ async function main() {
                             "port",
                             "max-cached-sessions",
                             "shutdown-timeout-ms",
+                            "max-stored-bytes",
+                            "min-free-bytes",
+                            "metrics",
                           ]
                         : command === "replay" || command === "watch"
                           ? [
@@ -1499,8 +1506,25 @@ async function main() {
       : undefined;
     if (hosted)
       secrets.push(hosted.hosted.clientSecret, hosted.hosted.cookiePassword);
+    const storage: { maxStoredBytes?: number; minFreeBytes?: number } = {};
+    for (const [flag, key] of [
+      ["max-stored-bytes", "maxStoredBytes"],
+      ["min-free-bytes", "minFreeBytes"],
+    ] as const) {
+      const raw = values[flag];
+      if (raw === undefined) continue;
+      if (!/^(0|[1-9]\d*)$/.test(raw) || !Number.isSafeInteger(Number(raw)))
+        throw new Error(`--${flag} must be a nonnegative integer byte count`);
+      storage[key] = Number(raw);
+    }
+    const metricsToken = process.env.AGENTLIVE_METRICS_TOKEN || undefined;
+    if (metricsToken) secrets.push(metricsToken);
     const server = await startServer({
       ...hosted,
+      storage,
+      ...(values.metrics
+        ? { metrics: metricsToken ? { token: metricsToken } : {} }
+        : {}),
       directory: join(stateDir, "server"),
       ownerSecret: secret,
       host: values.host ?? "127.0.0.1",

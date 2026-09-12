@@ -11,6 +11,8 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 - `publish` output includes the recording's stable `viewerUrl`; `watch` and `replay` accept a viewer URL; the server redirects `/s/<id>` short links.
 - Operator account administration for hosted mode: `agentlive accounts` and `agentlive account-status` (`GET /api/v1/admin/accounts`, `POST /api/v1/admin/accounts/:id/status`); disabling ends the account's sessions, transfers and sockets immediately.
 - Server data directories record a format version; servers and `restore` refuse data written by a newer format, making rollback by restoring a pre-upgrade backup safe.
+- Server-wide storage limits (`serve --max-stored-bytes`, `--min-free-bytes`) enforced for every writer including the local owner, with `/readyz` reporting not-ready below the free-space floor.
+- Optional operational metrics: `serve --metrics` exposes an owner- or token-authenticated Prometheus `GET /metrics` with content-free aggregates only.
 - Per-account quotas for hosted mode (`quotas` in the hosted config): recording, open-recording and stored-byte limits enforced with a non-retryable `quota_exceeded` error; usage at `GET /api/v1/account/usage` and in the operator account listing.
 - `agentlive migrate-live` replaces a live Claude, Codex or Kimi binding with a private recording re-converted from retained native history under new filter/title/artifact options, with lineage and an explicit retain/remove disposition; `publish` accepts `--redact-env`.
 - Online server backup: `agentlive backup --server <origin> --output <dir>` and owner-only `POST /api/v1/admin/backup` back up a running server in the restore-compatible format.

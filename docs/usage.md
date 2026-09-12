@@ -15,10 +15,17 @@ The server listens on `127.0.0.1:7331` and persists state under `~/.agentlive`. 
 
 For multi-session hosting, `serve --max-cached-sessions 128` sets the resident session cache capacity. Active requests and live connections retain their sessions; idle sessions can be evicted and reopened from JSONL. If every cached session is in use, new session loads receive a retryable capacity response. This limits resident session count, not total memory or retained disk usage. Programmatic `RecordingStore.get/create` calls acquire ownership and must be paired with `store.release(session)` when finished.
 
-
 Server shutdown stops admission and drains accepted work. Configure its waiting deadline with `agentlive serve --shutdown-timeout-ms 30000` (default: 30 seconds; positive integer up to 2147483647). If the deadline expires, the CLI reports an error and cleanup continues while retaining the store lock. The library’s `close()` rejects with `ShutdownTimeoutError` (`code: "shutdown_timeout"`); use `whenClosed()` to await actual completion afterward. A timeout does not prove a pending write was canceled. Use a process supervisor for a hard termination deadline, including blocked event loops. On restart, publishers reconcile durable acknowledgements and retry unacknowledged events through the existing deduplication protocol.
 
 Discover recordings hosted by your server with `agentlive list --server http://127.0.0.1:7331`. The command uses your owner credential and returns a JSON page with recording summaries and `nextAfter`. Continue with `--after <nextAfter>`; `--limit` accepts 1–100 and defaults to 50. Publisher credentials and anonymous access cannot list the server’s recordings. Pages are ordered by recording ID, and refreshing from the first page discovers recordings added before your current cursor.
+
+## Storage limits and metrics
+
+`serve --max-stored-bytes <n>` caps the total bytes the server stores across every recording — committed event logs plus installed attachments — for all writers, including the local owner. It is checked together with the [per-account quotas](hosted-identity.md#per-account-quotas): each durable write reserves its size before it starts, so concurrent creates, uploads, imports and publisher batches cannot jointly exceed a limit. An over-limit write fails with the non-retryable `quota_exceeded` error (HTTP 403, or a WebSocket error for publisher batches) whose details say whether the `global` or the account limit was hit; publishers and uploads stop rather than retry. Removing a recording frees its bytes, and usage is recomputed at startup. Ending a recording is never refused.
+
+`serve --min-free-bytes <n>` additionally refuses durable growth when the filesystem reports less than that much available space, and makes `/readyz` report not-ready while the floor is breached. Admission is synchronous while `statfs` is not, so the floor uses a briefly cached sample minus the growth and pending reservations since that sample; only one probe is in flight at a time and waiters are released on a deadline. Reads, history downloads and recording removal continue below the floor.
+
+`serve --metrics` enables `GET /metrics` in the Prometheus text format. It is disabled by default and never anonymous: a scrape must present the owner credential, or the value of `AGENTLIVE_METRICS_TOKEN` if that variable is set when the server starts. The response contains only aggregates — uptime, process memory, recording counts, cached sessions, WebSocket connections by role, in-flight transfers/imports/exports, stored and reserved bytes with the configured limits, free-space state, account count and limits, quota rejections by quota and scope, snapshot scheduler state, backup and write-barrier state, and request counts by method, route template and status class. Labels come from fixed sets, so no recording ID, title, account ID, credential or event content appears. A regression test drives a server with a known secret and title and asserts neither reaches stdout, stderr or `/metrics`.
 
 ## Importing native history
 
@@ -143,7 +150,7 @@ agentlive doctor [--server <origin>]         # runtime/credential/server/agent c
 
 `finish` drains the already captured journal to the server and appends a `recording.ended` lifecycle event at that exact producer boundary; it does not read native sources again. Its operation ID is persisted before the remote request, so rerunning `finish` after an interruption completes the same operation. A finished binding refuses further `publish`. `reopen` persists its own intent, appends `recording.reopened` to the same recording, and retires the finish record, after which the original `publish` command continues capture into the same URL. Imports are continued with `publish --resume-import` instead. The lower-level `finish-publisher --source <dir> --operation-id <id>` remains available for scripted use.
 
-`retire` moves a finished, transferred or fully delivered imported binding to `<state-dir>/publisher/retired/` while holding its lock. Bindings are keyed by server, agent and native session, so this is how to start a *new* recording of a native session that already has one: the next `publish` creates a fresh binding and recording and, for file agents, captures the retained native history from the beginning. Retired directories are kept for inspection and are not listed by `status`.
+`retire` moves a finished, transferred or fully delivered imported binding to `<state-dir>/publisher/retired/` while holding its lock. Bindings are keyed by server, agent and native session, so this is how to start a _new_ recording of a native session that already has one: the next `publish` creates a fresh binding and recording and, for file agents, captures the retained native history from the beginning. Retired directories are kept for inspection and are not listed by `status`.
 
 To change the redaction filter, title or artifact policy of a live Claude, Codex or Kimi binding, don't restart it with new options (that is rejected). Use `migrate-live` instead. It builds a verified private replacement recording from the retained native history under the new policy and puts it in the binding's place. You then continue it with `publish --resume-import` and the new options; see [live-binding migration](converter-migrations.md#replace-a-live-binding-with-a-new-projection).
 
@@ -233,9 +240,7 @@ With `watch --resume-view`, playback speed, pause state, and timed/live catch-up
 
 Start a live viewer at a particular recorded time with `agentlive watch --stream <id> --from-ms 30000 --speed 1 --interactive`. The viewer fetches a fixed server history boundary, receives that prefix, displays its state at 30 seconds, then continues with the remaining and newly arriving events. A position beyond the boundary clamps to its latest event. Explicit `--from-ms` overrides a saved viewing position; with `--resume-view`, the selected event position is saved after its snapshot is displayed. Seeking uses the fixed initial server boundary and cached history. Presentation reconstructs from local paged checkpoints or a newer authorized server snapshot bounded by the selected event sequence, then reduces the cached suffix and streams bounded text ranges. Snapshot acceleration preserves full durable event receipt. Temporary snapshot-selection transport failures fall back to cached reconstruction; imported pages still require the server until fetched. Its former 64 MiB reference-state event counter has been removed.
 
-
 During interactive watch, `[` seeks back 30 seconds, `]` seeks forward 30 seconds, and `0` returns to the beginning. These controls pause presentation for inspection; space resumes and `l` catches up live. Seeking uses the currently received cache, so it also works during a network outage once history is cached. Programmatic viewers can call `PlaybackPacer.stepBackward()` to restore the preceding exact event prefix while pausing, or `PlaybackPacer.seek(milliseconds)` for an exact target and observe completion through `onPositioned`. Programmatic seeking preserves the controller’s pause state. Requests beyond received history clamp to its latest event.
-
 
 Saved viewer positions retain an explicit seek time between events. For example, seeking to 30 seconds between events at 0 and 60 seconds and restarting with `--resume-view` restores the 30-second snapshot and timing anchor. Older sequence-only checkpoints still load at their event timestamp. This preserves selected seek positions; continuously elapsed playback time between events is not checkpointed on every clock tick.
 
@@ -303,7 +308,6 @@ agentlive --help
 
 The build bundles AgentLive workspace code into one CLI and includes a shrinkwrap for its external runtime dependencies. Verification installs the tarball in a fresh temporary directory with install scripts disabled, starts its server, imports a recording, lists and replays it, retries the import, and checks shutdown. `node scripts/probe-claude-publish.mjs --package` additionally creates and resumes a real Claude session, then verifies its recording through the installed package. The tarball includes the prebuilt browser viewer. No npm release has been published yet.
 
-
 Package builds use the reviewed dependency tree in `packaging/runtime-lock.json` and do not resolve new runtime versions. After intentionally changing runtime dependencies, run `npx --yes pnpm@12.3.4 package:lock` and review the lock diff. `package:verify` rebuilds with an unreachable registry and requires byte-identical tarballs before testing installation. Installing external dependencies still requires registry access or an existing npm cache.
 
 ## Docker deployment
@@ -334,7 +338,6 @@ The real Codex capture-to-replay test also exercises a read-only tool and native
 npx --yes pnpm@12.3.4 build
 node scripts/probe-codex-pipeline.mjs
 ```
-
 
 Native history import is available through the four agent-specific programmatic import APIs and the workspace CLI. Its isolated local validation script imports an explicitly selected source file into a private test server and checks replay and retry identity:
 

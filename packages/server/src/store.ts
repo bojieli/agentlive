@@ -5,8 +5,11 @@ import { cleanRemovedStorage } from "./removed-storage.js";
 import {
   AccountQuotas,
   scanRecordingUsage,
+  storageLimitsSchema,
   type QuotaLimits,
+  type StorageLimits,
 } from "./quotas.js";
+import { FreeSpaceFloor, type StatfsProbe } from "./free-space.js";
 import {
   SnapshotScheduler,
   type SnapshotScheduleOptions,
@@ -57,6 +60,7 @@ export class RecordingStore {
     { session: RecordingSession; users: number; touched: number }
   >();
   private clock = 0;
+  private removedCount = 0;
   private constructor(
     readonly directory: string,
     private readonly lock: FileLock,
@@ -65,7 +69,7 @@ export class RecordingStore {
     readonly reports: Reports,
     /** Shared by every durable writer of this server directory (online backup). */
     readonly barrier: WriteBarrier,
-    /** Per-account usage and hosted quota admission (the local owner is untracked). */
+    /** Server-wide and per-account usage and admission (the local owner has no account limits). */
     readonly quotas: AccountQuotas,
   ) {}
   static async open(
@@ -74,12 +78,27 @@ export class RecordingStore {
       maxCachedSessions?: number;
       snapshots?: SnapshotScheduleOptions;
       quotas?: QuotaLimits;
+      /** Server-wide limits for every writer; `statfs` is a test/embedding hook. */
+      storage?: StorageLimits & { statfs?: StatfsProbe };
     } = {},
   ): Promise<RecordingStore> {
     const maximum = options.maxCachedSessions ?? 128;
     if (!Number.isSafeInteger(maximum) || maximum < 1)
       throw new RangeError("Invalid session cache capacity");
-    const quotas = new AccountQuotas(options.quotas);
+    const { statfs, ...rawStorage } = options.storage ?? {};
+    const storage = storageLimitsSchema.safeParse(rawStorage);
+    if (!storage.success)
+      throw new RangeError("Invalid server storage limit configuration");
+    const freeSpace =
+      storage.data.minFreeBytes === undefined
+        ? undefined
+        : new FreeSpaceFloor(directory, storage.data.minFreeBytes, statfs);
+    const quotas = new AccountQuotas(options.quotas, {
+      ...(storage.data.maxStoredBytes === undefined
+        ? {}
+        : { maxStoredBytes: storage.data.maxStoredBytes }),
+      ...(freeSpace ? { freeSpace } : {}),
+    });
     const scheduler = new SnapshotScheduler(options.snapshots);
     const lock = await FileLock.acquire(join(directory, ".server.lock"));
     try {
@@ -138,9 +157,11 @@ export class RecordingStore {
             "corrupt_storage",
             "Duplicate session creation request",
           );
-        if (metadata.removed)
+        if (metadata.removed) {
+          store.removedCount++;
           await cleanRemovedStorage(join(directory, "sessions", entry.name));
-        else if (AccountQuotas.tracks(metadata.ownerId)) {
+        } else {
+          // Every owner counts toward server-wide usage; accounts also per account.
           const usage = await scanRecordingUsage(
             join(directory, "sessions", entry.name),
           );
@@ -156,6 +177,8 @@ export class RecordingStore {
           digest: metadata.creationDigest,
         });
       }
+      // First free-space sample before admitting writes (bounded; failures admit).
+      await freeSpace?.refresh();
       return store;
     } catch (error) {
       await scheduler.close();
@@ -662,6 +685,7 @@ export class RecordingStore {
         );
         // The durable tombstone releases the account's usage immediately.
         this.quotas.forget(input.id);
+        this.removedCount++;
         await this.snapshotScheduler.remove(session);
         return result;
       } finally {
@@ -748,6 +772,13 @@ export class RecordingStore {
   }
   get cacheSize(): number {
     return this.sessions.size;
+  }
+  get cacheCapacity(): number {
+    return this.maximum;
+  }
+  /** Recordings with a durable removal tombstone (content-free count). */
+  get removedRecordings(): number {
+    return this.removedCount;
   }
   /** Release exactly one ownership acquired by get/create; idle sessions become evictable. */
   release(session: RecordingSession): void {

@@ -10,7 +10,7 @@ The user-directed order remains: finish missing product features, then performan
 2. **Native fidelity and artifacts.** Completeness notices now cover unfinished messages and tools, running tasks, pending interactions and pending attachments (payload version 2). Close remaining per-agent source gaps where evidence permits (see [compatibility](docs/compatibility.md)), broaden media/module/HTML fidelity, and define frozen-import finalization for withheld OpenCode text tails.
 3. **Hosted authorization follow-ups.** Per-account quotas are implemented (usage display in the browser and an account-facing usage command remain optional); real identity-provider acceptance; concurrent logout/disable race coverage beyond the tested revocation points.
 4. **Operations.** The data-format marker and newer-format refusal are implemented; the first real format migration and automated rollback orchestration remain. Online backup is implemented and passes the container probe; exercise it on an actual host.
-5. **Performance, capacity and lifecycle.** The synthetic 500k / eight-hour memory workload now completes; still needed: bounded far-seek latency (cheaper landmarks or faster replay), realistic mixed-payload and IndexedDB/server-snapshot measurements at that scale; retention, global and account quotas; safe automatic server content collection; publisher spool pruning and durability before the first remote binding; independent artifact delivery; report archival; suspension/device/accessibility acceptance.
+5. **Performance, capacity and lifecycle.** The synthetic 500k / eight-hour memory workload now completes; still needed: bounded far-seek latency (cheaper landmarks or faster replay), realistic mixed-payload and IndexedDB/server-snapshot measurements at that scale; retention policy; safe automatic server content collection; independent artifact delivery; report archival; suspension/device/accessibility acceptance.
 6. **Release acceptance and publication.** Current-release CI, package and container verification; deployed pilot; npm publication with provenance through the prepared [release workflow](RELEASING.md) (needs an `NPM_TOKEN` in the `npm` environment and a version tag); external testers completing publish → watch → rewind → catch up → replay in both deployment modes.
 
 ## 1. Scalable playback and complete viewers — M1/M4
@@ -61,7 +61,7 @@ The user-directed order remains: finish missing product features, then performan
 
 ## 7. Centralized service and deployed pilot — M6
 
-- Operational monitoring without event bodies or credentials in logs, report archival, global (server-wide) storage quotas.
+- Report archival and retention policy; alerting and dashboards built on the metrics endpoint; measured behaviour under sustained concurrent load.
 - Deploy behind HTTPS with durable storage and backups; validate concurrent independent publishers/viewers, latency, restart and restoration on the actual host.
 
 ## 8. Release acceptance and publication — M7
