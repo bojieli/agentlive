@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import { build } from "esbuild";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const output = join(root, "packages/server/dist/web");
+// Rebuild from empty: the packager copies this directory wholesale, so a file an
+// older version of this script emitted would otherwise be published forever.
+await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await build({
   absWorkingDir: root,
