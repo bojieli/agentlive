@@ -46,6 +46,18 @@ is readable but stops advancing in the paged viewers. The fix is on the publishe
 event stream cannot be repaired in place, so republish the session under a new
 recording.
 
+Past its fan-out capacity the server stays correct but falls behind, and every socket
+can sit under its own shedding limit while it does. `serve --overload-event-loop-delay-ms
+<n>` (default 250) sets the mean event-loop delay above which the server calls itself
+over capacity; 64 MiB queued across all socket send buffers does the same. In that
+state `/readyz` answers 503 with `overloaded`, so a load balancer stops sending new
+work, and a new **viewer** WebSocket is refused with `retry_later`. Existing viewers
+keep their connections — dropping them would turn latency into a reconnect storm — and
+publishers are never refused, because durable capture is the point of the recording.
+The state holds for five seconds after the measurement recovers so admission does not
+alternate. `agentlive_delivery_overloaded`, `agentlive_delivery_refused_total`,
+`agentlive_event_loop_delay_seconds` and `agentlive_websocket_buffered_bytes` report it.
+
 `serve --metrics` enables `GET /metrics` in the Prometheus text format. It is disabled by default and never anonymous: a scrape must present the owner credential, or the value of `AGENTLIVE_METRICS_TOKEN` if that variable is set when the server starts. The response contains only aggregates — uptime, process memory, recording counts, cached sessions, WebSocket connections by role, in-flight transfers/imports/exports, stored and reserved bytes with the configured limits, free-space state, account count and limits, quota rejections by quota and scope, snapshot scheduler state, backup and write-barrier state, and request counts by method, route template and status class. Labels come from fixed sets, so no recording ID, title, account ID, credential or event content appears. A regression test drives a server with a known secret and title and asserts neither reaches stdout, stderr or `/metrics`.
 
 ## Docker deployment

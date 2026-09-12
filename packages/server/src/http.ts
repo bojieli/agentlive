@@ -55,6 +55,7 @@ import {
 } from "@agentlive/protocol";
 import { RecordingStore, createSessionSchema } from "./store.js";
 import { storageReadiness } from "./readiness.js";
+import { OverloadMonitor, type OverloadLimits } from "./overload.js";
 import type { RecordingSession, Lease } from "./session.js";
 
 export interface ServerOptions {
@@ -85,6 +86,12 @@ export interface ServerOptions {
    */
   metrics?: { token?: string };
   maxConnections?: number;
+  /**
+   * When the process is past its fan-out capacity — the event loop lagging, or a
+   * large aggregate of queued socket bytes — the server reports not-ready and
+   * refuses *new* viewer connections instead of quietly queueing them.
+   */
+  overload?: OverloadLimits;
   maxCachedSessions?: number;
   snapshots?: import("./snapshot-scheduler.js").SnapshotScheduleOptions;
   maxSocketBytes?: number;
@@ -309,6 +316,7 @@ export async function startServer(options: ServerOptions) {
     !!secret && timingSafeEqual(digest(secret), ownerHash);
   const maximum = options.maxConnections ?? 256;
   const socketLimit = options.maxSocketBytes ?? 2 * 1024 * 1024;
+  const overload = new OverloadMonitor(options.overload);
   let origin = options.publicOrigin ?? "";
   let closing = false;
   const requests = new Set<Promise<void>>();
@@ -683,8 +691,20 @@ export async function startServer(options: ServerOptions) {
       checkStorage(),
       store.quotas.freeSpace?.ready() ?? true,
     ]);
-    const ready = !closing && storageReady && spaceReady;
-    return c.json({ ready }, ready ? 200 : 503);
+    // Past its delivery capacity the server is still correct but behind, so it
+    // stops asking for new viewers instead of accepting them into a queue.
+    const capacity = overload.state;
+    const ready =
+      !closing && storageReady && spaceReady && !capacity.overloaded;
+    return c.json(
+      {
+        ready,
+        ...(capacity.overloaded
+          ? { overloaded: true, overloadedForMs: capacity.forMs }
+          : {}),
+      },
+      ready ? 200 : 503,
+    );
   });
   let activeImports = 0;
   app.post("/api/v1/imports", async (c) => {
@@ -991,6 +1011,7 @@ export async function startServer(options: ServerOptions) {
           accounts: totals.accounts,
           quotaRejections: totals.rejections,
           snapshots: store.snapshotStatus,
+          delivery: overload.state,
           backupsInProgress: backups.active,
           writeBarrierPaused: store.barrier.paused,
           requests: metrics.requests,
@@ -1671,6 +1692,13 @@ export async function startServer(options: ServerOptions) {
     maxPayload: 300 * 1024,
     perMessageDeflate: false,
   });
+  // Bytes the process has queued but not yet written: one slow socket is shed by
+  // `socketLimit`, many sockets each just under it are only visible in the sum.
+  overload.observeBuffered(() => {
+    let total = 0;
+    for (const client of wss.clients) total += client.bufferedAmount;
+    return total;
+  });
   function connection(
     publishing: boolean,
     secret: string,
@@ -2010,6 +2038,14 @@ export async function startServer(options: ServerOptions) {
             "retry_later",
             "Connection capacity exceeded",
           );
+        // Existing viewers keep their sockets: dropping them would turn a latency
+        // problem into a reconnect storm. Publishers are never refused, because
+        // durable capture is what a recording is for.
+        if (!publishing && overload.refuseViewer())
+          throw new ProtocolError(
+            "retry_later",
+            "Server is past its delivery capacity",
+          );
         if (publishing && !token(c.req.header("authorization")))
           throw new ProtocolError(
             "unauthorized",
@@ -2116,6 +2152,7 @@ export async function startServer(options: ServerOptions) {
       } catch (error) {
         errors.push(error);
       }
+      overload.close();
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       if (errors.length)
         throw new AggregateError(errors, "Server shutdown failed");
@@ -2147,6 +2184,8 @@ export async function startServer(options: ServerOptions) {
     get activeTransfers() {
       return transfers.size;
     },
+    /** Measured fan-out capacity state; also what `/readyz` and `/metrics` report. */
+    overload,
     close,
     /** Starts shutdown if necessary; waits without a deadline for actual cleanup. */
     whenClosed() {

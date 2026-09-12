@@ -131,6 +131,7 @@ Commands:
   agentlive backup --output <new-server-host-directory> --server <origin> [--barrier-timeout-ms 30000] [--owner-file <file>]
   agentlive serve [--host 127.0.0.1] [--port 7331] [--max-cached-sessions 128] [--shutdown-timeout-ms 30000]
                   [--max-stored-bytes <n>] [--min-free-bytes <n>] [--no-snapshot-collection]
+                  [--overload-event-loop-delay-ms 250]   (over this, refuse new viewers)
                   [--public-origin https://name]   (required behind a TLS reverse proxy)
                   [--metrics]   (metrics token: AGENTLIVE_METRICS_TOKEN)
   agentlive import --agent <codex|claude|kimi|opencode> --source <file>
@@ -383,6 +384,7 @@ async function main() {
       "max-stored-bytes": { type: "string" },
       "min-free-bytes": { type: "string" },
       "no-snapshot-collection": { type: "boolean" },
+      "overload-event-loop-delay-ms": { type: "string" },
       "public-origin": { type: "string" },
       metrics: { type: "boolean" },
       "cancellation-timeout-ms": { type: "string" },
@@ -623,6 +625,7 @@ async function main() {
                               "max-stored-bytes",
                               "min-free-bytes",
                               "no-snapshot-collection",
+                              "overload-event-loop-delay-ms",
                               "public-origin",
                               "metrics",
                             ]
@@ -1592,6 +1595,19 @@ async function main() {
     const port = Number(values.port ?? 7331);
     if (!Number.isSafeInteger(port) || port < 0 || port > 65535)
       throw new Error("Port must be an integer from 0 to 65535");
+    const overloadDelay =
+      values["overload-event-loop-delay-ms"] === undefined
+        ? undefined
+        : Number(values["overload-event-loop-delay-ms"]);
+    if (
+      overloadDelay !== undefined &&
+      (!Number.isSafeInteger(overloadDelay) ||
+        overloadDelay < 1 ||
+        overloadDelay > 2_147_483_647)
+    )
+      throw new Error(
+        "--overload-event-loop-delay-ms must be an integer from 1 to 2147483647",
+      );
     const secret = process.env.AGENTLIVE_OWNER_SECRET
       ? validateSecret(process.env.AGENTLIVE_OWNER_SECRET)
       : await ownerCredential(ownerFile, true);
@@ -1654,6 +1670,9 @@ async function main() {
       ...(values["no-snapshot-collection"]
         ? { snapshots: { collect: false } }
         : {}),
+      ...(overloadDelay === undefined
+        ? {}
+        : { overload: { eventLoopDelayMs: overloadDelay } }),
       maxCachedSessions,
       shutdownTimeoutMs,
       port,
