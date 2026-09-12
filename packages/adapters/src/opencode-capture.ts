@@ -5,7 +5,7 @@ import {
   type OpenCodeArtifactResolvers,
 } from "./opencode-artifacts.js";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, unlink } from "node:fs/promises";
+import { mkdir, readdir, readFile, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import {
@@ -44,6 +44,16 @@ const stateSchema = z.strictObject({
   elapsedMs: z.number().nonnegative(),
   entities: z.record(z.string(), entitySchema),
 });
+/**
+ * Agents whose `agent.updated` lineage this converter has captured. A child
+ * converter has its own state but shares the journal, so it asks whether a parent
+ * was already captured; reading that answer from a durable file instead of
+ * replaying the journal from sequence zero is what lets the journal be pruned.
+ * One file per converter directory, each written under that directory's own lock,
+ * so the union needs no shared lock.
+ */
+const AGENTS_FILE = "agents.json";
+const agentsSchema = z.array(z.string().max(200)).max(4000);
 const intentSchema = z.strictObject({
   entityId: z.string().regex(/^[a-f0-9]{64}$/),
   next: entitySchema,
@@ -107,6 +117,8 @@ export class OpenCodeCapture {
   private tail: Promise<unknown> = Promise.resolve();
   private failed = false;
   private closed = false;
+  /** Agent lineage this converter captured; durable in its own `agents.json`. */
+  private agents = new Set<string>();
   private constructor(
     private readonly journal: PublisherJournal,
     private readonly directory: string,
@@ -149,28 +161,25 @@ export class OpenCodeCapture {
     try {
       const filterHash = hash([...new Set(secrets)].sort());
       let state: z.infer<typeof stateSchema>;
+      let fresh = false;
       try {
         state = stateSchema.parse(
           await readBounded(join(directory, "state.json"), 16 * 1024 * 1024),
         );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        if (journal.capturedThrough > 0) {
-          let captured = !child;
-          if (child)
-            for await (const event of journal.pending(0)) {
-              if (
-                event.clockSegmentId === `opencode_${hash(nativeSessionId)}`
-              ) {
-                captured = true;
-                break;
-              }
-            }
-          if (captured)
-            throw new Error(
-              "OpenCode capture state is missing for an existing publisher",
-            );
-        }
+        // A converter directory that holds anything besides the lock this open just
+        // took has run before, so its missing state is loss, not a first run. The
+        // root converter's directory is the binding's own, so any captured event
+        // proves the same thing. Neither test reads the journal, which may have
+        // been pruned.
+        const used = (await readdir(directory)).some(
+          (name) => name !== "capture.lock" && !name.startsWith("."),
+        );
+        if (used || (!child && journal.capturedThrough > 0))
+          throw new Error(
+            "OpenCode capture state is missing for an existing publisher",
+          );
         state = {
           version: 1,
           lifecycleVersion: 1,
@@ -181,6 +190,7 @@ export class OpenCodeCapture {
           elapsedMs: 0,
           entities: {},
         };
+        fresh = true;
         await atomicJson(join(directory, "state.json"), state);
       }
       if (
@@ -199,6 +209,7 @@ export class OpenCodeCapture {
         artifacts,
         child,
       );
+      await capture.loadAgents(fresh);
       await capture.recover();
       await capture.upgradeLifecycle();
       await capture.upgradeAttachmentEncoding();
@@ -207,6 +218,79 @@ export class OpenCodeCapture {
       await lock.release();
       throw error;
     }
+  }
+  /**
+   * Read this converter's captured lineage, deriving it once for a binding written
+   * before the file existed. That derivation replays the journal, which is only
+   * possible while nothing has been pruned — and nothing has, because a binding
+   * without the file is a binding that ran without retention.
+   */
+  private async loadAgents(fresh: boolean) {
+    const path = join(this.directory, AGENTS_FILE);
+    try {
+      this.agents = new Set(
+        agentsSchema.parse(await readBounded(path, 1024 * 1024)),
+      );
+      return;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    // A converter opening for the first time has captured nothing. One that has
+    // run before but predates this file is a binding that ran without retention,
+    // so its journal still holds everything the derivation needs.
+    if (!fresh && this.journal.capturedThrough > 0) {
+      if (this.journal.compactedThrough > 0)
+        throw new Error(
+          "OpenCode captured lineage is missing and its journal was pruned",
+        );
+      const segment = `opencode_${hash(this.state.nativeSessionId)}`;
+      for await (const event of this.journal.pending(0))
+        if (
+          event.clockSegmentId === segment &&
+          event.content.kind === "agent.updated"
+        )
+          this.agents.add(event.content.payload.agentId);
+    }
+    await atomicJson(path, [...this.agents].sort());
+  }
+  /** Every agent any converter of this binding has captured. */
+  private async capturedAgents(): Promise<Set<string>> {
+    const directories = [join(this.journal.directory, "opencode-live")];
+    const children = join(this.journal.directory, "opencode-children");
+    try {
+      for (const name of await readdir(children))
+        directories.push(join(children, name));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const union = new Set<string>();
+    for (const directory of directories) {
+      if (directory === this.directory) {
+        for (const agent of this.agents) union.add(agent);
+        continue;
+      }
+      try {
+        for (const agent of agentsSchema.parse(
+          await readBounded(join(directory, AGENTS_FILE), 1024 * 1024),
+        ))
+          union.add(agent);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+    return union;
+  }
+  /** Durable before the state that would stop the events being captured again. */
+  private async rememberAgents(events: readonly EventContent[]) {
+    const added = events.flatMap((event) =>
+      event.kind === "agent.updated" && !this.agents.has(event.payload.agentId)
+        ? [event.payload.agentId]
+        : [],
+    );
+    if (!added.length) return;
+    const next = new Set([...this.agents, ...added]);
+    await atomicJson(join(this.directory, AGENTS_FILE), [...next].sort());
+    this.agents = next;
   }
   private async upgradeAttachmentEncoding() {
     if (this.state.attachmentEncodingVersion === 2) return;
@@ -240,6 +324,12 @@ export class OpenCodeCapture {
       this.state.presentationVersion === 1
     )
       return;
+    // The migration reduces the whole captured prefix; a pruned journal no longer
+    // has it. Bindings old enough to need this ran without retention.
+    if (this.journal.compactedThrough > 0)
+      throw new Error(
+        "OpenCode capture lifecycle upgrade needs a journal that was not pruned",
+      );
     const entities = { ...this.state.entities };
     const seen = new Set<string>();
     for await (const event of this.journal.pending(0)) {
@@ -322,6 +412,7 @@ export class OpenCodeCapture {
     } else {
       if ((previous?.generation ?? 0) + 1 !== intent.next.generation)
         throw new Error("OpenCode capture generation gap");
+      await this.rememberAgents(intent.events);
       for (const [index, content] of intent.events.entries())
         await this.journal.capture({
           sourceKey: `opencode-live/${intent.entityId}/${intent.next.generation}/${index}`,
@@ -522,17 +613,13 @@ export class OpenCodeCapture {
           if (parent.kind !== "agent.updated")
             throw new Error("Invalid parent lineage event");
           // A placeholder must not replace a captured parent's richer lineage.
-          // Consult the shared durable journal because child converters have
-          // separate state and may be opened after their parent was captured.
-          for await (const event of this.journal.pending(0)) {
-            signal?.throwIfAborted();
-            if (
-              event.content.kind === "agent.updated" &&
-              event.content.payload.agentId === parent.payload.agentId
-            )
-              return lineage.slice(1);
-          }
-          return lineage;
+          // Every converter of this binding records what it captured, because
+          // child converters have separate state and may be opened after their
+          // parent was captured.
+          signal?.throwIfAborted();
+          return (await this.capturedAgents()).has(parent.payload.agentId)
+            ? lineage.slice(1)
+            : lineage;
         },
         true,
         hash({

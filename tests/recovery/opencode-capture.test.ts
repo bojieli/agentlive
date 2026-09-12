@@ -810,3 +810,70 @@ it("captures only the retained part prefix from an initially reverted snapshot a
   expect(() => capture.accept(malformed)).toThrow("revert message");
   expect(journal.capturedThrough).toBe(before);
 });
+
+it("keeps capturing family lineage after the journal prunes its acknowledged prefix", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-opencode-retention-"));
+  roots.push(root);
+  const journal = await PublisherJournal.open(
+    root,
+    {
+      serverOrigin: "http://localhost",
+      agent: "opencode",
+      nativeSessionId: "ses_test",
+    },
+    // Small enough that a handful of revisions seals and prunes segments.
+    { retention: { segmentBytes: 1024, retainAcknowledgedBytes: 0 } },
+  );
+  journals.push(journal);
+  await journal.bindRemote("stream1", "revision1");
+  const parent = await OpenCodeCapture.open(journal);
+  captures.push(parent);
+  for (let n = 0; n < 12; n++)
+    await parent.accept(snapshot(`parent text ${n}`.padEnd(400, "p")));
+  await parent.accept(snapshot("parent final", true, "completed"));
+
+  const childSnapshot = (id: string) => {
+    const data = snapshot(`${id} message`, true, "completed");
+    data.info.id = id;
+    data.info.parentID = "ses_test";
+    for (const message of data.messages) {
+      message.info.sessionID = id;
+      for (const part of message.parts) part.sessionID = id;
+    }
+    return data;
+  };
+  // The first child publishes the parent's lineage as well as its own.
+  const first = await OpenCodeCapture.open(journal, [], undefined, {
+    nativeSessionId: "ses_child_one",
+    parentNativeSessionId: "ses_test",
+  });
+  captures.push(first);
+  await first.accept(childSnapshot("ses_child_one"));
+
+  // Acknowledge everything so the whole prefix, lineage included, is pruned.
+  await journal.acknowledge(journal.capturedThrough);
+  expect(journal.compactedThrough).toBeGreaterThan(0);
+  await expect(async () => {
+    for await (const _ of journal.pending(0)) void _;
+  }).rejects.toMatchObject({ code: "cursor_invalid" });
+  const pruned = journal.capturedThrough;
+
+  // A second child opened now must still know the parent's lineage was captured,
+  // and publish only its own half rather than a second placeholder.
+  const second = await OpenCodeCapture.open(journal, [], undefined, {
+    nativeSessionId: "ses_child_two",
+    parentNativeSessionId: "ses_test",
+  });
+  captures.push(second);
+  await second.accept(childSnapshot("ses_child_two"));
+  expect(journal.capturedThrough).toBeGreaterThan(pruned);
+  const events = [];
+  for await (const event of journal.pending(pruned)) events.push(event);
+  expect(
+    events.filter((event) => event.content.kind === "agent.updated"),
+  ).toHaveLength(1);
+  // Repeating the snapshot adds nothing, so the durable state is what dedups.
+  const after = journal.capturedThrough;
+  await second.accept(childSnapshot("ses_child_two"));
+  expect(journal.capturedThrough).toBe(after);
+});

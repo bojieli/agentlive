@@ -82,6 +82,8 @@ agentlive publish --agent opencode \
 
 Use `OPENCODE_SERVER_PASSWORD` (and `OPENCODE_SERVER_USERNAME` when configured) in the publisher's environment for native server authentication. `--server` selects the AgentLive destination separately. Initial attachment validates native identity/authentication before creating the remote recording. Repeat the command to resume the same publisher binding; native-server reconnect and AgentLive-server reconnect run independently. An existing binding keeps capturing available native snapshots while AgentLive is offline, then sends its durable backlog.
 
+Like file publishers, an OpenCode publisher compacts its acknowledged journal prefix instead of growing one capture file for as long as it runs: each converter keeps its own durable state, including which parent lineage it has captured, so rebuilding it never needs the delivered history. A binding written before that state existed derives it once on the next open, which is possible because such a binding was never pruned.
+
 OpenCode publishing currently preserves observed snapshots, not every native text delta. It captures base64 data-URL files and tool attachments; local `file:` references require explicit `--artifact-root` access. Authenticated remote artifact URLs (`--remote-artifact-policy`) and import continuation (`--resume-import`) are supported; revert presentation is described in [OpenCode revert](opencode-revert.md). The installed-agent integration test covers three native turns, native server restart, a turn while publication is detached, and deduplicated publisher restart:
 
 OpenCode local artifact access is disabled by default. Allow a directory explicitly when its native references point to files available on this machine:

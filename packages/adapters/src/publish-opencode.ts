@@ -1,6 +1,7 @@
 import {
   assertPublisherNotFinished,
   assertNoPendingLiveMigration,
+  LIVE_JOURNAL_RETENTION,
 } from "@agentlive/publisher";
 import {
   validateRemoteArtifactPolicy,
@@ -76,7 +77,12 @@ export async function publishOpenCodeRecording(
   };
   // Checked before open, which would otherwise create a binding at a retired key.
   await assertNoPendingLiveMigration(options.publisherRoot, binding);
-  const journal = await PublisherJournal.open(options.publisherRoot, binding);
+  // Like file publishers, an OpenCode publisher runs unattended for days. Its
+  // converter state is durable per converter, so the acknowledged prefix is not
+  // needed to rebuild it and can be compacted away.
+  const journal = await PublisherJournal.open(options.publisherRoot, binding, {
+    retention: LIVE_JOURNAL_RETENTION,
+  });
   const controller = new AbortController();
   const signal = AbortSignal.any([options.signal, controller.signal]);
   let running: Promise<void> | undefined;

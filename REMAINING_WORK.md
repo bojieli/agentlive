@@ -48,7 +48,7 @@ The 2026-09-12 review probed the authorization layer route by route and found it
 
 ## 4. Publisher durability and spool lifecycle — M1/M2
 
-- Retention for OpenCode and import bindings, whose journals still grow without bound because they rebuild converter state by replaying from sequence zero.
+- Import bindings keep the whole converted journal: the completeness notice is computed by reducing the full captured prefix at the end of an import, so nothing can be pruned while one runs. That prefix is bounded by the native transcript, and resuming the import live puts the binding under normal retention, but a finished, never-resumed import still holds a copy of everything it converted.
 - Unavailable artifact work must not block unrelated capture/delivery indefinitely.
 - Explicit publisher epoch handoff and the remaining lifecycle/recovery fault matrix.
 - A single-step `publish --new-stream` (today: `finish`, then `retire`, then `publish`), and a way to start a new recording from the current native position instead of the retained beginning.
