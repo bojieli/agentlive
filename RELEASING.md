@@ -9,10 +9,24 @@ AgentLive has not been released yet. This checklist is the intended path for the
    - `node scripts/probe-browser.mjs` (rendered Chrome checks)
    - `docker build -t agentlive:production-gate-local . && node scripts/probe-container.mjs`
    - Opt-in native probes for each agent you advertise (they use real agents and may incur provider charges): see the [usage guide](docs/usage.md#live-integration-probes).
-3. Update [compatibility](docs/compatibility.md) with the native versions actually exercised.
-4. Move the `Unreleased` entries in [CHANGELOG.md](CHANGELOG.md) under the new version and date.
-5. Set the version in `packages/cli/package.json`, then run `npx --yes pnpm@12.3.4 package:lock` so `packaging/runtime-lock.json` matches, and review the lock diff.
-6. If the sample recording format changed, regenerate it with `node scripts/build-sample-recording.mjs` after `pnpm build`.
+3. Run the release acceptance rehearsal (below) and record its report.
+4. Update [compatibility](docs/compatibility.md) with the native versions actually exercised.
+5. Move the `Unreleased` entries in [CHANGELOG.md](CHANGELOG.md) under the new version and date.
+6. Set the version in `packages/cli/package.json`, then run `npx --yes pnpm@12.3.4 package:lock` so `packaging/runtime-lock.json` matches, and review the lock diff.
+7. If the sample recording format changed, regenerate it with `node scripts/build-sample-recording.mjs` after `pnpm build`.
+
+### Release acceptance rehearsal
+
+```sh
+npx --yes pnpm@12.3.4 build
+npx --yes pnpm@12.3.4 probe:release
+```
+
+`probe:release` runs `scripts/probe-release-flow.mjs`, which walks the journey the release gate names for external testers — **publish → watch → rewind → catch up → replay** — against the installed standalone tarball rather than workspace sources. It builds the package, installs it with `--ignore-scripts` into a temporary directory, starts `serve` on port 0 in an isolated state directory, publishes a live session from a synthetic `claude` executable on `PATH`, drives an interactive terminal viewer through a real pseudo-terminal (follow live, pause, step back, `[` to rewind 30 seconds, `l` to catch up through events published while paused, `q`), then finishes, exports and replays the archive offline and compares the text with what the viewer displayed. It also checks the browser viewer assets and `/s/<id>`, and rehearses the centralized shape: a scoped `viewing-grant` watched with `--viewer-file`, revocation, and anonymous access before and after the recording becomes public.
+
+It takes about 20–40 seconds, makes no model calls and incurs no provider charges, needs no installed agent, never reads the operator's `~/.agentlive`, and uses only loopback plus the npm registry for the install step. It prints one JSON summary line with a named check list, exits non-zero on the first failure, and writes `probe-results/release-flow/report.json`. Every process, temporary directory and installed copy is removed on success and on failure.
+
+Rendered browser behaviour stays with `scripts/probe-browser.mjs`; this probe only confirms the installed package serves the viewer. Two gaps it cannot close from the CLI: a recording's visibility can only be chosen at publish/import time (`--visibility`), and changing it later needs the browser viewer or the server API; and `agentlive watch` stays attached to an ended recording until the viewer quits, so the rehearsal interrupts it deliberately.
 
 ## Publish
 

@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "probe:agents": "node scripts/probe-agents.mjs",
+    "probe:release": "node scripts/probe-release-flow.mjs",
     "check": "pnpm format:check && pnpm docs:check && pnpm typecheck && pnpm test",
     "docs:check": "node scripts/check-docs-links.mjs",
     "format": "prettier --write apps packages tests scripts packaging *.json *.ts *.yaml .github/workflows/*.yml",
