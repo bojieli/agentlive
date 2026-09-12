@@ -53,6 +53,18 @@ try {
   const manifest = JSON.parse(
     await readFile(join(root, "node_modules/agentlive/package.json"), "utf8"),
   );
+  // npm renders the packaged README on its own page: relative links 404 there.
+  const packagedReadme = await readFile(
+    join(root, "node_modules/agentlive/README.md"),
+    "utf8",
+  );
+  const relativeLink = /\[[^\]]*\]\((?!https?:|mailto:|#)[^)\s]+\)/.exec(
+    packagedReadme,
+  );
+  if (relativeLink)
+    throw new Error(
+      `Packaged README keeps a repository-relative link: ${relativeLink[0]}`,
+    );
   if (
     Object.values(manifest.dependencies).some((value) =>
       value.startsWith("workspace:"),
@@ -724,6 +736,7 @@ try {
     reproducibleRebuild: true,
     installScriptsDisabled: true,
     server: true,
+    packagedReadmeLinks: true,
     browserAssets: true,
     staticPreviewAssets: true,
     interactivePreviewAssets: true,

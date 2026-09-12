@@ -102,7 +102,25 @@ await writeFile(
     2,
   ) + "\n",
 );
-await copyFile(join(root, "README.md"), join(staging, "README.md"));
+// npm renders this README on its own page, where repository-relative links and
+// images resolve nowhere. Rewrite them to absolute GitHub URLs for the tarball
+// only; the repository copy keeps working relative links.
+const repository = "https://github.com/bojieli/agentlive";
+const absoluteLinks = (markdown) =>
+  markdown.replace(
+    /(!?)\[([^\]]*)\]\((?!https?:|mailto:|#)([^)\s]+)\)/g,
+    (_match, image, text, target) => {
+      const [path, fragment] = target.split("#");
+      const base = image
+        ? `${repository}/raw/main/${path}`
+        : `${repository}/blob/main/${path}`;
+      return `${image}[${text}](${fragment ? `${base}#${fragment}` : base})`;
+    },
+  );
+await writeFile(
+  join(staging, "README.md"),
+  absoluteLinks(await readFile(join(root, "README.md"), "utf8")),
+);
 await copyFile(join(root, "LICENSE"), join(staging, "LICENSE"));
 await cp(join(root, "packages/server/dist/web"), join(staging, "web"), {
   recursive: true,
