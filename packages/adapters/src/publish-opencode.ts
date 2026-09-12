@@ -24,6 +24,7 @@ import {
   retryable,
 } from "@agentlive/client/transport";
 import { localArtifactResolver } from "./local-artifacts.js";
+import { reportWhenBound } from "./bound-recording.js";
 import { OpenCodeCapture } from "./opencode-capture.js";
 import { observeOpenCodeSession } from "./observe-opencode.js";
 import { OpenCodeFamilyCapture } from "./opencode-family.js";
@@ -73,6 +74,7 @@ export async function publishOpenCodeRecording(
   const controller = new AbortController();
   const signal = AbortSignal.any([options.signal, controller.signal]);
   let running: Promise<void> | undefined;
+  let ready: Promise<void> | undefined;
   let networkFailure: unknown;
   let capture: OpenCodeCapture | undefined;
   let family: OpenCodeFamilyCapture | undefined;
@@ -261,7 +263,11 @@ export async function publishOpenCodeRecording(
       networkFailure = error;
       controller.abort(error);
     });
-    while (!journal.identity.streamId) await delay(25, signal);
+    // Capture starts as soon as the native session is observable; the recording
+    // binds whenever the AgentLive server is first reachable.
+    ready = reportWhenBound(journal, signal, options.onReady, (error) =>
+      controller.abort(error),
+    );
     artifacts = await localArtifactResolver({
       ...(options.artifactBundles ? { artifactBundles: true } : {}),
       directory: join(journal.directory, "artifacts"),
@@ -272,7 +278,7 @@ export async function publishOpenCodeRecording(
       baseDirectory: imported?.artifactBaseDirectory ?? "/",
       secrets,
       serverOrigin: journal.identity.serverOrigin,
-      streamId: journal.identity.streamId!,
+      streamId: () => journal.identity.streamId,
       writeSecret: journal.identity.writeSecret,
       signal,
     });
@@ -287,10 +293,6 @@ export async function publishOpenCodeRecording(
         ...(options.nativePassword ? { password: options.nativePassword } : {}),
         ...(options.nativeUsername ? { username: options.nativeUsername } : {}),
       });
-    options.onReady?.({
-      streamId: journal.identity.streamId!,
-      revision: journal.identity.revision!,
-    });
     await observeOpenCodeSession({
       ...(options.finishRequested
         ? { finishRequested: options.finishRequested }
@@ -313,6 +315,7 @@ export async function publishOpenCodeRecording(
   } finally {
     controller.abort();
     await running;
+    await ready;
     try {
       try {
         await family?.close();

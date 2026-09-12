@@ -20,6 +20,7 @@ import {
   hashSchema,
 } from "@agentlive/protocol";
 import { atomicJson, syncDirectory } from "@agentlive/storage";
+import { delay } from "@agentlive/client/transport";
 import {
   ArtifactSpool,
   StreamingRedactor,
@@ -54,7 +55,12 @@ export async function localArtifactResolver(options: {
   baseDirectory: string;
   secrets: readonly string[];
   serverOrigin: string;
-  streamId: string;
+  /**
+   * The bound recording, or a getter that becomes non-null once `ensureRemote`
+   * binds one. Capture and outcome checkpoints never wait for it; only the
+   * upload of captured bytes does.
+   */
+  streamId: string | (() => string | null);
   writeSecret: string;
   signal: AbortSignal;
 }) {
@@ -83,6 +89,18 @@ export async function localArtifactResolver(options: {
     await spool.close();
     throw error;
   }
+  /** Uploads wait for the remote binding; nothing else in capture does. */
+  const upload = async (attachment: Parameters<typeof uploadArtifact>[1]) => {
+    let streamId =
+      typeof options.streamId === "function"
+        ? options.streamId()
+        : options.streamId;
+    while (!streamId) {
+      await delay(25, options.signal);
+      streamId = (options.streamId as () => string | null)();
+    }
+    await uploadArtifact(spool, attachment, { ...options, streamId });
+  };
   const captureBundle = async (
     input: {
       artifactId: string;
@@ -280,8 +298,7 @@ export async function localArtifactResolver(options: {
       }
       await atomicJson(checkpoint, { version: 1, requestHash, result });
     }
-    if ("attachment" in result)
-      await uploadArtifact(spool, result.attachment, options);
+    if ("attachment" in result) await upload(result.attachment);
     return result;
   };
   let queue: Promise<unknown> = Promise.resolve();
@@ -311,7 +328,7 @@ export async function localArtifactResolver(options: {
     const operation = queue.then(async () => {
       if (!options.artifactBundles || input.mediaType !== "text/html") {
         const attachment = await spool.captureInline(input, options.signal);
-        await uploadArtifact(spool, attachment, options);
+        await upload(attachment);
         return attachment;
       }
       const checkpoint = join(
@@ -358,7 +375,7 @@ export async function localArtifactResolver(options: {
           result: { attachment },
         });
       }
-      await uploadArtifact(spool, attachment, options);
+      await upload(attachment);
       return attachment;
     });
     const settled = operation.finally(() => {
@@ -428,7 +445,7 @@ export async function localArtifactResolver(options: {
           result: { attachment },
         });
       }
-      await uploadArtifact(spool, attachment, options);
+      await upload(attachment);
       return { attachment };
     });
     queue = operation.catch(() => {});

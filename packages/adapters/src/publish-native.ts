@@ -14,16 +14,17 @@ import { dirname, resolve, join } from "node:path";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
+  LIVE_JOURNAL_RETENTION,
   PublisherJournal,
   PublisherNetwork,
   type PublisherStatus,
 } from "@agentlive/publisher";
 import { atomicJson } from "@agentlive/storage";
 import { canonicalJson } from "@agentlive/protocol";
-import { delay } from "@agentlive/client/transport";
 import type { NativeImportOptions } from "./import-native.js";
 import { type SourceCursor, readJsonlSource } from "./jsonl.js";
 import { localArtifactResolver } from "./local-artifacts.js";
+import { reportWhenBound } from "./bound-recording.js";
 
 export interface NativePublishOptions extends NativeImportOptions {
   resumeImport?: boolean;
@@ -86,11 +87,16 @@ export async function publishNativeRecording(
   };
   // Checked before open, which would otherwise create a binding at a retired key.
   await assertNoPendingLiveMigration(options.publisherRoot, binding);
-  const journal = await PublisherJournal.open(options.publisherRoot, binding);
+  // Live file publishers run unattended for days: bound retention compacts the
+  // acknowledged prefix instead of growing one capture file without limit.
+  const journal = await PublisherJournal.open(options.publisherRoot, binding, {
+    retention: LIVE_JOURNAL_RETENTION,
+  });
   const controller = new AbortController();
   const signal = AbortSignal.any([options.signal, controller.signal]);
   let artifacts: Awaited<ReturnType<typeof localArtifactResolver>> | undefined;
   let running: Promise<void> | undefined;
+  let ready: Promise<void> | undefined;
   let networkFailure: unknown;
   try {
     await assertPublisherNotFinished(journal.directory);
@@ -182,11 +188,11 @@ export async function publishNativeRecording(
       networkFailure = error;
       controller.abort(error);
     });
-    while (!journal.identity.streamId) await delay(25, signal);
-    options.onReady?.({
-      streamId: journal.identity.streamId!,
-      revision: journal.identity.revision!,
-    });
+    // Capture starts immediately; the recording binds whenever the server is
+    // first reachable, and the placeholder identity is replaced on read.
+    ready = reportWhenBound(journal, signal, options.onReady, (error) =>
+      controller.abort(error),
+    );
     const secrets = [
       ...(options.secrets ?? []),
       options.ownerCredential,
@@ -202,7 +208,7 @@ export async function publishNativeRecording(
       baseDirectory,
       secrets,
       serverOrigin: journal.identity.serverOrigin,
-      streamId: journal.identity.streamId!,
+      streamId: () => journal.identity.streamId,
       writeSecret: journal.identity.writeSecret,
       signal,
     });
@@ -232,6 +238,7 @@ export async function publishNativeRecording(
   } finally {
     controller.abort();
     await running;
+    await ready;
     try {
       await artifacts?.close();
     } finally {

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { openRecordingHistory } from "@agentlive/client";
 import { canonicalJson, ProtocolError } from "@agentlive/protocol";
 import { PublisherJournal } from "./journal.js";
+import { advancePublisherChain, GENESIS_CHAIN } from "./journal-index.js";
 import { ArtifactSpool } from "./artifacts.js";
 import { uploadArtifact } from "./artifact-upload.js";
 
@@ -56,30 +57,53 @@ export async function recoverPublisher(options: {
         );
     };
     await checkRemote();
-    const local = journal.pending(0);
+    // Records at or before `compactedThrough` were pruned after acknowledgement.
+    // Their events survive only as the running hash chain, so the restored
+    // prefix is verified against that chain up to the compaction boundary and
+    // event-by-event from there on.
+    const compactedThrough = journal.compactedThrough;
+    const local = journal.pending(compactedThrough);
     let through = 0;
+    let chain = GENESIS_CHAIN;
+    let chainVerified = compactedThrough === 0;
+    const divergent = () =>
+      new ProtocolError(
+        "event_conflict",
+        "Restored publisher history differs from the local journal",
+      );
     try {
       for await (const stored of history.events) {
         options.signal.throwIfAborted();
         if (stored.origin.type !== "publisher") continue;
         const event = stored.origin.event;
-        const next = await local.next();
         if (
           event.producerEpoch !== identity.producerEpoch ||
           event.streamId !== identity.streamId ||
-          event.producerSeq !== through + 1 ||
-          next.done ||
-          canonicalJson(next.value) !== canonicalJson(event)
+          event.producerSeq !== through + 1
         )
-          throw new ProtocolError(
-            "event_conflict",
-            "Restored publisher history differs from the local journal",
-          );
+          throw divergent();
+        if (event.producerSeq <= compactedThrough) {
+          chain = advancePublisherChain(chain, event);
+          if (event.producerSeq === compactedThrough) {
+            if (chain !== journal.compactedChain) throw divergent();
+            chainVerified = true;
+          }
+        } else {
+          const next = await local.next();
+          if (next.done || canonicalJson(next.value) !== canonicalJson(event))
+            throw divergent();
+        }
         through = event.producerSeq;
       }
     } finally {
       await local.return(undefined);
     }
+    if (!chainVerified)
+      throw new ProtocolError(
+        "sequence_gap",
+        "Restored publisher history ends inside locally compacted history and cannot be verified",
+        { compactedThrough, restoredThroughProducerSeq: through },
+      );
     // A restored server may lack attachments referenced only by the lost suffix.
     // Re-upload immutable spool bytes before committing the new delivery cursor.
     let uploaded = 0;
@@ -111,6 +135,8 @@ export async function recoverPublisher(options: {
       revision: history.metadata.revision,
       previousAcknowledgedSeq: identity.acknowledgedSeq,
       acknowledgedSeq: through,
+      /** Leading events verified only by the compacted hash chain, not record-by-record. */
+      chainVerifiedThrough: compactedThrough,
       pendingEvents: journal.capturedThrough - through,
       uploadedAttachments: uploaded,
       lifecycle: history.metadata.lifecycle,

@@ -5,12 +5,29 @@ export {
   type InlineArtifactCapture,
   type CapturedAttachment,
 } from "./artifacts.js";
-export { PublisherJournal, publisherBindingKey } from "./journal.js";
+export {
+  PublisherJournal,
+  publisherBindingKey,
+  publisherJournalBytes,
+  LIVE_JOURNAL_RETENTION,
+} from "./journal.js";
+export {
+  UNBOUND_STREAM_ID,
+  GENESIS_CHAIN,
+  advancePublisherChain,
+  publisherEventDigest,
+} from "./journal-index.js";
 export {
   assertNoPendingLiveMigration,
   liveMigrationDirectory,
 } from "./migration-fence.js";
-export type { PublisherBinding, CaptureInput } from "./journal.js";
+export type {
+  PublisherBinding,
+  CaptureInput,
+  JournalOptions,
+  JournalRetention,
+  JournalFaultStep,
+} from "./journal.js";
 export {
   PublisherNetwork,
   type PublisherNetworkOptions,

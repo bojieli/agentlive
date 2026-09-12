@@ -80,11 +80,10 @@ export class OpenCodeCapture {
     artifacts?: OpenCodeArtifactResolvers,
     child?: { nativeSessionId: string; parentNativeSessionId: string },
   ) {
-    if (
-      journal.identity.nativeAgent !== "opencode" ||
-      !journal.identity.streamId
-    )
-      throw new Error("OpenCode capture requires a bound OpenCode publisher");
+    // The remote recording may not exist yet: capture is journaled with a
+    // placeholder stream identity and bound when the server first answers.
+    if (journal.identity.nativeAgent !== "opencode")
+      throw new Error("OpenCode capture requires an OpenCode publisher");
     if (child) {
       idSchema.parse(child.nativeSessionId);
       idSchema.parse(child.parentNativeSessionId);

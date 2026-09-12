@@ -343,6 +343,13 @@ export class PublisherNetwork {
                       "Captured event exceeds publish batch limit",
                     );
                   if (batch.length === 100 || bytes + size > 256 * 1024) break;
+                  // Events journaled before the binding existed are bound on
+                  // read; nothing may reach the server with a placeholder.
+                  if (event.streamId !== identity.streamId)
+                    throw new ProtocolError(
+                      "invalid_request",
+                      "Captured event is not bound to the published recording",
+                    );
                   batch.push(event);
                   bytes += size;
                 }
