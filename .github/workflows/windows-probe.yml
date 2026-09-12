@@ -1,0 +1,49 @@
+# Manual evidence run for the Windows support statement (docs/compatibility.md).
+# Windows is not a supported platform; this job is never required to pass and is
+# not part of CI. Trigger it from the Actions tab or with:
+#   gh workflow run windows-probe.yml
+name: Windows probe
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .node-version
+      - name: Install
+        id: install
+        continue-on-error: true
+        run: npx --yes pnpm@12.3.4 install --frozen-lockfile
+      - name: Build
+        id: build
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        run: npx --yes pnpm@12.3.4 build
+      - name: Kernel file lock (fs-native-extensions)
+        id: lock
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: npx vitest run tests/recovery/process.test.ts tests/recovery/log.test.ts
+      - name: Offline test suite
+        id: suite
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: npx vitest run --maxWorkers=1
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "| Step | Outcome |"
+            echo "| --- | --- |"
+            echo "| install | ${{ steps.install.outcome }} |"
+            echo "| build | ${{ steps.build.outcome }} |"
+            echo "| locks/process death | ${{ steps.lock.outcome }} |"
+            echo "| offline suite | ${{ steps.suite.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
