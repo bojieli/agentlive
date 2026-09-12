@@ -31,6 +31,21 @@ Archive imports and exports stage their bytes under `<state-dir>/server/staging`
 
 The server also reclaims superseded snapshot content automatically: a pass keeps the current head, every unexpired lease and every pinned read, prunes the catalog to exactly those, and sweeps the rest. It is scheduled on measured growth (64 MiB since that recording's last pass) on the same single worker as snapshot builds, and `serve --no-snapshot-collection` disables it. Older checkpoints stop being selectable once a pass runs, so a viewer that must keep reading one exact checkpoint holds a lease on it; the browser and terminal viewers already do. See [snapshots](protocol/SNAPSHOTS.md#automatic-collection-of-superseded-content).
 
+An event the reducer can never apply — an append to a message or tool that never
+started, a second start for one id — is accepted by the server (each such event is
+valid protocol on its own) and only fails when the snapshot builder reaches it. That
+failure would repeat on every retry, so the builder names the exact recorded event
+instead, and the scheduler stops building that recording rather than looping. It is
+reported three ways: `agentlive_snapshot_blocked_recordings` counts the cached
+recordings in that state, the owner-authenticated
+`GET /api/v1/streams/<id>/publisher-state` returns `snapshotBlocked` with the event's
+sequence number and the reducer's code, and the scheduler's status carries the same
+counts. Both surfaces are content-free. Live delivery, raw history download and export
+are unaffected; paged playback stays at the last snapshot that built, so the recording
+is readable but stops advancing in the paged viewers. The fix is on the publisher: the
+event stream cannot be repaired in place, so republish the session under a new
+recording.
+
 `serve --metrics` enables `GET /metrics` in the Prometheus text format. It is disabled by default and never anonymous: a scrape must present the owner credential, or the value of `AGENTLIVE_METRICS_TOKEN` if that variable is set when the server starts. The response contains only aggregates — uptime, process memory, recording counts, cached sessions, WebSocket connections by role, in-flight transfers/imports/exports, stored and reserved bytes with the configured limits, free-space state, account count and limits, quota rejections by quota and scope, snapshot scheduler state, backup and write-barrier state, and request counts by method, route template and status class. Labels come from fixed sets, so no recording ID, title, account ID, credential or event content appears. A regression test drives a server with a known secret and title and asserts neither reaches stdout, stderr or `/metrics`.
 
 ## Docker deployment

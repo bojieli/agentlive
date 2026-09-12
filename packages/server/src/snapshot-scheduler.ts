@@ -1,3 +1,4 @@
+import { SnapshotReductionError } from "./snapshots.js";
 import type { RecordingSession } from "./session.js";
 
 export interface SnapshotScheduleOptions {
@@ -17,7 +18,12 @@ type Session = Pick<
   RecordingSession,
   "info" | "selectSnapshot" | "buildSnapshot"
 > &
-  Partial<Pick<RecordingSession, "collectSnapshots" | "snapshotStoredBytes">>;
+  Partial<
+    Pick<
+      RecordingSession,
+      "collectSnapshots" | "snapshotStoredBytes" | "reportSnapshotBlocked"
+    >
+  >;
 interface Job {
   session: Session;
   sequence: number;
@@ -27,6 +33,8 @@ interface Job {
   /** Encoded snapshot bytes measured after this recording's last completed pass. */
   collectedBytes: number;
   collectedAt: number;
+  /** Set once an unreducible event stopped builds for this recording for good. */
+  blocked?: { serverSeq: number; code: string };
   stop: AbortController;
 }
 /** One automatic build or collection at a time, with one coalesced job per cached session. */
@@ -44,6 +52,7 @@ export class SnapshotScheduler {
     { job: Job; task: Promise<void>; collect: boolean } | undefined;
   private closing = false;
   private failures = 0;
+  private blocked = 0;
   private collections = 0;
   private collectionFailures = 0;
   private reclaimedBytes = 0;
@@ -74,6 +83,7 @@ export class SnapshotScheduler {
       registered: this.jobs.size,
       active: this.active && !this.active.collect ? 1 : 0,
       failures: this.failures,
+      blocked: this.blocked,
       collecting: this.active?.collect ? 1 : 0,
       collections: this.collections,
       collectionFailures: this.collectionFailures,
@@ -120,6 +130,7 @@ export class SnapshotScheduler {
       const info = session.info;
       if (now < job.retryAt) continue;
       const build =
+        job.blocked === undefined &&
         info.serverSeq > job.sequence &&
         (info.serverSeq - job.sequence >= this.batch ||
           info.lifecycle === "ended" ||
@@ -158,7 +169,7 @@ export class SnapshotScheduler {
           job.checkedAt = Date.now();
           job.retryAt = 0;
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (job.stop.signal.aborted) return;
           if (collect) {
             // A failed or cancelled pass deleted nothing; retry after the interval.
@@ -167,6 +178,19 @@ export class SnapshotScheduler {
             return;
           }
           this.failures++;
+          if (error instanceof SnapshotReductionError) {
+            // Retrying reproduces this exactly. Stop building for this recording and
+            // say which event stopped it, instead of looping until someone reads a
+            // counter.
+            job.blocked = { serverSeq: error.serverSeq, code: error.code };
+            this.blocked++;
+            job.session.reportSnapshotBlocked?.({
+              serverSeq: error.serverSeq,
+              code: error.code,
+              reason: error.message,
+            });
+            return;
+          }
           if (deadline.aborted)
             job.batch = Math.max(1, Math.floor(job.batch / 2));
           job.retryAt = Date.now() + this.interval;
@@ -180,9 +204,16 @@ export class SnapshotScheduler {
     }
     this.schedule();
   }
+  /** Which recordings stopped building, and at which event. Content-free. */
+  get blockedJobs() {
+    return [...this.jobs.values()]
+      .filter((job) => job.blocked !== undefined)
+      .map((job) => ({ ...job.blocked! }));
+  }
   async remove(session: Session) {
     const job = this.jobs.get(session);
     if (!job) return;
+    if (job.blocked !== undefined) this.blocked--;
     this.jobs.delete(session);
     job.stop.abort(new Error("Snapshot session removed"));
     if (this.active?.job === job) await this.active.task;

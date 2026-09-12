@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { SnapshotScheduler } from "../../packages/server/src/snapshot-scheduler.js";
+import { SnapshotReductionError } from "../../packages/server/src/snapshots.js";
 import type { RecordingSession } from "../../packages/server/src/session.js";
 import type { SnapshotDescriptor } from "../../packages/protocol/src/index.js";
 const descriptor = (serverSeq: number): SnapshotDescriptor => ({
@@ -149,6 +150,7 @@ it("flushes ended tails promptly and cancels active work on shutdown", async () 
     registered: 0,
     active: 0,
     failures: 0,
+    blocked: 0,
     collecting: 0,
     collections: 0,
     collectionFailures: 0,
@@ -305,6 +307,57 @@ it("never collects when the serve option disables it", async () => {
     await vi.advanceTimersByTimeAsync(500);
     expect(disabled.collectSnapshots).not.toHaveBeenCalled();
     expect(scheduler.status.collections).toBe(0);
+  } finally {
+    await scheduler.close();
+  }
+});
+
+it("stops building a recording whose event can never be reduced, and names it", async () => {
+  vi.useFakeTimers();
+  const reported: unknown[] = [];
+  const wedged = session(9, async () => {
+    throw new SnapshotReductionError(
+      4,
+      "sequence_gap",
+      "Missing lifecycle start for m1",
+    );
+  });
+  const healthy = session(4);
+  const scheduler = new SnapshotScheduler({
+    batchEvents: 3,
+    pollMs: 10,
+    intervalMs: 100,
+  });
+  try {
+    scheduler.add({
+      ...wedged,
+      reportSnapshotBlocked: (failure) => reported.push(failure),
+    } as unknown as RecordingSession);
+    scheduler.add(healthy);
+    await vi.advanceTimersByTimeAsync(2000);
+    // One attempt, then no more: retrying reproduces the same event exactly.
+    expect(wedged.buildSnapshot).toHaveBeenCalledTimes(1);
+    expect(scheduler.status.blocked).toBe(1);
+    expect(scheduler.status.failures).toBe(1);
+    expect(scheduler.blockedJobs).toEqual([
+      { serverSeq: 4, code: "sequence_gap" },
+    ]);
+    expect(reported).toEqual([
+      {
+        serverSeq: 4,
+        code: "sequence_gap",
+        reason:
+          "Recording event 4 cannot be reduced: Missing lifecycle start for m1",
+      },
+    ]);
+    // A blocked recording never starves the others.
+    expect(
+      healthy.buildSnapshot.mock.calls.map(([through]) => through),
+    ).toEqual([3, 4]);
+    // Later receipt does not restart the loop either.
+    wedged.info.serverSeq = 20;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(wedged.buildSnapshot).toHaveBeenCalledTimes(1);
   } finally {
     await scheduler.close();
   }

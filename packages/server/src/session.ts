@@ -291,6 +291,23 @@ export class RecordingSession {
   get boundary(): LogBoundary {
     return this.log.boundary;
   }
+  /**
+   * Set when automatic snapshot building stopped because one recorded event can
+   * never be reduced. Live delivery and raw history are unaffected; paged playback
+   * stays at the last snapshot the builder completed. Owner-visible, content-free.
+   */
+  private blockedSnapshot:
+    { serverSeq: number; code: string; reason: string } | undefined;
+  reportSnapshotBlocked(failure: {
+    serverSeq: number;
+    code: string;
+    reason: string;
+  }): void {
+    this.blockedSnapshot ??= { ...failure };
+  }
+  get snapshotBlocked() {
+    return this.blockedSnapshot ? { ...this.blockedSnapshot } : null;
+  }
   /** Quota-counted durable bytes: committed event log plus installed attachments. */
   get storedBytes(): number {
     return this.log.boundary.byteOffset + this.blobs.usage.storedBytes;

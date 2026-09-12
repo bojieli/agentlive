@@ -1280,7 +1280,16 @@ export async function startServer(options: ServerOptions) {
     const session = c.get("session");
     session.authorize(token(c.req.header("authorization")));
     const { revision, publisherId, producerEpoch, serverSeq } = session.info;
-    return c.json({ revision, publisherId, producerEpoch, serverSeq });
+    // Content-free: an event sequence and a reducer code. A publisher that emitted an
+    // unreducible event learns it here instead of from a stalled viewer.
+    const snapshotBlocked = session.snapshotBlocked;
+    return c.json({
+      revision,
+      publisherId,
+      producerEpoch,
+      serverSeq,
+      ...(snapshotBlocked ? { snapshotBlocked } : {}),
+    });
   });
   app.get("/api/v1/streams/:id", async (c) => {
     const session = c.get("session");

@@ -29,6 +29,28 @@ import {
   type SnapshotBinding,
 } from "@agentlive/playback";
 
+/**
+ * An event the reducer can never apply — an append before its object started, a
+ * second start for one id, a gap the history cannot close. Retrying reproduces it
+ * exactly, so the builder reports which event is unreducible instead of looping.
+ */
+export class SnapshotReductionError extends Error {
+  constructor(
+    readonly serverSeq: number,
+    readonly code: string,
+    readonly reason: string,
+  ) {
+    super(`Recording event ${serverSeq} cannot be reduced: ${reason}`);
+    this.name = "SnapshotReductionError";
+  }
+}
+/** Reducer codes raised by event content rather than by storage or cancellation. */
+const unreducible = new Set(["event_conflict", "sequence_gap"]);
+const contentFailure = (error: unknown) =>
+  error instanceof ProtocolError && unreducible.has(error.code)
+    ? error
+    : undefined;
+
 /** Content-free result of one automatic collection pass. */
 export interface SnapshotCollection {
   /** Paired roots in the frozen retained union: head, live leases and in-process pins. */
@@ -308,23 +330,35 @@ export class RecordingSnapshots {
         bytes = 2,
         received = state.appliedSeq;
       const flush = async () => {
-        state = await reducer.applyBatch(
-          state,
-          batch,
-          combined,
-          async (reduced, group) => {
-            rows =
-              group.length > 1
-                ? activityIndex.advanceAppends(rows, group, reduced)
-                : await activityIndex.apply(
-                    rows,
-                    group[0]!,
-                    reduced,
-                    reducer,
-                    combined,
-                  );
-          },
-        );
+        try {
+          state = await reducer.applyBatch(
+            state,
+            batch,
+            combined,
+            async (reduced, group) => {
+              rows =
+                group.length > 1
+                  ? activityIndex.advanceAppends(rows, group, reduced)
+                  : await activityIndex.apply(
+                      rows,
+                      group[0]!,
+                      reduced,
+                      reducer,
+                      combined,
+                    );
+            },
+          );
+        } catch (error) {
+          const failure = contentFailure(error);
+          if (!failure) throw error;
+          throw new SnapshotReductionError(
+            typeof failure.details.serverSeq === "number"
+              ? failure.details.serverSeq
+              : batch[0]!.serverSeq,
+            failure.code,
+            failure.message,
+          );
+        }
         batch = [];
         bytes = 2;
       };

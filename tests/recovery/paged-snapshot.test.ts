@@ -2,7 +2,10 @@ import { it, expect } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { RecordingSnapshots } from "../../packages/server/src/snapshots.js";
+import {
+  RecordingSnapshots,
+  SnapshotReductionError,
+} from "../../packages/server/src/snapshots.js";
 import { TextStore, atomicJson } from "../../packages/storage/src/index.js";
 import {
   createSnapshot,
@@ -308,6 +311,48 @@ it("serves published metadata and blobs while another snapshot is being built", 
     clearTimeout(timer);
     release();
     await building;
+    await snapshots.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it("names the exact event a build can never reduce, inside a coalesced batch", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "agentlive-unreducible-"));
+  const snapshots = new RecordingSnapshots(directory, binding);
+  try {
+    // An append to an object that never started: valid protocol, unreducible state.
+    const orphan: StoredEvent = {
+      protocolVersion: 1,
+      serverSeq: 4,
+      timelineMs: 40,
+      receivedAt: "2026-09-09T00:00:00Z",
+      origin: { type: "server", operationId: "op-orphan" },
+      content: {
+        kind: "message.text.append",
+        payload: { messageId: "absent", text: "orphan" },
+      },
+    } as StoredEvent;
+    const failure = await snapshots
+      .build(4, async function* () {
+        yield* events;
+        yield orphan;
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(failure).toBeInstanceOf(SnapshotReductionError);
+    expect(failure).toMatchObject({ serverSeq: 4, code: "sequence_gap" });
+    expect((failure as Error).message).toContain("Missing lifecycle start");
+    // The prefix that does reduce is still available to build and serve.
+    expect(
+      (
+        await snapshots.build(3, async function* () {
+          yield* events;
+        })
+      ).serverSeq,
+    ).toBe(3);
+  } finally {
     await snapshots.close();
     await rm(directory, { recursive: true, force: true });
   }

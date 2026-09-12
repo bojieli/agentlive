@@ -541,6 +541,42 @@ export class PagedReducer {
       if (key !== undefined)
         while (end < events.length && target(events[end]!) === key) end++;
       const group = events.slice(offset, end);
+      try {
+        state = await this.reduceGroup(state, group, signal, reduced);
+      } catch (error) {
+        // Say which recorded event the reduction stopped at. A caller that cannot
+        // change the event stream needs that to report a permanent failure rather
+        // than retry the whole batch forever.
+        if (
+          error instanceof ProtocolError &&
+          error.details.serverSeq === undefined
+        )
+          throw new ProtocolError(error.code, error.message, {
+            ...error.details,
+            serverSeq: first.serverSeq,
+          });
+        throw error;
+      }
+      signal?.throwIfAborted();
+      offset = end;
+    }
+    return state;
+  }
+  /** One coalesced transition: a single event, or adjacent appends to one field. */
+  private async reduceGroup(
+    input: PagedRecordingState,
+    group: readonly StoredEvent[],
+    signal: AbortSignal | undefined,
+    reduced:
+      | ((
+          state: PagedRecordingState,
+          events: readonly StoredEvent[],
+        ) => Promise<void>)
+      | undefined,
+  ): Promise<PagedRecordingState> {
+    let state = input;
+    {
+      const first = group[0]!;
       if (group.length === 1) state = await this.apply(state, first, signal);
       else {
         const last = group[group.length - 1]!;
@@ -568,8 +604,6 @@ export class PagedReducer {
         );
       }
       await reduced?.(copy(state), group);
-      signal?.throwIfAborted();
-      offset = end;
     }
     return state;
   }
