@@ -38,6 +38,8 @@ async function runWatchRecording(options: {
   onPresented?: (serverSeq: number) => void;
   onPositioned?: (position: { serverSeq: number; timelineMs: number }) => void;
   interactive?: boolean;
+  /** Stay attached to an ended recording, waiting for a possible reopen. */
+  follow?: boolean;
   speed?: number;
   idleCapMs?: number | null;
   fromMs?: number;
@@ -107,6 +109,13 @@ async function runWatchRecording(options: {
   });
   let failure: unknown;
   let failed = false;
+  // An ended recording finishes the watch once it is fully presented. Interactive
+  // viewers stay open for inspection, and --follow waits for a possible reopen.
+  const finishAtEnd = !options.follow && !options.interactive;
+  // Highest server boundary the subscriber has confirmed complete; a later reopen
+  // extends the recording beyond it and is exactly what --follow waits for.
+  let confirmed = -1;
+  let liveWake = new AbortController();
   const present = async (cache: SubscriberCache) => {
     snapshots = new RecordingSnapshotClient({
       serverOrigin: origin,
@@ -170,6 +179,12 @@ async function runWatchRecording(options: {
       await showPosition(saved, positionedAt);
     let anchored = saved > 0 || positionedAt !== undefined;
     if (anchored) presentation?.reset(positionedAt ?? state.timelineMs);
+    /** The whole recording is shown and the server confirmed nothing follows it. */
+    const presentedEnd = () =>
+      finishAtEnd &&
+      state.lifecycle === "ended" &&
+      state.appliedSeq === cache.cursor.serverSeq &&
+      confirmed >= cache.cursor.serverSeq;
     for (;;) {
       signal.throwIfAborted();
       if (pendingSeek) {
@@ -237,7 +252,20 @@ async function runWatchRecording(options: {
         if (rememberPosition)
           await cache.savePresentation(state.appliedSeq, viewedTime);
         if (pendingSeek) continue;
-        await cache.waitForEvents(state.appliedSeq, navigation);
+        if (presentedEnd()) {
+          process.stderr.write(
+            "Recording ended; watch finished. Use --follow to stay attached for a reopen.\n",
+          );
+          return;
+        }
+        // Catching up to an ended boundary completes the watch without a new event.
+        const parked = AbortSignal.any([navigation, liveWake.signal]);
+        try {
+          await cache.waitForEvents(state.appliedSeq, parked);
+        } catch (error) {
+          if (navigation.aborted || error !== parked.reason) throw error;
+          liveWake = new AbortController();
+        }
       } catch (error) {
         if (signal.aborted || !pendingSeek || error !== navigation.reason)
           throw error;
@@ -250,7 +278,15 @@ async function runWatchRecording(options: {
       serverOrigin: origin,
       cursor: cache.cursor,
       ...(options.credential ? { credential: options.credential } : {}),
-      ...(options.onStatus ? { onStatus: options.onStatus } : {}),
+      onStatus: (status: SubscriberStatus) => {
+        if (status === "live") {
+          confirmed = Math.max(confirmed, cache.cursor.serverSeq);
+          // Only a viewer already parked at an ended boundary can finish on this.
+          if (finishAtEnd && state.lifecycle === "ended")
+            liveWake.abort(new Error("Receipt reached the server boundary"));
+        }
+        options.onStatus?.(status);
+      },
       commit: async (events, cursor) => {
         await cache.commit(events, cursor);
         options.onReceipt?.(cursor.serverSeq);
@@ -274,6 +310,16 @@ async function runWatchRecording(options: {
   const terminalKeys = new TerminalKeys();
   const onInput = (input: Buffer) => {
     for (const key of terminalKeys.feed(input.toString("utf8"))) {
+      if (!options.interactive) {
+        // Without playback controls only quitting is bound, and raw mode must
+        // not swallow the interrupt the terminal would otherwise have sent.
+        if (key === "q") stop.abort();
+        else if (key === "") {
+          restoreTerminal();
+          process.kill(process.pid, "SIGINT");
+        }
+        continue;
+      }
       if (
         ![
           "q",
@@ -335,10 +381,12 @@ async function runWatchRecording(options: {
   signal.addEventListener("abort", restoreTerminal, { once: true });
   try {
     signal.throwIfAborted();
-    if (options.interactive) {
-      process.stderr.write(
-        "Watch controls: space pause/resume, ./Right Arrow next event, ,/Left Arrow previous event, +/- speed, [/] seek 30s, 0 beginning, l live catch-up, q quit (receipt continues independently)\n",
-      );
+    // A terminal always accepts q; only --interactive binds the playback controls.
+    if (options.interactive || process.stdin.isTTY) {
+      if (options.interactive)
+        process.stderr.write(
+          "Watch controls: space pause/resume, ./Right Arrow next event, ,/Left Arrow previous event, +/- speed, [/] seek 30s, 0 beginning, l live catch-up, q quit (receipt continues independently)\n",
+        );
       terminalInstalled = true;
       process.stdin.setRawMode(true);
       process.stdin.on("data", onInput);
@@ -402,7 +450,11 @@ async function runWatchRecording(options: {
     }
     const client = createClient(cache);
     await Promise.all([
-      run(() => present(cache)),
+      run(async () => {
+        await present(cache);
+        // Presentation reached the ended boundary; end receipt exactly as quit does.
+        stop.abort();
+      }),
       run(() => client.run(signal)),
     ]);
     if (failed) throw failure;

@@ -471,6 +471,9 @@ setTimeout(() => {
       join(root, "viewer-state"),
       "--viewer-file",
       grantFile,
+      // --follow keeps the viewer attached after the end, so the interrupt
+      // below tests the signal path; the default finish is checked after it.
+      "--follow",
     ],
     { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] },
   );
@@ -489,7 +492,7 @@ setTimeout(() => {
       throw new Error("Scoped viewer echoed its credential");
     if (markers(grantedOut.text).join(",") !== replayed.join(","))
       throw new Error("Scoped viewer text differs from the archive replay");
-    // Watch stays attached to an ended recording until the viewer quits.
+    // With --follow the viewer waits for a possible reopen until interrupted.
     const grantedExit = await stopChild(granted, "SIGINT");
     if (grantedExit.code !== 130)
       throw new Error(
@@ -499,6 +502,24 @@ setTimeout(() => {
     await stopChild(granted);
   }
   record("centralized: a scoped viewing grant watches the private recording");
+  // The default (no --follow) must finish by itself: a hung viewer on an ended
+  // recording was the first-impression bug this rehearsal was written to catch.
+  const selfFinished = await cliRun([
+    "watch",
+    "--stream",
+    streamId,
+    "--server",
+    ready.url,
+    "--state-dir",
+    join(root, "viewer-state"),
+    "--viewer-file",
+    grantFile,
+  ]);
+  if (markers(selfFinished.stdout).join(",") !== replayed.join(","))
+    throw new Error(
+      "Self-finishing watch text differs from the archive replay",
+    );
+  record("watch: an ended recording finishes without --follow");
 
   if (
     !JSON.parse(

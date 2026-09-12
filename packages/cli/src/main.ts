@@ -145,7 +145,8 @@ Commands:
   agentlive publish --agent claude --source <main-transcript.jsonl> --include-children
   agentlive publish --agent codex --native-session <id> --source-root <rollouts-directory> --include-children [--launch]
   agentlive publish --agent opencode --native-server <origin> --native-session <id> [--source <original-export> --resume-import]
-  agentlive watch --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--idle-cap-ms <milliseconds>] [--interactive] [--resume-view | --restart-view] [--from-ms <position>] [--cancellation-timeout-ms 30000]
+  agentlive watch --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--idle-cap-ms <milliseconds>] [--interactive] [--follow] [--resume-view | --restart-view] [--from-ms <position>] [--cancellation-timeout-ms 30000]
+                  Watch exits when an ended recording is fully shown; --follow keeps waiting for a reopen.
   agentlive replay --stream <recording-id> [--server <origin>] [--anonymous] [--speed <factor>] [--idle-cap-ms <milliseconds>] [--interactive] [--from-ms <position>]
   agentlive replay --source <recording.agentlive> [--speed <factor>] [--interactive] [--from-ms <position>]
 
@@ -346,6 +347,7 @@ async function main() {
       "idle-cap-ms": { type: "string" },
       "from-ms": { type: "string" },
       interactive: { type: "boolean" },
+      follow: { type: "boolean" },
       "resume-view": { type: "boolean" },
       "restart-view": { type: "boolean" },
       "restart-rotation": { type: "boolean" },
@@ -620,6 +622,7 @@ async function main() {
                                   : [
                                       "speed",
                                       "interactive",
+                                      "follow",
                                       "from-ms",
                                       "resume-view",
                                       "restart-view",
@@ -1793,6 +1796,7 @@ async function main() {
       ...(idleCapMs === undefined ? {} : { idleCapMs }),
       ...(fromMs === undefined ? {} : { fromMs }),
       ...(values.interactive ? { interactive: true } : {}),
+      ...(values.follow ? { follow: true } : {}),
       ...(values["resume-view"] ? { resumeView: true } : {}),
       ...(values["restart-view"] ? { restartView: true } : {}),
       serverOrigin: values.server ?? "http://127.0.0.1:7331",
