@@ -28,6 +28,8 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 
 ### Fixed
 
+- Archive imports and exports stage inside the server directory instead of the system temporary directory, and an upload is bounded by the owner's remaining storage quota, so staging bytes can no longer escape every limit.
+
 - `agentlive watch` finishes on its own once an ended recording has been shown, instead of waiting forever; `--follow` keeps waiting for a reopen, and `q` now quits a non-interactive watch in a terminal.
 
 - Disabling a hosted account now suspends its recordings in both directions: publishing is refused, publisher sockets close, and reads and the public listing exclude them until the account is enabled again (the operator credential can still review them).

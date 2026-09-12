@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
@@ -583,4 +583,38 @@ it("admits before the first successful sample and subtracts pending reservations
     availableBytes: 2000,
     probeFailed: false,
   });
+});
+
+it("stages transfers inside the server directory and bounds them by remaining quota", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-staging-"));
+  const directory = join(root, "server");
+  const server = await startServer({
+    directory,
+    ownerSecret,
+    port: 0,
+    storage: { maxStoredBytes: 256 * 1024 },
+  });
+  try {
+    // Staging lives on the accounted filesystem, and startup clears it.
+    expect((await stat(join(directory, "staging"))).isDirectory()).toBe(true);
+
+    // An archive larger than the server could ever store is refused while
+    // streaming, rather than staged in full somewhere nothing measures.
+    const oversized = Buffer.alloc(512 * 1024, 7);
+    const response = await fetch(`${server.url}/api/v1/imports`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${ownerSecret}` },
+      body: oversized,
+    });
+    const body = await response.json();
+    expect({ status: response.status, body }).toMatchObject({
+      status: 403,
+      body: { error: { code: "quota_exceeded" } },
+    });
+    // Nothing is left behind in staging.
+    expect(await readdir(join(directory, "staging"))).toEqual([]);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

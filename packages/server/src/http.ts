@@ -28,9 +28,8 @@ import {
 import type { WSContext } from "hono/ws";
 import { WebSocketServer, type WebSocket } from "ws";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { readFile, mkdtemp, rm } from "node:fs/promises";
+import { readFile, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { createReadStream, createWriteStream } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   writeArchive,
@@ -669,6 +668,13 @@ export async function startServer(options: ServerOptions) {
     return c.redirect(`/?stream=${encodeURIComponent(parsed.data)}`, 302);
   });
   app.get("/healthz", (c) => c.json({ ok: true }));
+  // Transfers stage inside the server directory rather than the system
+  // temporary directory: the bytes then share the filesystem the free-space
+  // floor measures and the operator monitors, and a crash cannot strand them
+  // somewhere nothing cleans up. Cleared once at startup.
+  const staging = join(options.directory, "staging");
+  await rm(staging, { recursive: true, force: true });
+  await mkdir(staging, { recursive: true, mode: 0o700 });
   const checkStorage = storageReadiness(options.directory);
   app.get("/readyz", async (c) => {
     // Below the configured free-space floor the server refuses growth, so it
@@ -712,17 +718,23 @@ export async function startServer(options: ServerOptions) {
     activeImports++;
     let directory: string | undefined;
     try {
-      directory = await mkdtemp(join(tmpdir(), "agentlive-upload-"));
+      directory = await mkdtemp(join(staging, "upload-"));
       const path = join(directory, "recording.agentlive");
       let bytes = 0;
+      // Never stage more than this owner could ever be admitted for: an
+      // over-quota account cannot spend the archive ceiling in staging bytes.
+      const admissible = store.quotas.admissibleBytes(ownerId);
+      const ceiling = Math.min(9 * 1024 ** 3, admissible ?? Number.MAX_VALUE);
       const bounded = new Transform({
         transform(chunk, _encoding, done) {
           bytes += chunk.length;
           done(
-            bytes > 9 * 1024 ** 3
+            bytes > ceiling
               ? new ProtocolError(
-                  "invalid_request",
-                  "Archive upload exceeds limit",
+                  bytes > 9 * 1024 ** 3 ? "invalid_request" : "quota_exceeded",
+                  bytes > 9 * 1024 ** 3
+                    ? "Archive upload exceeds limit"
+                    : "Archive upload exceeds the remaining storage quota",
                 )
               : null,
             chunk,
@@ -788,7 +800,7 @@ export async function startServer(options: ServerOptions) {
       if (directory) await rm(directory, { recursive: true, force: true });
     };
     try {
-      directory = await mkdtemp(join(tmpdir(), "agentlive-download-"));
+      directory = await mkdtemp(join(staging, "download-"));
       const info = await session.exportBoundary();
       const metadata: ArchiveMetadata = {
         format: "agentlive.recording",

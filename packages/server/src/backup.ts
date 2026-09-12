@@ -128,6 +128,8 @@ class BackupCopier {
         throw new Error("Backup contains too many entries");
       if (entry.name.endsWith(".lock")) continue;
       const path = options.path ? `${options.path}/${entry.name}` : entry.name;
+      // In-flight transfer staging is transient and belongs to no recording.
+      if (path === "staging") continue;
       if (options.skip?.(path)) continue;
       const input = join(from, entry.name),
         target = join(to, entry.name);

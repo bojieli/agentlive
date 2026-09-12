@@ -41,7 +41,6 @@ The user-directed order remains: finish missing product features, then performan
 
 From the 2026-09-12 review (the authorization layer itself was probed route by route and found sound):
 
-- Archive import and export stage up to ~9 GiB per in-flight request in the system temporary directory, outside every storage limit and the free-space floor, by any authenticated account. Stage under the accounted data directory or charge the staging size.
 - Redaction is exact-substring only, so case variants and base64/URL/JSON-escaped copies of a secret survive by design; restate this wherever redaction is promised.
 
 ## 4. Publisher durability and spool lifecycle — M1/M2

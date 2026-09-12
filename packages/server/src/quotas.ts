@@ -291,6 +291,22 @@ export class AccountQuotas {
     this.total.reservedBytes += bytes;
     if (account) account.reservedBytes += bytes;
   }
+  /**
+   * Largest durable growth this owner could still be admitted for, or undefined
+   * when nothing bounds it. Advisory: it bounds how many bytes are worth
+   * staging, while admission stays authoritative and may still refuse.
+   */
+  admissibleBytes(ownerId: string): number | undefined {
+    const account = this.accountFor(ownerId);
+    const limits: number[] = [];
+    const perAccount = this.limits.maxStoredBytesPerAccount;
+    if (account && perAccount !== undefined)
+      limits.push(perAccount - account.storedBytes - account.reservedBytes);
+    const global = this.storageLimits.maxStoredBytes;
+    if (global !== undefined)
+      limits.push(global - this.total.storedBytes - this.total.reservedBytes);
+    return limits.length ? Math.max(0, Math.min(...limits)) : undefined;
+  }
   /** Advisory check before accepting a large upload body; the store rechecks authoritatively. */
   precheckRecording(ownerId: string) {
     const account = this.accountFor(ownerId);
