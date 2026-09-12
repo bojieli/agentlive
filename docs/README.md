@@ -5,6 +5,7 @@
 - [Usage guide](usage.md): every command, publishing, managed launch, family capture, viewers and limits
 - [Compatibility](compatibility.md): what each agent adapter captures and known gaps
 - [Limits and measured performance](limits.md): enforced limits and what has actually been measured
+- [Testing guide](testing.md): the twenty-minute journey to try, and what to report back
 - [Sample recording](sample/README.md): replay a synthetic session without a server or agent
 - [Recording archives](recording-archives.md): the portable `.agentlive` format
 - [Remote artifacts](remote-artifacts.md) and [artifact bundles](artifact-bundles.md)

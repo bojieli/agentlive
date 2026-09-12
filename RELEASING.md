@@ -1,6 +1,6 @@
 # Releasing AgentLive
 
-AgentLive has not been released yet. This checklist is the intended path for the first and later releases. The exit gates in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) decide *whether* a release should be called production-ready; this document covers *how* to cut one.
+AgentLive has not been released yet. This checklist is the intended path for the first and later releases. The exit gates in [IMPLEMENTATION_STATUS.md](IMPLEMENTATION_STATUS.md) decide _whether_ a release should be called production-ready; this document covers _how_ to cut one.
 
 ## Before tagging
 
@@ -27,6 +27,10 @@ npx --yes pnpm@12.3.4 probe:release
 It takes about 20–40 seconds, makes no model calls and incurs no provider charges, needs no installed agent, never reads the operator's `~/.agentlive`, and uses only loopback plus the npm registry for the install step. It prints one JSON summary line with a named check list, exits non-zero on the first failure, and writes `probe-results/release-flow/report.json`. Every process, temporary directory and installed copy is removed on success and on failure.
 
 Rendered browser behaviour stays with `scripts/probe-browser.mjs`; this probe only confirms the installed package serves the viewer. Two gaps it cannot close from the CLI: a recording's visibility can only be chosen at publish/import time (`--visibility`), and changing it later needs the browser viewer or the server API; and `agentlive watch` stays attached to an ended recording until the viewer quits, so the rehearsal interrupts it deliberately.
+
+## External testing
+
+Before a first public release, have testers who did not build this run the [testing guide](docs/testing.md) end to end on their own machines and agents, and collect what they report. The release gate asks for the publish → watch → rewind → catch up → replay journey completed in both deployment shapes; `pnpm probe:release` rehearses it automatically, but only people find the parts that are merely confusing.
 
 ## Publish
 

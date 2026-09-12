@@ -79,20 +79,21 @@ agentlive replay --source session.agentlive --interactive
 
 ## Documentation
 
-| Topic | Document |
-| --- | --- |
-| Commands, publishing, viewers, limits | [Usage guide](docs/usage.md) |
-| Per-agent capture fidelity | [Compatibility](docs/compatibility.md) |
-| Enforced limits and measured performance | [Limits](docs/limits.md) |
-| Docker, HTTPS reverse proxy | [Deployment](deployment/README.md) |
-| Backup, restore and publisher recovery | [Server backups](docs/server-backups.md) |
-| Hosted accounts and OIDC | [Hosted identity](docs/hosted-identity.md) |
-| Sharing and credentials | [Viewing credentials](docs/viewing-credentials.md), [publisher credentials](docs/publisher-credentials.md) |
-| Portable `.agentlive` files | [Recording archives](docs/recording-archives.md) |
-| Artifacts | [Remote artifacts](docs/remote-artifacts.md), [artifact bundles](docs/artifact-bundles.md) |
-| Protocol and storage internals | [docs/protocol](docs/protocol) |
-| Product contract and milestones | [Implementation plan](IMPLEMENTATION_PLAN.md) |
-| Verified state and open gates | [Implementation status](IMPLEMENTATION_STATUS.md), [remaining work](REMAINING_WORK.md) |
+| Topic                                    | Document                                                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Commands, publishing, viewers, limits    | [Usage guide](docs/usage.md)                                                                               |
+| Per-agent capture fidelity               | [Compatibility](docs/compatibility.md)                                                                     |
+| Enforced limits and measured performance | [Limits](docs/limits.md)                                                                                   |
+| Trying it and reporting back             | [Testing guide](docs/testing.md)                                                                           |
+| Docker, HTTPS reverse proxy              | [Deployment](deployment/README.md)                                                                         |
+| Backup, restore and publisher recovery   | [Server backups](docs/server-backups.md)                                                                   |
+| Hosted accounts and OIDC                 | [Hosted identity](docs/hosted-identity.md)                                                                 |
+| Sharing and credentials                  | [Viewing credentials](docs/viewing-credentials.md), [publisher credentials](docs/publisher-credentials.md) |
+| Portable `.agentlive` files              | [Recording archives](docs/recording-archives.md)                                                           |
+| Artifacts                                | [Remote artifacts](docs/remote-artifacts.md), [artifact bundles](docs/artifact-bundles.md)                 |
+| Protocol and storage internals           | [docs/protocol](docs/protocol)                                                                             |
+| Product contract and milestones          | [Implementation plan](IMPLEMENTATION_PLAN.md)                                                              |
+| Verified state and open gates            | [Implementation status](IMPLEMENTATION_STATUS.md), [remaining work](REMAINING_WORK.md)                     |
 
 ## How it works
 
@@ -108,17 +109,17 @@ flowchart LR
 
 The publisher owns native-session bindings, conversion, filtering and a durable local journal. The server serializes one writer per recording, appends to a checksummed JSONL log with immutable attachment files, and fans committed events out over WebSocket with bounded history downloads. Viewers share one synchronization and playback engine; receipt, cached state and presentation position are independent. Details are in the [implementation plan](IMPLEMENTATION_PLAN.md).
 
-| Package | Responsibility |
-| --- | --- |
-| `packages/protocol` | Versioned event schemas, identifiers, canonical JSON, errors |
-| `packages/storage` | Checksummed append-only logs, atomic JSON, kernel file locks, content stores, archives |
-| `packages/publisher` | Bindings, journal, secret filtering, artifact spool, delivery and recovery |
-| `packages/adapters` | Claude, Codex, Kimi and OpenCode import, follow, launch and family capture |
-| `packages/server` | HTTP/WebSocket API, sessions, snapshots, accounts, grants, backups |
-| `packages/client` | Shared history, subscription and snapshot clients |
-| `packages/playback` | Reference and paged reducers, playback clock, terminal renderer |
-| `packages/cli` | The `agentlive` command |
-| `apps/web` | Browser viewer |
+| Package              | Responsibility                                                                         |
+| -------------------- | -------------------------------------------------------------------------------------- |
+| `packages/protocol`  | Versioned event schemas, identifiers, canonical JSON, errors                           |
+| `packages/storage`   | Checksummed append-only logs, atomic JSON, kernel file locks, content stores, archives |
+| `packages/publisher` | Bindings, journal, secret filtering, artifact spool, delivery and recovery             |
+| `packages/adapters`  | Claude, Codex, Kimi and OpenCode import, follow, launch and family capture             |
+| `packages/server`    | HTTP/WebSocket API, sessions, snapshots, accounts, grants, backups                     |
+| `packages/client`    | Shared history, subscription and snapshot clients                                      |
+| `packages/playback`  | Reference and paged reducers, playback clock, terminal renderer                        |
+| `packages/cli`       | The `agentlive` command                                                                |
+| `apps/web`           | Browser viewer                                                                         |
 
 ## Development
 
