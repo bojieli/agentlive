@@ -24,7 +24,7 @@ import {
   retryable,
 } from "@agentlive/client/transport";
 import { localArtifactResolver } from "./local-artifacts.js";
-import { reportWhenBound, whenBound } from "./bound-recording.js";
+import { reportWhenBound } from "./bound-recording.js";
 import { OpenCodeCapture } from "./opencode-capture.js";
 import { observeOpenCodeSession } from "./observe-opencode.js";
 import { OpenCodeFamilyCapture } from "./opencode-family.js";
@@ -74,9 +74,8 @@ export async function publishOpenCodeRecording(
   const controller = new AbortController();
   const signal = AbortSignal.any([options.signal, controller.signal]);
   let running: Promise<void> | undefined;
-  let ready: Promise<void> | undefined;
+  let binding: ReturnType<typeof reportWhenBound> | undefined;
   let networkFailure: unknown;
-  let drained = false;
   let capture: OpenCodeCapture | undefined;
   let family: OpenCodeFamilyCapture | undefined;
   let artifacts: Awaited<ReturnType<typeof localArtifactResolver>> | undefined;
@@ -266,7 +265,7 @@ export async function publishOpenCodeRecording(
     });
     // Capture starts as soon as the native session is observable; the recording
     // binds whenever the AgentLive server is first reachable.
-    ready = reportWhenBound(journal, signal, options.onReady, (error) =>
+    binding = reportWhenBound(journal, signal, options.onReady, (error) =>
       controller.abort(error),
     );
     artifacts = await localArtifactResolver({
@@ -310,17 +309,16 @@ export async function publishOpenCodeRecording(
         options.onCaptured?.({ producerEvents: journal.capturedThrough });
       },
     });
-    drained = true;
   } catch (error) {
     if (networkFailure) throw networkFailure;
     if (!options.signal.aborted) throw error;
   } finally {
-    // See publish-native: a completed run still reports its recording identity.
-    if (drained && !options.signal.aborted && !networkFailure)
-      await whenBound(journal, options.signal).catch(() => {});
     controller.abort();
     await running;
-    await ready;
+    await binding?.reported;
+    // The recording may have bound while the publisher was shutting down; the
+    // caller still needs its identity and viewer URL.
+    binding?.flush();
     try {
       try {
         await family?.close();

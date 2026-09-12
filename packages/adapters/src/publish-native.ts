@@ -24,7 +24,7 @@ import { canonicalJson } from "@agentlive/protocol";
 import type { NativeImportOptions } from "./import-native.js";
 import { type SourceCursor, readJsonlSource } from "./jsonl.js";
 import { localArtifactResolver } from "./local-artifacts.js";
-import { reportWhenBound, whenBound } from "./bound-recording.js";
+import { reportWhenBound } from "./bound-recording.js";
 
 export interface NativePublishOptions extends NativeImportOptions {
   resumeImport?: boolean;
@@ -96,9 +96,8 @@ export async function publishNativeRecording(
   const signal = AbortSignal.any([options.signal, controller.signal]);
   let artifacts: Awaited<ReturnType<typeof localArtifactResolver>> | undefined;
   let running: Promise<void> | undefined;
-  let ready: Promise<void> | undefined;
+  let recordingReport: ReturnType<typeof reportWhenBound> | undefined;
   let networkFailure: unknown;
-  let drained = false;
   try {
     await assertPublisherNotFinished(journal.directory);
     const baseDirectory = resolve(
@@ -191,8 +190,11 @@ export async function publishNativeRecording(
     });
     // Capture starts immediately; the recording binds whenever the server is
     // first reachable, and the placeholder identity is replaced on read.
-    ready = reportWhenBound(journal, signal, options.onReady, (error) =>
-      controller.abort(error),
+    recordingReport = reportWhenBound(
+      journal,
+      signal,
+      options.onReady,
+      (error) => controller.abort(error),
     );
     const secrets = [
       ...(options.secrets ?? []),
@@ -233,19 +235,16 @@ export async function publishNativeRecording(
         });
       },
     });
-    drained = true;
   } catch (error) {
     if (networkFailure) throw networkFailure;
     if (!options.signal.aborted) throw error;
   } finally {
-    // A run that drained its source still owes the caller the recording
-    // identity: capture no longer waits for the binding, so on a fast source a
-    // normal completion could abort before `onReady` ever fired.
-    if (drained && !options.signal.aborted && !networkFailure)
-      await whenBound(journal, options.signal).catch(() => {});
     controller.abort();
     await running;
-    await ready;
+    await recordingReport?.reported;
+    // The recording may have bound while the publisher was shutting down; the
+    // caller still needs its identity and viewer URL.
+    recordingReport?.flush();
     try {
       await artifacts?.close();
     } finally {

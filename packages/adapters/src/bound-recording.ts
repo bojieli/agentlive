@@ -19,8 +19,11 @@ export async function whenBound(
 }
 
 /**
- * Report the recording identity as soon as it exists without blocking capture.
- * A failing `onReady` aborts the publisher, as it did when it ran inline.
+ * Report the recording identity as soon as it exists, without blocking capture
+ * and without depending on the publisher still running: `flush` reports a
+ * binding that completed while the publisher was shutting down. Reporting is
+ * idempotent, so a caller learns its recording exactly once however the run
+ * ended. A failing `onReady` aborts the publisher, as it did when it ran inline.
  */
 export function reportWhenBound(
   journal: PublisherJournal,
@@ -28,17 +31,22 @@ export function reportWhenBound(
   onReady:
     ((recording: { streamId: string; revision: string }) => void) | undefined,
   fail: (error: unknown) => void,
-): Promise<void> {
-  return whenBound(journal, signal).then(
-    (recording) => {
-      try {
-        onReady?.(recording);
-      } catch (error) {
-        fail(error);
-      }
-    },
-    () => {
-      /* Aborted before the recording existed; the publisher reports why. */
-    },
-  );
+): { reported: Promise<void>; flush: () => void } {
+  let done = false;
+  const report = () => {
+    const identity = journal.identity;
+    if (done || !identity.streamId) return;
+    done = true;
+    try {
+      onReady?.({ streamId: identity.streamId, revision: identity.revision! });
+    } catch (error) {
+      fail(error);
+    }
+  };
+  return {
+    reported: whenBound(journal, signal).then(report, () => {
+      /* Aborted before the recording existed; `flush` retries after shutdown. */
+    }),
+    flush: report,
+  };
 }

@@ -16,6 +16,7 @@ import {
   type CaptureInput,
 } from "../../packages/publisher/src/index.js";
 import { localArtifactResolver } from "../../packages/adapters/src/index.js";
+import { reportWhenBound } from "../../packages/adapters/src/bound-recording.js";
 import { publishClaudeRecording } from "../../packages/adapters/src/index.js";
 import { startServer } from "../../packages/server/src/http.js";
 
@@ -480,4 +481,38 @@ it("reports the recording identity when a drained source finishes at once", asyn
   } finally {
     server.store.release(session);
   }
+});
+
+// The Ubuntu CI failure: the recording bound while the publisher was already
+// shutting down, so the background report was cancelled and the caller never
+// learned its recording identity or viewer URL.
+it("reports a recording that binds while the publisher shuts down", async () => {
+  const root = await mkdtemp(join(tmpdir(), "agentlive-bind-at-shutdown-"));
+  roots.push(root);
+  const journal = await PublisherJournal.open(join(root, "publisher"), {
+    serverOrigin: "http://127.0.0.1:7331",
+    agent: "claude",
+    nativeSessionId: "shutdown_session",
+  });
+  open.push(journal);
+  const reported: { streamId: string; revision: string }[] = [];
+  const stop = new AbortController();
+  const report = reportWhenBound(
+    journal,
+    stop.signal,
+    (recording) => reported.push(recording),
+    () => {},
+  );
+  // Shut down first, then bind: exactly the race the publisher lost.
+  stop.abort();
+  await report.reported;
+  expect(reported).toEqual([]);
+  await journal.bindRemote("bound-stream", "bound-revision");
+  report.flush();
+  expect(reported).toEqual([
+    { streamId: "bound-stream", revision: "bound-revision" },
+  ]);
+  // Reporting stays exactly once however the run ended.
+  report.flush();
+  expect(reported).toHaveLength(1);
 });
