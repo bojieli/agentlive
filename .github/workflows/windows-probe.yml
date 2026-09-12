@@ -47,3 +47,17 @@ jobs:
             echo "| locks/process death | ${{ steps.lock.outcome }} |"
             echo "| offline suite | ${{ steps.suite.outcome }} |"
           } >> "$GITHUB_STEP_SUMMARY"
+      # Every step above is continue-on-error so one run gathers all the
+      # evidence; the run itself must still fail when Windows does, or the
+      # Actions list would report an unsupported platform as green.
+      - name: Fail the run if any probe step failed
+        if: always()
+        shell: bash
+        run: |
+          for outcome in "${{ steps.install.outcome }}" "${{ steps.build.outcome }}" \
+            "${{ steps.lock.outcome }}" "${{ steps.suite.outcome }}"; do
+            case "$outcome" in
+              success|skipped) ;;
+              *) echo "Windows probe step outcome: $outcome"; exit 1 ;;
+            esac
+          done
