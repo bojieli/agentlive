@@ -1,4 +1,4 @@
-import { RecordingSnapshots } from "./snapshots.js";
+import { RecordingSnapshots, type SnapshotCollection } from "./snapshots.js";
 import type { WriteBarrier } from "./write-barrier.js";
 import type { RecordingUsage } from "./quotas.js";
 import type { ContentReference } from "@agentlive/playback";
@@ -335,6 +335,39 @@ export class RecordingSession {
   ) {
     this.snapshotBoundary(0);
     return this.snapshots.readBlob(ref, signal, lease);
+  }
+  /** Encoded derived snapshot bytes stored for this recording (0 before first use). */
+  get snapshotStoredBytes(): number {
+    return this.snapshots.storedBytes;
+  }
+  /** Reclaim superseded derived snapshot content. Runs as a shared write-barrier
+   * holder so an online backup cannot start mid-pass, and cancels itself as soon as
+   * one becomes pending rather than making it wait for the whole pass. */
+  collectSnapshots(signal?: AbortSignal): Promise<SnapshotCollection> {
+    this.snapshotBoundary(0);
+    if (this.barrier?.paused)
+      return Promise.reject(
+        new ProtocolError(
+          "retry_later",
+          "An online backup holds the server write barrier",
+        ),
+      );
+    const stop = new AbortController();
+    const release = this.barrier?.onPause(() =>
+      stop.abort(
+        new ProtocolError(
+          "retry_later",
+          "An online backup requested the server write barrier",
+        ),
+      ),
+    );
+    const active = signal
+      ? AbortSignal.any([signal, stop.signal])
+      : stop.signal;
+    return this.guard(async () => {
+      active.throwIfAborted();
+      return this.snapshots.collect(active);
+    }).finally(() => release?.());
   }
   private snapshotBoundary(through: number) {
     this.assertAvailable();

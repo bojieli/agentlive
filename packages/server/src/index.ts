@@ -5,6 +5,8 @@ export type {
   PublisherAck,
   Subscriber,
 } from "./session.js";
+export type { SnapshotCollection } from "./snapshots.js";
+export type { SnapshotScheduleOptions } from "./snapshot-scheduler.js";
 export { RecordingStore, createSessionSchema } from "./store.js";
 export type { CreateSession } from "./store.js";
 export { startServer, ShutdownTimeoutError } from "./http.js";

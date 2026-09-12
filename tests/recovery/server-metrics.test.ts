@@ -262,6 +262,15 @@ it("exposes authenticated content-free Prometheus metrics only when enabled", as
   expect(metrics.get("agentlive_write_barrier_paused")).toBe(0);
   expect(metrics.has("agentlive_snapshot_jobs")).toBe(true);
   expect(metrics.get("agentlive_snapshot_failures_total")).toBe(0);
+  expect(metrics.get("agentlive_snapshot_collections_active")).toBe(0);
+  expect(metrics.get("agentlive_snapshot_collections_total")).toBe(0);
+  expect(metrics.get("agentlive_snapshot_collection_failures_total")).toBe(0);
+  expect(
+    metrics.get("agentlive_snapshot_collection_reclaimed_bytes_total"),
+  ).toBe(0);
+  expect(
+    metrics.get("agentlive_snapshot_collection_last_duration_seconds"),
+  ).toBe(0);
   expect(metrics.get("agentlive_process_uptime_seconds")).toBeGreaterThan(0);
   expect(
     metrics.get("agentlive_process_resident_memory_bytes"),

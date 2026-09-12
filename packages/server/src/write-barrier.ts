@@ -14,10 +14,25 @@ export class WriteBarrier {
   private readonly waiting: (() => void)[] = [];
   private idle: (() => void) | undefined;
   private readonly context = new AsyncLocalStorage<{ admitted: boolean }>();
+  private readonly pauseListeners = new Set<() => void>();
 
   /** True while an exclusive holder is pending or running. */
   get paused(): boolean {
     return this.held;
+  }
+
+  /** Observe an exclusive holder becoming pending, so a long admitted mutation can
+   * cancel itself instead of making the backup wait. Fires immediately when one is
+   * already pending. Returns an idempotent unsubscribe; listeners must not throw. */
+  onPause(listener: () => void): () => void {
+    if (this.held) {
+      listener();
+      return () => {};
+    }
+    this.pauseListeners.add(listener);
+    return () => {
+      this.pauseListeners.delete(listener);
+    };
   }
 
   async shared<T>(operation: () => Promise<T>): Promise<T> {
@@ -54,6 +69,11 @@ export class WriteBarrier {
         "Another operation holds the server write barrier",
       );
     this.held = true;
+    // Admitted holders that can cancel themselves learn before we start waiting.
+    for (const listener of [...this.pauseListeners])
+      try {
+        listener();
+      } catch {}
     try {
       if (this.active)
         await new Promise<void>((resolve, reject) => {

@@ -16,21 +16,22 @@ Every number here is either a limit the code enforces (with the file that define
 
 ## Server
 
-| Limit                                                   | Value                                                                                                 | Where                                       |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| Resident session cache                                  | 128 (`serve --max-cached-sessions`); a full cache returns a retryable capacity error                  | `packages/server/src/store.ts`              |
-| WebSocket connections                                   | 256 (`maxConnections`)                                                                                | `packages/server/src/http.ts`               |
-| Concurrent archive imports / exports                    | 2 each                                                                                                | `packages/server/src/http.ts`               |
-| Total stored bytes                                      | unlimited by default; `serve --max-stored-bytes`                                                      | `packages/server/src/quotas.ts`             |
-| Filesystem free-space floor                             | none by default; `serve --min-free-bytes`                                                             | `packages/server/src/free-space.ts`         |
-| Per-account recordings / open recordings / stored bytes | unlimited by default; hosted `quotas` config                                                          | `packages/server/src/quotas.ts`             |
-| Hosted accounts                                         | 10,000; 16 KiB per account record; 32 queued mutations                                                | `packages/server/src/accounts.ts`           |
-| Account sessions                                        | 10,000; 8-hour cookies                                                                                | `packages/server/src/account-sessions.ts`   |
-| Snapshot leases per recording                           | 128 retained descriptors, 15-minute expiry                                                            | `packages/server/src/snapshot-leases.ts`    |
-| Automatic snapshot scheduling                           | 1,000 pending events, 30 seconds, or recording end; 30-second build deadline; 30-second retry backoff | `packages/server/src/snapshot-scheduler.ts` |
-| Shutdown drain                                          | 30 seconds (`serve --shutdown-timeout-ms`)                                                            | `packages/server/src/http.ts`               |
-| Operational backup                                      | 100 GiB, 100,000 entries, directory depth 32                                                          | `packages/server/src/backup.ts`             |
-| Online backup write barrier                             | 30 seconds (`backup --barrier-timeout-ms`, 1–600 s)                                                   | `packages/server/src/backup.ts`             |
+| Limit                                                   | Value                                                                                                                                                  | Where                                       |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- |
+| Resident session cache                                  | 128 (`serve --max-cached-sessions`); a full cache returns a retryable capacity error                                                                   | `packages/server/src/store.ts`              |
+| WebSocket connections                                   | 256 (`maxConnections`)                                                                                                                                 | `packages/server/src/http.ts`               |
+| Concurrent archive imports / exports                    | 2 each                                                                                                                                                 | `packages/server/src/http.ts`               |
+| Total stored bytes                                      | unlimited by default; `serve --max-stored-bytes`                                                                                                       | `packages/server/src/quotas.ts`             |
+| Filesystem free-space floor                             | none by default; `serve --min-free-bytes`                                                                                                              | `packages/server/src/free-space.ts`         |
+| Per-account recordings / open recordings / stored bytes | unlimited by default; hosted `quotas` config                                                                                                           | `packages/server/src/quotas.ts`             |
+| Hosted accounts                                         | 10,000; 16 KiB per account record; 32 queued mutations                                                                                                 | `packages/server/src/accounts.ts`           |
+| Account sessions                                        | 10,000; 8-hour cookies                                                                                                                                 | `packages/server/src/account-sessions.ts`   |
+| Snapshot leases per recording                           | 128 retained descriptors, 15-minute expiry                                                                                                             | `packages/server/src/snapshot-leases.ts`    |
+| Automatic snapshot collection                           | after 64 MiB of snapshot growth and 30 seconds since that recording's last pass; 30-second pass deadline; `serve --no-snapshot-collection` disables it | `packages/server/src/snapshot-scheduler.ts` |
+| Automatic snapshot scheduling                           | 1,000 pending events, 30 seconds, or recording end; 30-second build deadline; 30-second retry backoff                                                  | `packages/server/src/snapshot-scheduler.ts` |
+| Shutdown drain                                          | 30 seconds (`serve --shutdown-timeout-ms`)                                                                                                             | `packages/server/src/http.ts`               |
+| Operational backup                                      | 100 GiB, 100,000 entries, directory depth 32                                                                                                           | `packages/server/src/backup.ts`             |
+| Online backup write barrier                             | 30 seconds (`backup --barrier-timeout-ms`, 1–600 s)                                                                                                    | `packages/server/src/backup.ts`             |
 
 ## Attachments, artifacts and archives
 

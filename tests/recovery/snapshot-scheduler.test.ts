@@ -145,7 +145,16 @@ it("flushes ended tails promptly and cancels active work on shutdown", async () 
   expect(ended.buildSnapshot).toHaveBeenCalledTimes(1);
   await scheduler.close();
   expect(aborted).toBe(true);
-  expect(scheduler.status).toEqual({ registered: 0, active: 0, failures: 0 });
+  expect(scheduler.status).toEqual({
+    registered: 0,
+    active: 0,
+    failures: 0,
+    collecting: 0,
+    collections: 0,
+    collectionFailures: 0,
+    reclaimedBytes: 0,
+    lastCollectionMs: 0,
+  });
   expect(vi.getTimerCount()).toBe(0);
 });
 
@@ -177,6 +186,125 @@ it("reduces timed-out batches so retries can make durable progress", async () =>
       4, 2, 4,
     ]);
     expect(scheduler.status.failures).toBe(1);
+  } finally {
+    await scheduler.close();
+  }
+});
+
+/** A registered session that also reports snapshot growth and can collect. */
+function collecting(
+  sequence: number,
+  stored: { bytes: number },
+  collect: (signal: AbortSignal) => Promise<void> = async () => {},
+) {
+  const base = session(sequence);
+  return {
+    info: base.info,
+    selectSnapshot: base.selectSnapshot,
+    buildSnapshot: base.buildSnapshot,
+    get snapshotStoredBytes() {
+      return stored.bytes;
+    },
+    collectSnapshots: vi.fn(async (signal?: AbortSignal) => {
+      await collect(signal!);
+      return {
+        retainedRoots: 1,
+        prunedDescriptors: 2,
+        removedBlobs: 3,
+        reclaimedBytes: 512,
+        skipped: false,
+      };
+    }),
+  };
+}
+it("collects on measured growth only, behind due builds, and never when disabled", async () => {
+  vi.useFakeTimers();
+  const stored = { bytes: 500 };
+  const grown = collecting(0, stored);
+  const scheduler = new SnapshotScheduler({
+    batchEvents: 5,
+    pollMs: 10,
+    intervalMs: 100,
+    collectGrowthBytes: 1000,
+  });
+  try {
+    scheduler.add(grown);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(grown.collectSnapshots).not.toHaveBeenCalled();
+    stored.bytes = 1500;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(grown.collectSnapshots).toHaveBeenCalledTimes(1);
+    expect(scheduler.status.collections).toBe(1);
+    expect(scheduler.status.reclaimedBytes).toBe(512);
+    expect(scheduler.status.lastCollectionMs).toBeGreaterThanOrEqual(0);
+    // The baseline moved to the measured usage, so elapsed time alone changes nothing.
+    await vi.advanceTimersByTimeAsync(500);
+    expect(grown.collectSnapshots).toHaveBeenCalledTimes(1);
+    // More growth is due again only after the interval.
+    stored.bytes = 2600;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(grown.collectSnapshots).toHaveBeenCalledTimes(2);
+
+    // A due build wins the worker; collection waits for the head to catch up.
+    grown.info.serverSeq = 40;
+    stored.bytes = 9000;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(grown.buildSnapshot).toHaveBeenCalled();
+    expect(grown.collectSnapshots).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(grown.collectSnapshots).toHaveBeenCalledTimes(3);
+    expect(scheduler.status.collectionFailures).toBe(0);
+  } finally {
+    await scheduler.close();
+  }
+});
+it("counts a failed or cancelled pass and retries it only after the interval", async () => {
+  vi.useFakeTimers();
+  const stored = { bytes: 0 };
+  let fail = true;
+  const broken = collecting(0, stored, async () => {
+    if (fail) throw new Error("private collection failure");
+  });
+  const scheduler = new SnapshotScheduler({
+    pollMs: 10,
+    intervalMs: 100,
+    collectGrowthBytes: 1000,
+  });
+  try {
+    scheduler.add(broken);
+    stored.bytes = 4000;
+    await vi.advanceTimersByTimeAsync(120);
+    expect(broken.collectSnapshots).toHaveBeenCalledTimes(1);
+    expect(scheduler.status.collectionFailures).toBe(1);
+    expect(scheduler.status.collections).toBe(0);
+    expect(scheduler.status.reclaimedBytes).toBe(0);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(broken.collectSnapshots).toHaveBeenCalledTimes(1);
+    fail = false;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(broken.collectSnapshots).toHaveBeenCalledTimes(2);
+    expect(scheduler.status.collections).toBe(1);
+    expect(scheduler.status.collectionFailures).toBe(1);
+  } finally {
+    await scheduler.close();
+  }
+});
+it("never collects when the serve option disables it", async () => {
+  vi.useFakeTimers();
+  const stored = { bytes: 0 };
+  const disabled = collecting(0, stored);
+  const scheduler = new SnapshotScheduler({
+    collect: false,
+    pollMs: 10,
+    intervalMs: 10,
+    collectGrowthBytes: 1000,
+  });
+  try {
+    scheduler.add(disabled);
+    stored.bytes = 1_000_000;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(disabled.collectSnapshots).not.toHaveBeenCalled();
+    expect(scheduler.status.collections).toBe(0);
   } finally {
     await scheduler.close();
   }

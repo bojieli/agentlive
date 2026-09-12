@@ -23,10 +23,34 @@ import {
   initialActivityIndex,
   initialPagedState,
   openRecordingSnapshot,
+  tracePairedSnapshot,
   type ContentReference,
+  type PagedContent,
   type SnapshotBinding,
 } from "@agentlive/playback";
 
+/** Content-free result of one automatic collection pass. */
+export interface SnapshotCollection {
+  /** Paired roots in the frozen retained union: head, live leases and in-process pins. */
+  retainedRoots: number;
+  /** Catalog descriptors dropped because nothing in that union retained them. */
+  prunedDescriptors: number;
+  removedBlobs: number;
+  reclaimedBytes: number;
+  /** True when a descriptor this collector cannot trace made a sweep unsafe; nothing was deleted. */
+  skipped: boolean;
+}
+const nothing = (skipped: boolean): SnapshotCollection => ({
+  retainedRoots: 0,
+  prunedDescriptors: 0,
+  removedBlobs: 0,
+  reclaimedBytes: 0,
+  skipped,
+});
+const paired = (entry: SnapshotDescriptor) =>
+  entry.format === "agentlive.paged-state" && !!entry.activity;
+const rootKey = (entry: SnapshotDescriptor) =>
+  `${entry.serverSeq}:${entry.ref.hash}:${entry.activity?.hash ?? ""}`;
 const catalogSchema = z.strictObject({
   version: z.literal(1),
   streamId: idSchema,
@@ -343,6 +367,94 @@ export class RecordingSnapshots {
       });
       // After catalog commit starts, cancellation cannot retract a durable publication.
       return entry;
+    });
+  }
+  /** Encoded derived content currently stored for this recording (0 before first use). */
+  get storedBytes(): number {
+    return this.content?.usage.storedBytes ?? 0;
+  }
+  /** Reclaim superseded derived content under the publication/lease queue.
+   *
+   * The retained union is the published head the server would select, every unexpired
+   * durable lease and every in-process read/export pin. Holding this queue for the whole
+   * pass freezes publication, lease acquisition/renewal/release and leased reads behind it;
+   * the pin barrier freezes unleased reads (they receive a retryable error meanwhile).
+   * The catalog is pruned to that union before any sweep, so selection can never return a
+   * descriptor whose content was reclaimed, and a crash mid-sweep leaves every retained
+   * root readable. Cancellation or a failed trace deletes nothing.
+   */
+  collect(signal?: AbortSignal): Promise<SnapshotCollection> {
+    const active = signal
+      ? AbortSignal.any([signal, this.stop.signal])
+      : this.stop.signal;
+    return this.run(async () => {
+      active.throwIfAborted();
+      const entries = await this.catalog();
+      const leases = await this.leases.retained(active);
+      // A descriptor this collector cannot trace (legacy formats) must never be swept.
+      if (
+        entries.some((entry) => !paired(entry)) ||
+        leases.some((lease) => !paired(lease.snapshot))
+      )
+        return nothing(true);
+      const roots = new Map<string, SnapshotDescriptor>();
+      const head = entries[entries.length - 1];
+      if (head) roots.set(rootKey(head), head);
+      for (const lease of leases)
+        roots.set(rootKey(lease.snapshot), lease.snapshot);
+      // Prove every retained root opens before anything is pruned or removed.
+      for (const root of roots.values()) await this.verify(root, active);
+      const kept = entries.filter((entry) => roots.has(rootKey(entry)));
+      active.throwIfAborted();
+      if (kept.length !== entries.length)
+        await atomicJson(join(this.directory, "catalog.json"), {
+          version: 1,
+          ...this.binding,
+          entries: kept,
+        });
+      active.throwIfAborted();
+      const store = await this.store();
+      const swept = await this.pins.withBarrier(
+        (pinned, frozen) =>
+          store.collect(async (scope, traced) => {
+            const reader: PagedContent = {
+              read: (ref, offset, length, signal) =>
+                scope.read(ref, offset, length, signal),
+              put: () => {
+                throw new ProtocolError(
+                  "precondition_failed",
+                  "Collection tracing cannot write content",
+                );
+              },
+              append: () => {
+                throw new ProtocolError(
+                  "precondition_failed",
+                  "Collection tracing cannot write content",
+                );
+              },
+            };
+            for (const root of roots.values())
+              await tracePairedSnapshot(
+                reader,
+                root,
+                this.binding,
+                scope.retain,
+                traced,
+              );
+            for (const pin of pinned)
+              await (pin.kind === "blob"
+                ? scope.retainBlob(pin.ref)
+                : scope.retain(pin.ref));
+          }, frozen),
+        active,
+      );
+      return {
+        retainedRoots: roots.size,
+        prunedDescriptors: entries.length - kept.length,
+        removedBlobs: swept.removed,
+        reclaimedBytes: swept.reclaimedBytes,
+        skipped: false,
+      };
     });
   }
   read(
