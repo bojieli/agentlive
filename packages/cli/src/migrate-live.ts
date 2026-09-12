@@ -32,11 +32,12 @@ import {
   StreamingRedactor,
   finishJournal,
   liveMigrationDirectory,
+  publisherBindingKey,
   readPublisherOperation,
 } from "@agentlive/publisher";
 import { FileLock, atomicJson } from "@agentlive/storage";
-import { removeRecording } from "@agentlive/client";
-import { request } from "@agentlive/client/transport";
+import { listRecordings, removeRecording } from "@agentlive/client";
+import { originOf, request } from "@agentlive/client/transport";
 import { findBinding } from "./publication.js";
 
 const hash = (value: unknown) =>
@@ -116,6 +117,8 @@ const intentSchema = z.strictObject({
   }),
   continuation: continuationSchema,
   retiredDirectory: z.string(),
+  /** Destination server, when the replacement is created on another one. */
+  targetServerOrigin: z.string().optional(),
   /** Root native transcript, or the frozen OpenCode export this operation pinned. */
   nativeSourcePath: z.string().optional(),
   nativeServerOrigin: z.string().optional(),
@@ -267,6 +270,8 @@ function liveMigrationRequestHash(
     expectedManifestHash: string;
     disposition: "retain" | "remove";
   },
+  /** Present only for a migration to another server, so same-server hashes are unchanged. */
+  targetServerOrigin?: string,
 ) {
   return hash({
     operationId: options.operationId,
@@ -275,13 +280,31 @@ function liveMigrationRequestHash(
     liveKey,
     expectedManifestHash: options.expectedManifestHash,
     disposition: options.disposition,
+    ...(targetServerOrigin === undefined ? {} : { targetServerOrigin }),
   });
+}
+
+/** Publisher key the replacement occupies: the destination's, for a server migration. */
+function liveMigrationTargetKey(intent: Intent, liveKey: string) {
+  return intent.targetServerOrigin === undefined
+    ? liveKey
+    : publisherBindingKey({
+        serverOrigin: intent.targetServerOrigin,
+        agent: intent.nativeAgent,
+        nativeSessionId: intent.nativeSessionId,
+      });
+}
+
+/** The reservation a server migration leaves at the destination key while it runs. */
+function liveMigrationReservation(publisherRoot: string, key: string) {
+  return join(liveMigrationDirectory(publisherRoot, key), "reserved.json");
 }
 
 function receipt(intent: Intent, liveDirectory: string) {
   return {
     operationId: intent.operationId,
     serverOrigin: intent.serverOrigin,
+    targetServerOrigin: intent.targetServerOrigin ?? intent.serverOrigin,
     sourceStreamId: intent.sourceStreamId,
     sourceRevision: intent.sourceRevision,
     sourceConverterVersion: intent.sourceConverterVersion,
@@ -332,6 +355,10 @@ export async function migrateLiveBinding(
     /** Recording the operator selected (`--stream`); guards against migrating a successor. */
     sourceStreamId?: string;
     ownerCredential: string;
+    /** Create the replacement on this server instead of the binding's own. */
+    targetServerOrigin?: string;
+    /** Destination credential; required, and separate, for another server. */
+    targetOwnerCredential?: string;
     secrets?: readonly string[];
     title?: string;
     artifactRoots?: readonly string[];
@@ -376,7 +403,37 @@ export async function migrateLiveBinding(
     const nativeSource = options.nativeSource
       ? resolve(options.nativeSource)
       : undefined;
-    const requestHash = liveMigrationRequestHash(liveKey, options);
+    // The destination is external only when it differs from the binding's own server,
+    // so a redundant --target-server keeps the same-server request identity.
+    const live = await boundStream(liveDirectory);
+    const sourceOrigin = intent?.serverOrigin ?? live?.serverOrigin;
+    const requested =
+      options.targetServerOrigin === undefined
+        ? undefined
+        : originOf(options.targetServerOrigin);
+    const externalTarget =
+      requested !== undefined && requested !== sourceOrigin
+        ? requested
+        : undefined;
+    if (externalTarget !== undefined && !options.targetOwnerCredential)
+      throw new Error(
+        "Server migration requires a separate destination credential",
+      );
+    if (
+      externalTarget === undefined &&
+      options.targetOwnerCredential !== undefined &&
+      options.targetOwnerCredential !== options.ownerCredential
+    )
+      throw new Error(
+        "Same-server replacement must use its source owner credential",
+      );
+    const targetOwnerCredential =
+      options.targetOwnerCredential ?? options.ownerCredential;
+    const requestHash = liveMigrationRequestHash(
+      liveKey,
+      options,
+      externalTarget,
+    );
     if (intent && intent.operationId !== options.operationId) {
       if (!intent.completed)
         throw new Error(
@@ -398,10 +455,13 @@ export async function migrateLiveBinding(
       intent.sourceStreamId !== options.sourceStreamId
     )
       throw new Error("Live migration intent belongs to another recording");
-    if (intent?.completed) return receipt(intent, liveDirectory);
+    if (intent?.completed)
+      return receipt(
+        intent,
+        join(publisherRoot, liveMigrationTargetKey(intent, liveKey)),
+      );
     const operationKey = hash(options.operationId);
     const stagingRoot = join(migrationRoot, operationKey);
-    const expectedTarget = join(stagingRoot, liveKey);
     const retiredDirectory =
       intent?.retiredDirectory ??
       join(
@@ -414,9 +474,16 @@ export async function migrateLiveBinding(
       intent = next;
     };
 
-    const live = await boundStream(liveDirectory);
+    // A migration to another server places its replacement at the destination key.
+    const placedDirectory = () =>
+      join(publisherRoot, liveMigrationTargetKey(intent!, liveKey));
+    const placedStream =
+      intent?.target === undefined
+        ? undefined
+        : await boundStream(placedDirectory());
     const placed =
-      intent?.target !== undefined && live?.streamId === intent.target.streamId;
+      intent?.target !== undefined &&
+      placedStream?.streamId === intent.target.streamId;
     if (!placed) {
       if (live === undefined) {
         if (!intent?.target || !(await exists(retiredDirectory)))
@@ -429,15 +496,18 @@ export async function migrateLiveBinding(
         await replaceSource();
         await options.onPhase?.("retired");
       }
-      // Take over the live key with the verified replacement.
+      // Take over the target key with the verified replacement.
       const staged = await boundStream(intent!.targetDirectory);
       if (!staged || staged.streamId !== intent!.target!.streamId)
         throw new Error("Staged replacement binding is missing");
-      if (await exists(liveDirectory))
+      const destination = placedDirectory();
+      if (await exists(destination))
         throw new Error(
-          "A binding appeared at the live key during migration; stop that publisher, retire its binding and rerun",
+          destination === liveDirectory
+            ? "A binding appeared at the live key during migration; stop that publisher, retire its binding and rerun"
+            : "A binding appeared at the destination key during migration; stop that publisher, retire its binding and rerun",
         );
-      await rename(intent!.targetDirectory, liveDirectory);
+      await rename(intent!.targetDirectory, destination);
       await options.onPhase?.("placed");
     }
     const current = intent!;
@@ -451,7 +521,16 @@ export async function migrateLiveBinding(
         signal: options.signal,
       });
     await save({ ...current, completed: true });
-    return receipt(intent!, liveDirectory);
+    // The destination key now holds the real binding; its reservation has no more work.
+    if (current.targetServerOrigin !== undefined)
+      await rm(
+        liveMigrationReservation(
+          publisherRoot,
+          liveMigrationTargetKey(current, liveKey),
+        ),
+        { force: true },
+      );
+    return receipt(intent!, placedDirectory());
 
     /** Import the replacement, end/retire the source binding while owning its lock. */
     async function replaceSource() {
@@ -647,10 +726,17 @@ export async function migrateLiveBinding(
           if (!family && childCaptured.size)
             throw new Error("Live binding has child sources outside its scope");
         }
-        const secrets = options.secrets ?? [];
+        // The destination server never sees the source credential, but it can appear in
+        // a title or artifact captured under the old policy; both values are filtered.
+        const targetOrigin = externalTarget ?? binding.serverOrigin;
+        const external = targetOrigin !== binding.serverOrigin;
+        const secrets = external
+          ? [...(options.secrets ?? []), options.ownerCredential]
+          : (options.secrets ?? []);
         const titleFilter = new StreamingRedactor([
           ...secrets,
           options.ownerCredential,
+          targetOwnerCredential,
           ...(options.remoteArtifacts?.origins.flatMap((entry) =>
             entry.authorization ? [entry.authorization] : [],
           ) ?? []),
@@ -686,11 +772,34 @@ export async function migrateLiveBinding(
             }
           : {};
         const sourcePath = openCode ? frozen!.root.sourcePath : nativeSource!;
+        // A replacement on another server occupies that origin's binding key, not the
+        // one being retired here.
+        const expectedTarget = join(
+          stagingRoot,
+          publisherBindingKey({
+            serverOrigin: targetOrigin,
+            agent,
+            nativeSessionId: binding.nativeSessionId,
+          }),
+        );
+        if (external && !intent) {
+          // Prove destination authorization before any durable intent or remote work.
+          await listRecordings({
+            serverOrigin: targetOrigin,
+            credential: targetOwnerCredential,
+            signal: options.signal,
+            limit: 1,
+          });
+          if (await exists(join(publisherRoot, basename(expectedTarget))))
+            throw new Error(
+              "This native session already has a binding on the destination server; retire it before migrating",
+            );
+        }
         const common: ImportOptions = {
           sourcePath,
           publisherRoot: stagingRoot,
-          serverOrigin: binding.serverOrigin,
-          ownerCredential: options.ownerCredential,
+          serverOrigin: targetOrigin,
+          ownerCredential: targetOwnerCredential,
           title,
           visibility: "private",
           signal: options.signal,
@@ -704,7 +813,7 @@ export async function migrateLiveBinding(
           beforeImport: async (identity, targetDirectory) => {
             if (resolve(targetDirectory) !== expectedTarget)
               throw new Error(
-                "Replacement binding key differs from the live binding",
+                "Replacement binding key differs from the migration target",
               );
             if (identity.nativeSessionId !== binding.nativeSessionId)
               throw new Error("Native source belongs to another session");
@@ -751,6 +860,22 @@ export async function migrateLiveBinding(
                   "Frozen boundary or replacement policy changed during retry",
                 );
             } else {
+              if (external) {
+                // Fence the destination key before the replacement exists there.
+                const reservation = liveMigrationReservation(
+                  publisherRoot,
+                  basename(expectedTarget),
+                );
+                await mkdir(dirname(reservation), {
+                  recursive: true,
+                  mode: 0o700,
+                });
+                await atomicJson(reservation, {
+                  version: 1,
+                  operationId: options.operationId,
+                  sourceKey: liveKey,
+                });
+              }
               await save({
                 version: 1,
                 operationId: options.operationId,
@@ -788,6 +913,7 @@ export async function migrateLiveBinding(
                     : null,
                 },
                 retiredDirectory,
+                ...(external ? { targetServerOrigin: targetOrigin } : {}),
                 nativeSourcePath: sourcePath,
                 ...(openCode
                   ? {
@@ -847,6 +973,9 @@ export async function migrateLiveBinding(
           throw new Error("Replacement receipt changed during retry");
         // Verify the replacement before ending, linking or removing the source.
         const headers = { authorization: `Bearer ${options.ownerCredential}` };
+        const targetHeaders = {
+          authorization: `Bearer ${targetOwnerCredential}`,
+        };
         const metadata = z
           .object({
             revision: z.string(),
@@ -858,8 +987,8 @@ export async function migrateLiveBinding(
               (
                 await request(
                   fetch,
-                  `${binding.serverOrigin}/api/v1/streams/${target.streamId}`,
-                  { headers },
+                  `${targetOrigin}/api/v1/streams/${target.streamId}`,
+                  { headers: targetHeaders },
                   options.signal,
                   4096,
                 )
@@ -918,6 +1047,15 @@ export async function migrateLiveBinding(
           sourceConverterVersion: published.converterVersion,
           targetConverterVersion: intent.targetConverterVersion,
           requestedSourceDisposition: options.disposition,
+          // The destination cannot check the source server; the owner declares it.
+          ...(external
+            ? {
+                externalSource: {
+                  serverOrigin: binding.serverOrigin,
+                  verification: "owner-declared",
+                },
+              }
+            : {}),
         });
         const lineage = z
           .strictObject({
@@ -929,11 +1067,11 @@ export async function migrateLiveBinding(
               (
                 await request(
                   fetch,
-                  `${binding.serverOrigin}/api/v1/streams/${target.streamId}/migration-origin`,
+                  `${targetOrigin}/api/v1/streams/${target.streamId}/migration-origin`,
                   {
                     method: "POST",
                     headers: {
-                      ...headers,
+                      ...targetHeaders,
                       "content-type": "application/json",
                     },
                     body: JSON.stringify({ revision: target.revision, origin }),
@@ -1141,6 +1279,10 @@ export async function abandonLiveMigration(
     confirmRemoval?: boolean;
     sourceStreamId?: string;
     ownerCredential: string;
+    /** Destination of a server migration; checked against the saved intent. */
+    targetServerOrigin?: string;
+    /** Destination credential, which is what removes the staged replacement there. */
+    targetOwnerCredential?: string;
     signal: AbortSignal;
     /** Called after each durable step; used to exercise interruption and resume. */
     onPhase?: (
@@ -1182,9 +1324,26 @@ export async function abandonLiveMigration(
       intent.sourceStreamId !== options.sourceStreamId
     )
       throw new Error("Live migration intent belongs to another recording");
-    if (intent.requestHash !== liveMigrationRequestHash(liveKey, options))
+    if (
+      intent.requestHash !==
+      liveMigrationRequestHash(liveKey, options, intent.targetServerOrigin)
+    )
       throw new Error(
         "Abandon request differs from the saved migration; use its original arguments",
+      );
+    if (
+      options.targetServerOrigin !== undefined &&
+      originOf(options.targetServerOrigin) !==
+        (intent.targetServerOrigin ?? intent.serverOrigin)
+    )
+      throw new Error("Live migration intent names another destination server");
+    const targetOrigin = intent.targetServerOrigin ?? intent.serverOrigin;
+    if (
+      intent.targetServerOrigin !== undefined &&
+      options.targetOwnerCredential === undefined
+    )
+      throw new Error(
+        "Abandoning a server migration requires its destination credential",
       );
     const stagingRoot = join(migrationRoot, hash(options.operationId));
     // A crash between remote creation and the saved receipt still leaves the staged
@@ -1202,6 +1361,7 @@ export async function abandonLiveMigration(
     const receipt = () => ({
       operationId: intent.operationId,
       serverOrigin: intent.serverOrigin,
+      targetServerOrigin: targetOrigin,
       sourceStreamId: intent.sourceStreamId,
       sourceRevision: intent.sourceRevision,
       bindingDirectory: liveDirectory,
@@ -1251,14 +1411,14 @@ export async function abandonLiveMigration(
     }
     if (replacement)
       await removeRecording({
-        serverOrigin: intent.serverOrigin,
+        serverOrigin: targetOrigin,
         streamId: replacement.streamId,
         revision: replacement.revision,
         operationId: hash({
           migration: intent.operationId,
           action: "abandon-remove-target",
         }),
-        credential: options.ownerCredential,
+        credential: options.targetOwnerCredential ?? options.ownerCredential,
         signal: options.signal,
       }).catch((error: unknown) => {
         // A removed replacement stays removed; the retry only finishes disposal.
@@ -1270,6 +1430,14 @@ export async function abandonLiveMigration(
     await options.onPhase?.("discarded");
     intent = { ...intent, abandoned: true, completed: true };
     await atomicJson(intentPath, intent);
+    if (intent.targetServerOrigin !== undefined)
+      await rm(
+        liveMigrationReservation(
+          publisherRoot,
+          liveMigrationTargetKey(intent, liveKey),
+        ),
+        { force: true },
+      );
     return receipt();
   } catch (error) {
     if (error instanceof z.ZodError)

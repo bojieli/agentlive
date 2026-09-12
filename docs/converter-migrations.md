@@ -1,6 +1,6 @@
 # Converter and import migration implementation audit
 
-Status: implemented so far are inspection, frozen-import child-source relocation, replacement import with changed converter/filter/artifact settings (optionally on another server), and replacement of existing live Claude/Codex/Kimi/OpenCode bindings (`migrate-live`, below), including abandoning a migration that can never complete. Compatible in-place continuation and archive-only server transfer remain unfinished. Existing mismatched-option checks remain in force. This audit identifies the state that a migration must handle before native converter behavior can change safely.
+Status: implemented so far are inspection, frozen-import child-source relocation, replacement import with changed converter/filter/artifact settings (optionally on another server), and replacement of existing live Claude/Codex/Kimi/OpenCode bindings (`migrate-live`, below) — on the binding's own server or another one — including abandoning a migration that can never complete. Compatible in-place continuation and archive-only server transfer remain unfinished. Existing mismatched-option checks remain in force. This audit identifies the state that a migration must handle before native converter behavior can change safely.
 
 ## Inspect an existing binding
 
@@ -313,6 +313,48 @@ be reached, returns a different session, or no longer shows captured objects is
 rejected rather than migrated; and an OpenCode binding whose _original_ export is gone
 is unaffected, because the frozen source is taken from the server rather than from the
 old import.
+
+## Replace a live binding on another server
+
+```sh
+agentlive migrate-live --stream OLD_RECORDING_ID --native-source ROOT_FILE \
+  --operation-id UNIQUE_ID --expected-manifest-hash LIVE_MANIFEST_HASH \
+  --old-recording retain \
+  --target-server https://destination.example \
+  --target-owner-file /private/destination-owner.json
+```
+
+Destination credential selection matches `migrate-import`: exactly one of
+`--target-owner-file` or `--target-account-file`, and it must be separate from the
+source credential. Destination listing authorization is checked before any durable
+intent exists, and both credentials participate in redaction — the source credential
+can appear in text the old policy captured, and the destination never needs it.
+
+A `--target-server` equal to the binding's own origin is the ordinary same-server
+replacement, with the same saved request identity as one written without the option.
+Only a genuinely different destination changes the request hash, so an operation
+cannot be retried against another server.
+
+The destination's binding key is derived from *its* origin, so the replacement is
+placed there rather than at the retired binding's key. While the intent is unfinished,
+a reservation at that destination key fences `publish` and `import` for the same
+native session there, exactly as the intent fences the source key; the intent stays
+the only authority, so completing or abandoning the operation releases both. The
+receipt reports `targetServerOrigin` and the `bindingDirectory` actually placed.
+
+Continue on the destination with `publish --resume-import --server DESTINATION` and
+the same title, filter and artifact settings. Keep the source credential in the
+redaction dictionary: it filtered what it filtered before the move, and the import
+recorded that filter fingerprint. Destination lineage carries
+`externalSource: {serverOrigin, verification: "owner-declared"}` — the destination
+cannot check the source server, so the owner declares it. The source recording is
+ended in place on its own server and keeps its own content; `--old-recording remove
+--confirm-removal` removes it there only after the destination upload, ending and
+lineage all succeed.
+
+Abandoning a server migration removes the staged replacement from the destination
+with the destination credential, so `--target-server` and its credential file are part
+of the arguments an abandon repeats.
 
 ## Abandon a live migration
 

@@ -103,6 +103,7 @@ Commands:
   agentlive migrate-recording --source <binding-directory> --operation-id <id> --target-server <url> --target-owner-file <file> --old-recording retain|remove
   agentlive migrate-import --source <binding-directory> --native-source <file> --operation-id <id> --expected-manifest-hash <hash> --old-recording retain|remove [--confirm-removal] [--redact-env <name>]
   agentlive migrate-live --stream <id> | --source <binding-directory> --native-source <file> --operation-id <id> --expected-manifest-hash <hash> --old-recording retain|remove [--confirm-removal] [--title <text>] [--redact-env <name>] [--artifact-root <path>] [--artifact-base <path>]
+  agentlive migrate-live --stream <id> ... --target-server <origin> --target-owner-file <file> | --target-account-file <file>   (replace on another server)
   agentlive migrate-live --stream <id> --native-server <origin> ...   (OpenCode bindings freeze a fresh native export instead of --native-source)
   agentlive migrate-live --abandon --operation-id <id> --stream <id> | --source <binding-directory> [same original arguments] [--confirm-removal]
   agentlive relocate-import-sources --source <binding-directory> --native-source <file> --family-source <child-id=path> --operation-id <id> --expected-manifest-hash <hash>
@@ -511,6 +512,9 @@ async function main() {
           "operation-id",
           "expected-manifest-hash",
           "server",
+          "target-server",
+          "target-owner-file",
+          "target-account-file",
           "old-recording",
           "confirm-removal",
           "redact-env",
@@ -1251,9 +1255,34 @@ async function main() {
         : {}),
     };
     if (native.nativePassword) secrets.push(native.nativePassword);
+    const targetServer = values["target-server"];
+    if (
+      Boolean(targetServer) !==
+        Boolean(values["target-owner-file"] || values["target-account-file"]) ||
+      (values["target-owner-file"] && values["target-account-file"])
+    )
+      throw new Error(
+        "Select --target-server with exactly one of --target-owner-file or --target-account-file",
+      );
+    const targetCredential = values["target-account-file"]
+      ? await accountCredential(
+          resolve(values["target-account-file"]),
+          targetServer!,
+        )
+      : values["target-owner-file"]
+        ? await ownerCredential(resolve(values["target-owner-file"]), false)
+        : undefined;
+    if (targetCredential) secrets.push(targetCredential);
+    const destination = targetServer
+      ? {
+          targetServerOrigin: targetServer,
+          targetOwnerCredential: targetCredential!,
+        }
+      : {};
     const common = {
       directory,
       ...native,
+      ...destination,
       operationId: values["operation-id"],
       expectedManifestHash: values["expected-manifest-hash"],
       disposition: values["old-recording"] as "retain" | "remove",
