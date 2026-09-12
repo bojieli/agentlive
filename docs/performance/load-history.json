@@ -1,0 +1,622 @@
+{
+  "success": true,
+  "runtime": "v26.8.1",
+  "platform": "darwin/arm64",
+  "hardware": {
+    "cpu": "Apple M2 Max",
+    "logicalCpus": 12,
+    "memoryBytes": 103079215104
+  },
+  "startedAt": "2026-09-12T09:31:32.755Z",
+  "fixture": "load-v1",
+  "options": {
+    "shapes": [
+      "4x1@25"
+    ],
+    "seconds": 30,
+    "rampMs": 4000,
+    "eventBytes": 1024,
+    "eventsPerCapture": 32,
+    "workers": 4,
+    "historyViewers": 1,
+    "historyIntervalMs": 200,
+    "pageLimit": 500,
+    "deadlineMs": 900000,
+    "slowViewerMs": 8000,
+    "slowRate": 100,
+    "slowEventBytes": 65536,
+    "attachmentBytes": 16777216,
+    "socketProbe": 300,
+    "cacheProbe": 160,
+    "skip": [
+      "attachment",
+      "slow-viewer",
+      "capacity"
+    ]
+  },
+  "limits": {
+    "publishBatch": "100 events or 256 KiB",
+    "socketOutboundBuffer": 2097152,
+    "maxConnections": 256,
+    "maxCachedSessions": 128
+  },
+  "phases": [
+    {
+      "name": "shape",
+      "label": "4x1@25",
+      "publishers": 4,
+      "viewersPerRecording": 1,
+      "capturesPerSecondPerPublisher": 25,
+      "eventsPerCapture": 32,
+      "offeredEventsPerSecond": 3200,
+      "startedAt": "2026-09-12T09:31:32.881Z",
+      "recordings": 4,
+      "viewers": 4,
+      "windowMs": 30001.8,
+      "captured": 94144,
+      "acknowledged": 92964,
+      "delivered": 93064,
+      "capturedEventsPerSecond": 3137.9,
+      "acknowledgedEventsPerSecond": 3098.6,
+      "capturedBytesPerSecond": 3190166.6,
+      "deliveredEventsPerSecond": 3101.9,
+      "deliveredBytesPerSecond": 5975085.3,
+      "meanEventBytes": 1017,
+      "offeredAchievedRatio": 0.981,
+      "deliveryRatio": 0.989,
+      "latency": {
+        "count": 91609,
+        "meanMs": 212.283,
+        "p50Ms": 147,
+        "p95Ms": 650,
+        "p99Ms": 881,
+        "minMs": 62.368,
+        "maxMs": 1040.453
+      },
+      "durableCapture": {
+        "count": 2942,
+        "meanMs": 31.21,
+        "p50Ms": 23,
+        "p95Ms": 75,
+        "p99Ms": 106,
+        "minMs": 5.444,
+        "maxMs": 228.784
+      },
+      "captureScheduleLag": {
+        "count": 2944,
+        "meanMs": 31.141,
+        "p50Ms": 1,
+        "p95Ms": 169,
+        "p99Ms": 261,
+        "minMs": -0.397,
+        "maxMs": 323.955
+      },
+      "historyPages": 150,
+      "historyPagesPerSecond": 5,
+      "historyEventsPerSecond": 2410,
+      "historyBytesPerSecond": 4638270,
+      "historyFailures": 0,
+      "historyPageLatency": {
+        "count": 150,
+        "meanMs": 22.879,
+        "p50Ms": 21,
+        "p95Ms": 40,
+        "p99Ms": 52,
+        "minMs": 3.841,
+        "maxMs": 52.922
+      },
+      "publisherStatus": {
+        "connecting": 4,
+        "publishing": 4
+      },
+      "viewerStatus": {
+        "connecting": 4,
+        "catching-up": 24361,
+        "live": 24361
+      },
+      "clientCpuPercent": 101,
+      "server": {
+        "samples": 120,
+        "rssPeak": 246480896,
+        "rssMean": 230878959,
+        "cpuPercentPeak": 56.8,
+        "cpuPercentMean": 40
+      },
+      "metrics": {
+        "requests": {
+          "{route=\"/api/v1/streams/:id\",method=\"GET\",status_class=\"2xx\"}": 150,
+          "{route=\"/api/v1/streams/:id/events\",method=\"GET\",status_class=\"2xx\"}": 150,
+          "{route=\"/metrics\",method=\"GET\",status_class=\"2xx\"}": 1
+        },
+        "cachedSessions": 4,
+        "viewerSockets": 4,
+        "publisherSockets": 4,
+        "storedBytes": 222317574,
+        "snapshotFailures": 0,
+        "websocketHandlerErrors": 0
+      },
+      "errors": [],
+      "finishedAt": "2026-09-12T09:32:07.495Z"
+    },
+    {
+      "name": "history-download",
+      "startedAt": "2026-09-12T09:32:07.590Z",
+      "recordingEvents": 26445,
+      "single": {
+        "events": 26445,
+        "bytes": 50940551,
+        "pages": 53,
+        "elapsedMs": 813.18,
+        "eventsPerSecond": 32520.28,
+        "bytesPerSecond": 62643252.85
+      },
+      "concurrent": {
+        "downloads": 4,
+        "elapsedMs": 2777.01,
+        "events": 105520,
+        "bytes": 203262470,
+        "eventsPerSecond": 37997.74,
+        "bytesPerSecond": 73194783.93,
+        "server": {
+          "samples": 11,
+          "rssPeak": 280051712,
+          "rssMean": 260781149,
+          "cpuPercentPeak": 122.7,
+          "cpuPercentMean": 114.4
+        }
+      },
+      "finishedAt": "2026-09-12T09:32:11.208Z"
+    }
+  ],
+  "serverSamples": [
+    {
+      "t": 0.38,
+      "phase": "shape 4x1@25",
+      "rss": 84328448,
+      "cpu": 0.1
+    },
+    {
+      "t": 0.88,
+      "phase": "shape 4x1@25",
+      "rss": 111362048,
+      "cpu": 40.5
+    },
+    {
+      "t": 1.63,
+      "phase": "shape 4x1@25",
+      "rss": 166805504,
+      "cpu": 39.4
+    },
+    {
+      "t": 2.13,
+      "phase": "shape 4x1@25",
+      "rss": 168361984,
+      "cpu": 29.3
+    },
+    {
+      "t": 2.63,
+      "phase": "shape 4x1@25",
+      "rss": 171507712,
+      "cpu": 50.6
+    },
+    {
+      "t": 3.39,
+      "phase": "shape 4x1@25",
+      "rss": 175210496,
+      "cpu": 41.9
+    },
+    {
+      "t": 3.89,
+      "phase": "shape 4x1@25",
+      "rss": 178896896,
+      "cpu": 40.8
+    },
+    {
+      "t": 4.39,
+      "phase": "shape 4x1@25",
+      "rss": 179027968,
+      "cpu": 50.4
+    },
+    {
+      "t": 4.89,
+      "phase": "shape 4x1@25",
+      "rss": 179257344,
+      "cpu": 38.8
+    },
+    {
+      "t": 5.39,
+      "phase": "shape 4x1@25",
+      "rss": 181714944,
+      "cpu": 41.8
+    },
+    {
+      "t": 5.89,
+      "phase": "shape 4x1@25",
+      "rss": 198508544,
+      "cpu": 38.7
+    },
+    {
+      "t": 6.39,
+      "phase": "shape 4x1@25",
+      "rss": 215744512,
+      "cpu": 44.5
+    },
+    {
+      "t": 7.14,
+      "phase": "shape 4x1@25",
+      "rss": 214499328,
+      "cpu": 45.9
+    },
+    {
+      "t": 7.64,
+      "phase": "shape 4x1@25",
+      "rss": 216563712,
+      "cpu": 38.3
+    },
+    {
+      "t": 8.15,
+      "phase": "shape 4x1@25",
+      "rss": 216629248,
+      "cpu": 38.8
+    },
+    {
+      "t": 8.65,
+      "phase": "shape 4x1@25",
+      "rss": 216694784,
+      "cpu": 37.5
+    },
+    {
+      "t": 9.15,
+      "phase": "shape 4x1@25",
+      "rss": 217726976,
+      "cpu": 33
+    },
+    {
+      "t": 9.65,
+      "phase": "shape 4x1@25",
+      "rss": 218742784,
+      "cpu": 38
+    },
+    {
+      "t": 10.15,
+      "phase": "shape 4x1@25",
+      "rss": 219463680,
+      "cpu": 39.1
+    },
+    {
+      "t": 10.65,
+      "phase": "shape 4x1@25",
+      "rss": 222576640,
+      "cpu": 38.7
+    },
+    {
+      "t": 11.15,
+      "phase": "shape 4x1@25",
+      "rss": 223805440,
+      "cpu": 31
+    },
+    {
+      "t": 11.65,
+      "phase": "shape 4x1@25",
+      "rss": 227573760,
+      "cpu": 38.6
+    },
+    {
+      "t": 12.16,
+      "phase": "shape 4x1@25",
+      "rss": 227901440,
+      "cpu": 40
+    },
+    {
+      "t": 12.66,
+      "phase": "shape 4x1@25",
+      "rss": 227557376,
+      "cpu": 56.8
+    },
+    {
+      "t": 13.16,
+      "phase": "shape 4x1@25",
+      "rss": 229228544,
+      "cpu": 35.5
+    },
+    {
+      "t": 13.66,
+      "phase": "shape 4x1@25",
+      "rss": 230227968,
+      "cpu": 40.7
+    },
+    {
+      "t": 14.16,
+      "phase": "shape 4x1@25",
+      "rss": 231260160,
+      "cpu": 39.2
+    },
+    {
+      "t": 14.66,
+      "phase": "shape 4x1@25",
+      "rss": 229556224,
+      "cpu": 35.6
+    },
+    {
+      "t": 15.17,
+      "phase": "shape 4x1@25",
+      "rss": 228605952,
+      "cpu": 43.4
+    },
+    {
+      "t": 15.67,
+      "phase": "shape 4x1@25",
+      "rss": 230998016,
+      "cpu": 35.4
+    },
+    {
+      "t": 16.17,
+      "phase": "shape 4x1@25",
+      "rss": 228573184,
+      "cpu": 44.6
+    },
+    {
+      "t": 16.67,
+      "phase": "shape 4x1@25",
+      "rss": 228573184,
+      "cpu": 49.7
+    },
+    {
+      "t": 17.17,
+      "phase": "shape 4x1@25",
+      "rss": 228573184,
+      "cpu": 38.8
+    },
+    {
+      "t": 17.67,
+      "phase": "shape 4x1@25",
+      "rss": 230539264,
+      "cpu": 38
+    },
+    {
+      "t": 18.42,
+      "phase": "shape 4x1@25",
+      "rss": 231768064,
+      "cpu": 38.8
+    },
+    {
+      "t": 18.93,
+      "phase": "shape 4x1@25",
+      "rss": 231833600,
+      "cpu": 40.1
+    },
+    {
+      "t": 19.68,
+      "phase": "shape 4x1@25",
+      "rss": 230883328,
+      "cpu": 41
+    },
+    {
+      "t": 20.18,
+      "phase": "shape 4x1@25",
+      "rss": 231849984,
+      "cpu": 36.3
+    },
+    {
+      "t": 20.68,
+      "phase": "shape 4x1@25",
+      "rss": 231407616,
+      "cpu": 37.6
+    },
+    {
+      "t": 21.18,
+      "phase": "shape 4x1@25",
+      "rss": 232374272,
+      "cpu": 37.8
+    },
+    {
+      "t": 21.68,
+      "phase": "shape 4x1@25",
+      "rss": 234848256,
+      "cpu": 41.4
+    },
+    {
+      "t": 22.18,
+      "phase": "shape 4x1@25",
+      "rss": 235814912,
+      "cpu": 41.7
+    },
+    {
+      "t": 22.68,
+      "phase": "shape 4x1@25",
+      "rss": 236814336,
+      "cpu": 39.5
+    },
+    {
+      "t": 23.19,
+      "phase": "shape 4x1@25",
+      "rss": 234438656,
+      "cpu": 53.6
+    },
+    {
+      "t": 23.69,
+      "phase": "shape 4x1@25",
+      "rss": 236404736,
+      "cpu": 35.4
+    },
+    {
+      "t": 24.19,
+      "phase": "shape 4x1@25",
+      "rss": 234127360,
+      "cpu": 42.5
+    },
+    {
+      "t": 24.69,
+      "phase": "shape 4x1@25",
+      "rss": 235454464,
+      "cpu": 37.5
+    },
+    {
+      "t": 25.44,
+      "phase": "shape 4x1@25",
+      "rss": 233226240,
+      "cpu": 37.2
+    },
+    {
+      "t": 25.94,
+      "phase": "shape 4x1@25",
+      "rss": 242450432,
+      "cpu": 53
+    },
+    {
+      "t": 26.44,
+      "phase": "shape 4x1@25",
+      "rss": 243417088,
+      "cpu": 43.3
+    },
+    {
+      "t": 26.95,
+      "phase": "shape 4x1@25",
+      "rss": 242483200,
+      "cpu": 37.2
+    },
+    {
+      "t": 27.45,
+      "phase": "shape 4x1@25",
+      "rss": 244416512,
+      "cpu": 35.6
+    },
+    {
+      "t": 27.95,
+      "phase": "shape 4x1@25",
+      "rss": 243466240,
+      "cpu": 37.1
+    },
+    {
+      "t": 28.46,
+      "phase": "shape 4x1@25",
+      "rss": 243466240,
+      "cpu": 33.2
+    },
+    {
+      "t": 28.96,
+      "phase": "shape 4x1@25",
+      "rss": 243466240,
+      "cpu": 34.2
+    },
+    {
+      "t": 29.46,
+      "phase": "shape 4x1@25",
+      "rss": 246366208,
+      "cpu": 33.6
+    },
+    {
+      "t": 29.96,
+      "phase": "shape 4x1@25",
+      "rss": 246366208,
+      "cpu": 36.9
+    },
+    {
+      "t": 30.71,
+      "phase": "shape 4x1@25",
+      "rss": 243466240,
+      "cpu": 33.9
+    },
+    {
+      "t": 31.21,
+      "phase": "shape 4x1@25",
+      "rss": 242499584,
+      "cpu": 45.6
+    },
+    {
+      "t": 31.72,
+      "phase": "shape 4x1@25",
+      "rss": 241549312,
+      "cpu": 37.3
+    },
+    {
+      "t": 32.22,
+      "phase": "shape 4x1@25",
+      "rss": 243482624,
+      "cpu": 35.1
+    },
+    {
+      "t": 32.72,
+      "phase": "shape 4x1@25",
+      "rss": 241598464,
+      "cpu": 50.9
+    },
+    {
+      "t": 33.22,
+      "phase": "shape 4x1@25",
+      "rss": 242565120,
+      "cpu": 39.9
+    },
+    {
+      "t": 33.72,
+      "phase": "shape 4x1@25",
+      "rss": 244498432,
+      "cpu": 34.3
+    },
+    {
+      "t": 34.22,
+      "phase": "shape 4x1@25",
+      "rss": 245514240,
+      "cpu": 35.5
+    },
+    {
+      "t": 34.72,
+      "phase": "shape 4x1@25",
+      "rss": 241647616,
+      "cpu": 47.8
+    },
+    {
+      "t": 35.22,
+      "phase": "history",
+      "rss": 249610240,
+      "cpu": 97.5
+    },
+    {
+      "t": 35.72,
+      "phase": "history",
+      "rss": 250544128,
+      "cpu": 100.9
+    },
+    {
+      "t": 36.22,
+      "phase": "history",
+      "rss": 247103488,
+      "cpu": 118.5
+    },
+    {
+      "t": 36.73,
+      "phase": "history",
+      "rss": 266846208,
+      "cpu": 109.8
+    },
+    {
+      "t": 37.23,
+      "phase": "history",
+      "rss": 273514496,
+      "cpu": 111.3
+    },
+    {
+      "t": 37.73,
+      "phase": "history",
+      "rss": 280051712,
+      "cpu": 109.8
+    }
+  ],
+  "snapshotFailures": [
+    {
+      "key": "buildSnapshot|Error|Snapshot scheduler is closing",
+      "count": 1,
+      "firstPhase": "history",
+      "lastPhase": "history",
+      "maxElapsedMs": 17110,
+      "type": "snapshot-failure",
+      "method": "buildSnapshot",
+      "elapsedMs": 17110,
+      "name": "Error",
+      "message": "Snapshot scheduler is closing"
+    }
+  ],
+  "serverOrigin": "http://127.0.0.1:57736",
+  "finishedAt": "2026-09-12T09:32:11.209Z",
+  "serverPeakRss": 280051712
+}
