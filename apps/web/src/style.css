@@ -291,8 +291,13 @@ summary {
 summary .muted {
   margin-left: 8px;
 }
-h4 {
+h4,
+.field-heading {
   margin-bottom: 5px;
+}
+.field-heading {
+  font-size: 15px;
+  margin-top: 16px;
 }
 .card button {
   margin: 5px;
@@ -381,9 +386,28 @@ h4 {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  * {
-    scroll-behavior: auto;
+  /* The viewer has no decorative animation; this keeps any future
+     transition, and every programmatic scroll, instant. */
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
   }
+}
+/* Announcements and labels for assistive technology only. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .attachment-viewer {
   background: white;
@@ -504,6 +528,23 @@ dialog.attachment-viewer::backdrop {
 .message {
   scroll-margin-top: 150px;
 }
+@media (max-width: 380px) {
+  /* 320 CSS pixels, the WCAG reflow width, and 200% zoom of a 640px
+     window: paired fields and wide paddings no longer fit. */
+  form {
+    grid-template-columns: 1fr;
+  }
+  aside {
+    padding: 18px 12px;
+  }
+  main {
+    padding: 20px 12px;
+  }
+  .message,
+  .card {
+    padding: 13px;
+  }
+}
 @media (max-width: 480px) {
   .workflow-heading {
     flex-wrap: wrap;
@@ -519,9 +560,12 @@ dialog.attachment-viewer::backdrop {
   align-items: center;
   gap: 8px;
   font-weight: 400;
+  /* The whole label is the target; keep it at the 24px minimum. */
+  min-height: 24px;
 }
 .cache-choice input {
-  width: auto;
+  width: 17px;
+  height: 17px;
   accent-color: #265944;
 }
 
@@ -546,9 +590,14 @@ dialog.attachment-viewer::backdrop {
 .activity-row {
   padding-bottom: 15px;
 }
-.activity-row:focus {
+.activity-row:focus,
+h2:focus-visible {
   outline: 2px solid #638972;
   outline-offset: -2px;
+}
+h2[tabindex]:focus {
+  outline: 2px solid #638972;
+  outline-offset: 4px;
 }
 
 .activity-search form {

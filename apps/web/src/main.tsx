@@ -40,6 +40,14 @@ function App() {
   const [next, setNext] = useState<string | null>(null);
   const [publicListing, setPublicListing] = useState(false);
   const recoveryAttempted = useRef(false);
+  // Keyboard focus must land on the new context after joining or leaving:
+  // the control that was activated is unmounted by that same transition.
+  const streamField = useRef<HTMLInputElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const enterPlayback = useRef(false);
+  const returnToForm = useRef(false);
+  const [announcement, setAnnouncement] = useState("");
+  const announced = useRef("");
   const request = useRef<AbortController | undefined>(undefined);
   const listing = useRef<AbortController | undefined>(undefined);
   const closing = useRef<Promise<void>>(Promise.resolve());
@@ -99,7 +107,10 @@ function App() {
     },
   ) {
     if (clearing) return;
-    if (!recovery) recoveryAttempted.current = false;
+    if (!recovery) {
+      recoveryAttempted.current = false;
+      enterPlayback.current = true;
+    }
     request.current?.abort();
     closeSession(session);
     setSession(undefined);
@@ -199,6 +210,29 @@ function App() {
       );
     }
   }
+  useEffect(() => {
+    if (session) {
+      if (!enterPlayback.current) return;
+      enterPlayback.current = false;
+      heading.current?.focus();
+      return;
+    }
+    if (!returnToForm.current) return;
+    returnToForm.current = false;
+    streamField.current?.focus();
+  }, [session]);
+  const playbackMode = !session
+    ? ""
+    : session.follow
+      ? `Following live at ${speed}× speed`
+      : playing
+        ? `Playing at ${speed}× speed`
+        : `Paused at ${speed}× speed, event ${session.state.appliedSeq} of ${session.received}`;
+  useEffect(() => {
+    if (playbackMode === announced.current) return;
+    announced.current = playbackMode;
+    setAnnouncement(playbackMode);
+  }, [playbackMode]);
   const state = session?.state;
   const [checkedAttachment, setCheckedAttachment] = useState<{
     view: NonNullable<ViewerSession["view"]>;
@@ -248,7 +282,7 @@ function App() {
     <div className="shell">
       <header>
         <a className="brand" href="/">
-          ◉ <span>AgentLive</span>
+          <span aria-hidden="true">◉</span> <span>AgentLive</span>
         </a>
         <span className="tag">Shared coding sessions</span>
       </header>
@@ -284,6 +318,7 @@ function App() {
           <label>
             Recording ID
             <input
+              ref={streamField}
               value={stream}
               onChange={(event) => setStream(event.target.value)}
               required
@@ -366,7 +401,9 @@ function App() {
         )}
         {!session ? (
           <section className="empty">
-            <span className="orb">◉</span>
+            <span className="orb" aria-hidden="true">
+              ◉
+            </span>
             <h2>Every session tells a story.</h2>
             <p>Messages, tools, and artifacts—together in one timeline.</p>
             {busy && (
@@ -385,13 +422,16 @@ function App() {
             <div className="session-heading">
               <div>
                 <p className="eyebrow">RECORDING</p>
-                <h2>{state!.title || session.title}</h2>
+                <h2 ref={heading} tabIndex={-1}>
+                  {state!.title || session.title}
+                </h2>
               </div>
               <button
                 onClick={() => {
                   request.current?.abort();
                   closeSession(session);
                   setSession(undefined);
+                  returnToForm.current = true;
                   setKey("");
                 }}
               >
@@ -400,8 +440,8 @@ function App() {
             </div>
             <section className="player" aria-label="Playback controls">
               <div className="controls">
-                <span className="status" aria-live="polite">
-                  ● {session.status}
+                <span className="status" role="status">
+                  <span aria-hidden="true">●</span> Connection: {session.status}
                 </span>
                 <button
                   onClick={() => {
@@ -453,7 +493,9 @@ function App() {
                   </select>
                 </label>
                 <label className="speed">
-                  Idle gaps
+                  {/* The visible text is the accessible name: speech input
+                      must be able to address the control it can read. */}
+                  Idle gap cap
                   <select
                     aria-label="Idle gap cap"
                     value={session.idleCapMs ?? "off"}
@@ -487,6 +529,9 @@ function App() {
               </div>
               <input
                 aria-label="Timeline"
+                aria-valuetext={`${seconds(session.time)} of ${seconds(
+                  session.duration,
+                )}, event ${state!.appliedSeq} of ${session.received}`}
                 type="range"
                 min="0"
                 max={Math.max(1, session.duration)}
@@ -505,6 +550,12 @@ function App() {
                   Viewing {state!.appliedSeq} · Received {session.received}
                 </span>
               </div>
+              {/* One bounded announcement for playback mode. The elapsed
+                  time is deliberately excluded: it changes on every tick
+                  and would flood a screen reader during playback. */}
+              <p className="visually-hidden" role="status">
+                {announcement}
+              </p>
             </section>
             <p className="muted" role="status">
               {session.cacheStatus === "saved"

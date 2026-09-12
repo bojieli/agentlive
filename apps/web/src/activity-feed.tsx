@@ -38,6 +38,9 @@ export function ActivityFeed(props: {
   order: (key: string) => number;
   onAttachment: (attachment: Attachment) => void;
 }) {
+  // Replacing the presentation view remounts the feed body; the announcement
+  // baseline must not restart, or every remount would read out the recording.
+  const progress = useRef<AnnounceProgress>({ seen: -1, primed: false });
   return (
     <ExpansionProvider
       expanded={props.expandedDisclosures}
@@ -53,10 +56,60 @@ export function ActivityFeed(props: {
             Activity view does not match the selected playback position.
           </p>
         ) : (
-          <VirtualActivity {...props} />
+          <VirtualActivity {...props} progress={progress} />
         )}
       </TextPagesProvider>
     </ExpansionProvider>
+  );
+}
+/** One coalesced announcement for arriving activity, outside the feed. */
+const ANNOUNCE_INTERVAL_MS = 2000;
+interface AnnounceProgress {
+  seen: number;
+  primed: boolean;
+}
+function ActivityAnnouncer({
+  count,
+  progress,
+}: {
+  count: number;
+  progress: { current: AnnounceProgress };
+}) {
+  const [message, setMessage] = useState("");
+  const latest = useRef(count);
+  if (count > 0) latest.current = count;
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(() => {
+    // A replaced presentation reports no rows for an instant. That gap is
+    // neither new activity nor a seek: it must not move the baseline, and a
+    // flush landing inside it must still compare against the last real count.
+    if (count === 0) return;
+    // Seeking backward reduces the count; that is not new activity.
+    if (count <= progress.current.seen) {
+      if (timer.current === undefined) progress.current.seen = count;
+      return;
+    }
+    if (timer.current !== undefined) return;
+    timer.current = setTimeout(() => {
+      timer.current = undefined;
+      const added = latest.current - progress.current.seen;
+      progress.current.seen = latest.current;
+      // The first settled batch is the feed itself arriving, not new work.
+      if (!progress.current.primed) {
+        progress.current.primed = true;
+        return;
+      }
+      if (added > 0)
+        setMessage(
+          `${added} new activity item${added === 1 ? "" : "s"}; ${latest.current} in view.`,
+        );
+    }, ANNOUNCE_INTERVAL_MS);
+  }, [count, progress]);
+  return (
+    <p className="visually-hidden" role="status" aria-atomic="true">
+      {message}
+    </p>
   );
 }
 function VirtualActivity({
@@ -66,7 +119,10 @@ function VirtualActivity({
   onPause,
   order,
   onAttachment,
-}: Parameters<typeof ActivityFeed>[0]) {
+  progress,
+}: Parameters<typeof ActivityFeed>[0] & {
+  progress: { current: AnnounceProgress };
+}) {
   const rows = useMemo(
     () => (view ? [] : activityRows(state, order)),
     [state, state.appliedSeq, order, view],
@@ -77,6 +133,7 @@ function VirtualActivity({
   const [focused, setFocused] = useState<string>();
   const [pending, setPending] = useState<string>();
   const navigationTarget = useRef<string | undefined>(undefined);
+  const mounted = useRef(-1);
   const [pagedFocus, setPagedFocus] = useState(-1);
   const [loaded, setLoaded] = useState<{
     view: PagedActivityView;
@@ -216,6 +273,7 @@ function VirtualActivity({
         }
         setFocused(row.key);
         navigationTarget.current = row.key;
+        mounted.current = index;
         if (view) setPagedFocus(index);
         setPending(row.key);
         virtualizer.scrollToIndex(index, { align: "start" });
@@ -314,6 +372,25 @@ function VirtualActivity({
         align: "start",
       });
   }, [focused, focusedIndex, items, virtualizer]);
+  // Removing the focused element does not reliably produce a blur event, and
+  // live receipt replaces every virtual row element under the focused item.
+  // Whenever focus was inside the region and the document holds it instead,
+  // return it to the remounted row, or to the region itself.
+  useLayoutEffect(() => {
+    const viewport = parent.current;
+    const index = mounted.current;
+    // An explicit navigation owns focus until it commits on its target row.
+    if (!viewport || index < 0 || pending) return;
+    const active = viewport.ownerDocument.activeElement;
+    if (
+      active &&
+      active !== viewport.ownerDocument.body &&
+      active !== viewport.ownerDocument.documentElement
+    )
+      return;
+    const row = viewport.querySelector<HTMLElement>(`[data-index="${index}"]`);
+    (row ?? viewport).focus({ preventScroll: true });
+  });
   // A seek may remove the focused object; return focus to the activity region.
   useLayoutEffect(() => {
     if (!view && focused && focusedIndex < 0) {
@@ -324,6 +401,7 @@ function VirtualActivity({
   }, [view, focused, focusedIndex]);
   return (
     <section className="activity" aria-label="Session activity">
+      <ActivityAnnouncer count={count} progress={progress} />
       <ActivitySearchPanel
         state={state}
         rows={rows}
@@ -370,6 +448,7 @@ function VirtualActivity({
           );
           if (item) {
             const index = Number(item.dataset.index);
+            mounted.current = index;
             const row = rowAt(index);
             if (row) {
               setFocused(row.key);
@@ -378,12 +457,40 @@ function VirtualActivity({
           }
         }}
         onBlurCapture={(event) => {
-          if (
-            !event.currentTarget.contains(event.relatedTarget as Node | null)
-          ) {
+          const viewport = event.currentTarget;
+          const next = event.relatedTarget as Node | null;
+          if (next && viewport.contains(next)) return;
+          const target = event.target as HTMLElement;
+          const index = mounted.current;
+          if (next || index < 0) {
             navigationTarget.current = undefined;
+            mounted.current = -1;
             setFocused(undefined);
+            return;
           }
+          // Live receipt replaces virtual row elements under the focused
+          // item, and the browser then drops focus on the document body.
+          // Restore it to the replacement row, or to the region.
+          queueMicrotask(() => {
+            if (!viewport.isConnected) return;
+            const active = viewport.ownerDocument.activeElement;
+            if (
+              active &&
+              active !== viewport.ownerDocument.body &&
+              active !== viewport.ownerDocument.documentElement
+            )
+              return;
+            if (target.isConnected) {
+              navigationTarget.current = undefined;
+              mounted.current = -1;
+              setFocused(undefined);
+              return;
+            }
+            const row = viewport.querySelector<HTMLElement>(
+              `[data-index="${index}"]`,
+            );
+            (row ?? viewport).focus({ preventScroll: true });
+          });
         }}
         onClick={(event) => {
           const link = (event.target as Element).closest<HTMLAnchorElement>(
@@ -404,6 +511,10 @@ function VirtualActivity({
           window.dispatchEvent(new HashChangeEvent("hashchange"));
         }}
         onKeyDown={(event) => {
+          // Paging keys scroll the region natively; that is the viewer taking
+          // over scrolling, exactly like a wheel or touch gesture.
+          if (event.key === "PageDown" || event.key === "PageUp")
+            navigationTarget.current = undefined;
           if (
             (event.target as Element).closest(
               "button,a,summary,input,select,textarea",
@@ -439,7 +550,10 @@ function VirtualActivity({
                 role="listitem"
                 aria-setsize={count}
                 aria-posinset={item.index + 1}
-                tabIndex={0}
+                // Roving tab stop: mounted rows must not add a dozen empty
+                // stops to the page's Tab order. The region is the entry
+                // point and arrow keys move between items.
+                tabIndex={item.index === focusedIndex ? 0 : -1}
                 className="activity-row"
                 style={{
                   position: "absolute",
@@ -450,7 +564,9 @@ function VirtualActivity({
                 }}
               >
                 {!row ? (
-                  <p role="status">Loading activity…</p>
+                  // Never a live region: virtual rows mount and unmount
+                  // constantly, and a screen reader would read every one.
+                  <p className="muted">Loading activity…</p>
                 ) : view ? (
                   <PagedActivityCard
                     row={row}

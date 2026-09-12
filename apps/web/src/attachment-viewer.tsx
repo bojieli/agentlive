@@ -42,8 +42,25 @@ export function AttachmentViewer({
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const element = dialog.current!;
+    // The opener can be a virtualized row that is unmounted while the dialog
+    // is open, which defeats the browser's own focus restoration and drops
+    // focus on the document body.
+    const opener = document.activeElement;
     element.showModal();
-    return () => element.close();
+    return () => {
+      element.close();
+      if (
+        document.activeElement &&
+        document.activeElement !== document.body &&
+        document.activeElement !== document.documentElement
+      )
+        return;
+      const fallback =
+        opener instanceof HTMLElement && opener.isConnected
+          ? opener
+          : document.querySelector<HTMLElement>(".activity-viewport");
+      fallback?.focus({ preventScroll: true });
+    };
   }, []);
   useEffect(() => {
     const stop = new AbortController(),
@@ -109,7 +126,7 @@ export function AttachmentViewer({
       ref={dialog}
       onCancel={onClose}
       className="attachment-viewer"
-      aria-label="Attachment inspector"
+      aria-label={`Attachment inspector: ${attachment.filename}, version ${attachment.version}`}
     >
       <div className="session-heading">
         <div>

@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { createRequire } from "node:module";
 import { activityRange } from "../../apps/web/src/activity-range.js";
 import { ActivityCard, activityRows } from "../../apps/web/src/activity.js";
+import { ActivityFeed } from "../../apps/web/src/activity-feed.js";
 import { apply, initialState } from "../../packages/playback/src/index.js";
 import type {
   EventContent,
@@ -119,4 +120,111 @@ it("uses the production virtualizer to measure dynamic rows without mounting the
   ).toBe(400);
   expect(viewport.getTotalSize()).toBe(10_000_300);
   expect(after.length).toBeLessThanOrEqual(16);
+});
+
+it("gives cards accessible structure without announcing remounted rows", () => {
+  let state = initialState();
+  const append = (content: EventContent) => {
+    const event: StoredEvent = {
+      protocolVersion: 1,
+      serverSeq: state.appliedSeq + 1,
+      timelineMs: state.appliedSeq,
+      receivedAt: "2026-09-12T00:00:00Z",
+      origin: { type: "server", operationId: String(state.appliedSeq) },
+      content,
+    };
+    state = apply(state, event);
+  };
+  append({
+    kind: "tool.started",
+    payload: { toolId: "tool", name: "Read", input: "tool input" },
+  });
+  append({
+    kind: "tool.completed",
+    payload: { toolId: "tool", status: "completed", output: "tool output" },
+  });
+  for (let version = 1; version <= 40; version++)
+    append({
+      kind: "attachment.available",
+      payload: {
+        attachment: {
+          artifactId: "artifact",
+          version,
+          hash: "a".repeat(64),
+          byteSize: 3,
+          filename: "notes.txt",
+          mediaType: "text/plain",
+        },
+      },
+    });
+  const order = (key: string) =>
+    ["tools/tool", "artifacts/artifact"].indexOf(key);
+  const rows = activityRows(state, order);
+  const card = (index: number) =>
+    renderToStaticMarkup(
+      createElement(ActivityCard, {
+        row: rows[index],
+        state,
+        onAttachment: () => {},
+      }),
+    );
+  // The session title is a level 2 heading, so a card's own headings must
+  // start at level 3: a screen reader's heading list cannot skip a level.
+  const tool = card(0);
+  expect(tool).toContain('<h3 class="field-heading">Input</h3>');
+  expect(tool).toContain('<h3 class="field-heading">Output</h3>');
+  expect(tool).not.toMatch(/<h[456]/);
+  // A mounted row carries no announcement text: virtual rows remount
+  // constantly, and a filled live region would read every one of them.
+  const artifact = card(1);
+  expect(artifact).toContain("Versions 1–32 of 40");
+  expect(artifact).toMatch(
+    /<span class="visually-hidden" role="status" aria-atomic="true"><\/span>/,
+  );
+  expect(artifact).not.toMatch(/role="status"[^>]*>[^<]/);
+  expect(artifact).not.toMatch(/aria-live/);
+});
+
+it("announces arriving activity outside the scrolling feed", () => {
+  let state = initialState();
+  const append = (content: EventContent) => {
+    const event: StoredEvent = {
+      protocolVersion: 1,
+      serverSeq: state.appliedSeq + 1,
+      timelineMs: state.appliedSeq,
+      receivedAt: "2026-09-12T00:00:00Z",
+      origin: { type: "server", operationId: String(state.appliedSeq) },
+      content,
+    };
+    state = apply(state, event);
+  };
+  for (const id of ["one", "two", "three"]) {
+    append({
+      kind: "message.started",
+      payload: { messageId: id, role: "assistant" },
+    });
+    append({
+      kind: "message.text.append",
+      payload: { messageId: id, text: `Message ${id}.` },
+    });
+  }
+  const feed = renderToStaticMarkup(
+    createElement(ActivityFeed, {
+      state,
+      following: true,
+      onPause: () => {},
+      order: () => 0,
+      onAttachment: () => {},
+    }),
+  );
+  const viewport = feed.slice(feed.indexOf('class="activity-viewport"'));
+  // The feed itself is never a live region: following live replaces its rows
+  // continuously, and a screen reader would read the whole recording again.
+  expect(viewport).not.toContain("aria-live");
+  expect(viewport).not.toContain('role="status"');
+  expect(viewport).toContain('role="region"');
+  // One empty polite announcement lives beside the feed instead.
+  expect(feed).toMatch(
+    /<p class="visually-hidden" role="status" aria-atomic="true"><\/p>/,
+  );
 });

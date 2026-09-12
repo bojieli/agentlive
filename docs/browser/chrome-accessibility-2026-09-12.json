@@ -1,0 +1,325 @@
+{
+  "success": true,
+  "checks": [
+    "cached private join",
+    "fresh IndexedDB imports server snapshot blobs",
+    "exact tied previous event",
+    "idle cap control",
+    "live receipt preserves paused prefix",
+    "IndexedDB survives page reload with exact selection",
+    "renderer crash preserves committed cached selection",
+    "keyboard next event",
+    "active generation recovery preserves paused presentation",
+    "follow live",
+    "activity keyboard navigation retains row focus",
+    "desktop viewport has no document overflow",
+    "mobile viewport has no document overflow",
+    "paged activity search",
+    "clear persistent playback cache",
+    "uncached fallback joins and steps",
+    "multi-row virtualized keyboard navigation in both cache modes",
+    "tool disclosure and text page choices survive cached reopen",
+    "attachment inspector restores exact version and rejects unavailable history",
+    "automatic latest text survives paused virtual remount in both cache modes",
+    "attachment version pages survive remount, cached reopen and history clamping",
+    "keyboard-only join reaches the private form and enters playback",
+    "every visible control is reachable by Tab and has a name",
+    "player controls follow Tab order and announce playback state",
+    "accessibility tree exposes landmarks, headings and alternatives",
+    "activity announcements are polite, atomic and outside the feed",
+    "row focus survives virtualized remounting during live receipt",
+    "focus stays with a row scrolled out of view and returns on arrow keys",
+    "keyboard search opens a result and moves focus to the row",
+    "tool disclosure and text paging operate from the keyboard",
+    "attachment dialog labels, traps and restores keyboard focus",
+    "leaving with the keyboard returns focus to the join form",
+    "reduced motion keeps every transition and scroll instant",
+    "reflow-320 keeps controls visible without horizontal scrolling",
+    "zoom-200 keeps controls visible without horizontal scrolling"
+  ],
+  "errors": [],
+  "timings": [
+    {
+      "name": "cached private join",
+      "elapsedMs": 182.10820799999988
+    },
+    {
+      "name": "fresh IndexedDB imports server snapshot blobs",
+      "elapsedMs": 75.01199999999994
+    },
+    {
+      "name": "exact tied previous event",
+      "elapsedMs": 87.08850000000007
+    },
+    {
+      "name": "idle cap control",
+      "elapsedMs": 3.5437919999999394
+    },
+    {
+      "name": "live receipt preserves paused prefix",
+      "elapsedMs": 30.11983299999997
+    },
+    {
+      "name": "IndexedDB survives page reload with exact selection",
+      "elapsedMs": 182.1311250000001
+    },
+    {
+      "name": "renderer crash preserves committed cached selection",
+      "elapsedMs": 557.866041
+    },
+    {
+      "name": "keyboard next event",
+      "elapsedMs": 28.660207999999784
+    },
+    {
+      "name": "active generation recovery preserves paused presentation",
+      "elapsedMs": 731.1542080000004
+    },
+    {
+      "name": "follow live",
+      "elapsedMs": 29.13320799999974
+    },
+    {
+      "name": "activity keyboard navigation retains row focus",
+      "elapsedMs": 30.34737499999983
+    },
+    {
+      "name": "desktop viewport has no document overflow",
+      "elapsedMs": 357.0224169999997
+    },
+    {
+      "name": "mobile viewport has no document overflow",
+      "elapsedMs": 289.86645799999997
+    },
+    {
+      "name": "paged activity search",
+      "elapsedMs": 58.618291999999656
+    },
+    {
+      "name": "clear persistent playback cache",
+      "elapsedMs": 50.11604200000011
+    },
+    {
+      "name": "uncached fallback joins and steps",
+      "elapsedMs": 251.38237500000014
+    },
+    {
+      "name": "multi-row virtualized keyboard navigation in both cache modes",
+      "elapsedMs": 28033.573708
+    },
+    {
+      "name": "tool disclosure and text page choices survive cached reopen",
+      "elapsedMs": 1403.0241669999996
+    },
+    {
+      "name": "attachment inspector restores exact version and rejects unavailable history",
+      "elapsedMs": 996.0749159999978
+    },
+    {
+      "name": "automatic latest text survives paused virtual remount in both cache modes",
+      "elapsedMs": 1345.7530000000042
+    },
+    {
+      "name": "attachment version pages survive remount, cached reopen and history clamping",
+      "elapsedMs": 4420.332291999999
+    },
+    {
+      "name": "keyboard-only join reaches the private form and enters playback",
+      "elapsedMs": 132.43079099999886
+    },
+    {
+      "name": "every visible control is reachable by Tab and has a name",
+      "elapsedMs": 96.50720800000272
+    },
+    {
+      "name": "player controls follow Tab order and announce playback state",
+      "elapsedMs": 1745.494458000001
+    },
+    {
+      "name": "accessibility tree exposes landmarks, headings and alternatives",
+      "elapsedMs": 9.984542000005604
+    },
+    {
+      "name": "activity announcements are polite, atomic and outside the feed",
+      "elapsedMs": 7608.289833000003
+    },
+    {
+      "name": "row focus survives virtualized remounting during live receipt",
+      "elapsedMs": 123.48516599999857
+    },
+    {
+      "name": "focus stays with a row scrolled out of view and returns on arrow keys",
+      "elapsedMs": 802.6478329999954
+    },
+    {
+      "name": "keyboard search opens a result and moves focus to the row",
+      "elapsedMs": 832.0700419999994
+    },
+    {
+      "name": "tool disclosure and text paging operate from the keyboard",
+      "elapsedMs": 171.28262499999983
+    },
+    {
+      "name": "attachment dialog labels, traps and restores keyboard focus",
+      "elapsedMs": 216.92004099999758
+    },
+    {
+      "name": "leaving with the keyboard returns focus to the join form",
+      "elapsedMs": 4.819500000005064
+    },
+    {
+      "name": "reduced motion keeps every transition and scroll instant",
+      "elapsedMs": 156.96712500000285
+    },
+    {
+      "name": "reflow-320 keeps controls visible without horizontal scrolling",
+      "elapsedMs": 514.098874999996
+    },
+    {
+      "name": "zoom-200 keeps controls visible without horizontal scrolling",
+      "elapsedMs": 522.1363750000019
+    }
+  ],
+  "phase": "complete",
+  "browser": "152.0.7977.83",
+  "accessibility": {
+    "desktop": {
+      "passedRules": 27,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a > span[aria-hidden=\"true\"]"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            },
+            {
+              "target": [
+                ".status > span[aria-hidden=\"true\"]"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    },
+    "mobile": {
+      "passedRules": 27,
+      "incompleteRules": [
+        {
+          "id": "color-contrast",
+          "nodes": [
+            {
+              "target": [
+                "a > span[aria-hidden=\"true\"]"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            },
+            {
+              "target": [
+                ".status > span[aria-hidden=\"true\"]"
+              ],
+              "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
+            }
+          ]
+        }
+      ],
+      "violations": []
+    },
+    "reflow-320": {
+      "passedRules": 28,
+      "incompleteRules": [
+        "color-contrast"
+      ],
+      "violations": []
+    },
+    "zoom-200": {
+      "passedRules": 28,
+      "incompleteRules": [
+        "color-contrast"
+      ],
+      "violations": []
+    }
+  },
+  "navigation": [
+    {
+      "cached": true,
+      "totalRows": 65,
+      "mountedRows": 12,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    },
+    {
+      "cached": false,
+      "totalRows": 65,
+      "mountedRows": 11,
+      "focusedPosition": 1,
+      "manualScrollPreserved": true
+    }
+  ],
+  "keyboard": {
+    "joinStops": 5,
+    "tabStops": 20,
+    "controls": 21,
+    "namedControls": 22,
+    "timeline": {
+      "start": "0.0s of 0.0s, event 1 of 268",
+      "end": "0.0s of 0.0s, event 268 of 268"
+    },
+    "liveFocus": {
+      "before": "72",
+      "after": "72"
+    },
+    "offscreenFocusRetained": true,
+    "searchResultPosition": "8",
+    "textPaging": "Tool output: page 2 of 3",
+    "dialogTabStops": 8,
+    "dialogStops": 10,
+    "leaveRestoresForm": true
+  },
+  "semantics": {
+    "landmarks": [
+      "banner:",
+      "complementary:",
+      "main:",
+      "region:Playback controls",
+      "region:Session activity",
+      "search:",
+      "region:Scrollable session activity; use arrow keys to move between items"
+    ],
+    "headings": [
+      1,
+      2
+    ],
+    "announcement": "3 new activity items; 72 in view.",
+    "liveRegions": [
+      "status:page",
+      "status:page",
+      "status:page",
+      "status:page",
+      "status:page"
+    ]
+  },
+  "reducedMotion": {
+    "animated": [],
+    "elements": 173,
+    "running": 0
+  },
+  "reflow": {
+    "reflow-320": {
+      "width": 320,
+      "scrollWidth": 320,
+      "targets": 21,
+      "smallestTarget": 18
+    },
+    "zoom-200": {
+      "width": 640,
+      "scrollWidth": 640,
+      "targets": 21,
+      "smallestTarget": 18
+    }
+  }
+}

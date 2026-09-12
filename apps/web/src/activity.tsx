@@ -10,6 +10,8 @@ import {
 } from "./workflow-card.js";
 import { PagedText, useInspectionOffset } from "./paged-text.js";
 import { Disclosure } from "./disclosure.js";
+import { ChangeStatus } from "./announce.js";
+import { useState } from "react";
 export type ActivityKind =
   WorkflowKind | "messages" | "tools" | "changes" | "artifacts" | "gaps";
 export interface ActivityRow {
@@ -74,6 +76,7 @@ export function ActivityCard({
   const [versionOffset, setVersionOffset] = useInspectionOffset(
     `${row.key}/versions`,
   );
+  const [pageChanged, setPageChanged] = useState(false);
   switch (kind) {
     case "messages": {
       const message = state.messages.get(id)!;
@@ -107,14 +110,14 @@ export function ActivityCard({
             {...(tool.agentId ? { id: tool.agentId } : {})}
             state={state}
           />
-          <h4>Input</h4>
+          <h3 className="field-heading">Input</h3>
           <PagedText
             text={texts?.input ?? tool.input}
             group={row.key}
             choice={`${row.key}/input`}
             label="Tool input"
           />
-          <h4>Output</h4>
+          <h3 className="field-heading">Output</h3>
           <PagedText
             text={texts?.output ?? tool.output}
             group={row.key}
@@ -152,7 +155,18 @@ export function ActivityCard({
         if (versions.length === 32) break;
         index++;
       }
-      const page = artifactPage ?? { offset, total, select: setVersionOffset };
+      const chosen = artifactPage ?? {
+        offset,
+        total,
+        select: setVersionOffset,
+      };
+      const page = {
+        ...chosen,
+        select: (value: number) => {
+          setPageChanged(true);
+          chosen.select(value);
+        },
+      };
       return (
         <section className="card" id={row.anchor}>
           <strong>{artifact.filename}</strong>
@@ -171,6 +185,12 @@ export function ActivityCard({
                 Versions {page.offset + 1}–{page.offset + versions.length} of{" "}
                 {page.total}
               </span>
+              <ChangeStatus
+                changed={pageChanged}
+                text={`Versions ${page.offset + 1} to ${
+                  page.offset + versions.length
+                } of ${page.total}`}
+              />
               <button
                 disabled={page.offset === 0}
                 onClick={() => page.select(Math.max(0, page.offset - 32))}

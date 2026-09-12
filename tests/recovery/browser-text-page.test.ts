@@ -60,3 +60,21 @@ it("bounds production text markup while preserving navigation to the rest", () =
   const last = textPage(text, Number.MAX_SAFE_INTEGER);
   expect(last.text).toContain("END_MARKER");
 });
+it("keeps the page announcement silent until the viewer turns a page", () => {
+  const html = renderToStaticMarkup(
+    createElement(PagedText, {
+      text: "a".repeat(1024 * 1024),
+      choice: "tool/output",
+      group: "tool",
+      label: "Tool output",
+    }),
+  );
+  // The region exists before the change, so assistive technology can report
+  // it, but it is empty while the row is only being scrolled into view.
+  expect(html).toContain('role="status"');
+  expect(html).toMatch(
+    /<span class="visually-hidden" role="status" aria-atomic="true"><\/span>/,
+  );
+  expect(html).not.toMatch(/role="status"[^>]*>[^<]/);
+  expect(html).toContain("Tool output: page 1 of");
+});

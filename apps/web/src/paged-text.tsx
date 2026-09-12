@@ -19,6 +19,7 @@ import {
   type ReactNode,
 } from "react";
 import { pageContaining, textPage } from "./text-page.js";
+import { ChangeStatus } from "./announce.js";
 type Position = TextPosition;
 interface Reveal {
   query: string;
@@ -129,6 +130,7 @@ function MemoryText({
 }) {
   const pages = useContext(Pages);
   const [local, setLocal] = useState<Position>(0);
+  const [changed, setChanged] = useState(false);
   const handled = pages?.handled.get(choice);
   const selected =
     pages?.positions.get(choice) ?? (pages?.following ? "latest" : local);
@@ -138,6 +140,7 @@ function MemoryText({
     selected === "latest" ? Number.MAX_SAFE_INTEGER : selected,
   );
   const set = (page: Position) => {
+    setChanged(true);
     if (pages) pages.set(choice, page);
     else setLocal(page);
   };
@@ -157,6 +160,10 @@ function MemoryText({
           <span className="muted">
             {label}: page {result.page + 1} of {result.count}
           </span>
+          <ChangeStatus
+            changed={changed}
+            text={`${label}: page ${result.page + 1} of ${result.count}`}
+          />
           <button disabled={result.page === 0} onClick={() => set(0)}>
             First
           </button>
@@ -209,6 +216,7 @@ function StoredText({
   label?: string;
 }) {
   const [attempt, setAttempt] = useState(0);
+  const [changed, setChanged] = useState(false);
   const pages = useContext(Pages),
     [local, setLocal] = useState<Position>(0);
   const selected =
@@ -241,6 +249,7 @@ function StoredText({
       ? failure.message
       : undefined;
   const set = (page: Position) => {
+    setChanged(true);
     if (pages) pages.set(choice, page);
     else setLocal(page);
   };
@@ -303,6 +312,10 @@ function StoredText({
           <span className="muted">
             {label}: page {target + 1} of {count}
           </span>
+          <ChangeStatus
+            changed={changed}
+            text={`${label}: page ${target + 1} of ${count}`}
+          />
           <button disabled={target === 0} onClick={() => set(0)}>
             First
           </button>

@@ -1,3 +1,4 @@
+import { ProtocolError } from "@agentlive/protocol";
 import { useEffect, useState } from "react";
 import { useInspectionOffset } from "./paged-text.js";
 import { ActivityCard, type ActivityRow } from "./activity.js";
@@ -32,6 +33,7 @@ export function PagedActivityCard({
   useEffect(() => {
     const stop = new AbortController(),
       signal = AbortSignal.any([stop.signal, AbortSignal.timeout(10000)]);
+    let retry: ReturnType<typeof setTimeout> | undefined;
     void view
       .load(row, signal, offset)
       .then((loaded) => {
@@ -39,20 +41,34 @@ export function PagedActivityCard({
           setSaved({ view, key: row.key, offset, attempt, loaded });
       })
       .catch((error) => {
-        if (!stop.signal.aborted)
-          setSaved({
-            view,
-            key: row.key,
-            offset,
-            attempt,
-            loaded: null,
-            error:
-              error instanceof Error
-                ? error.message
-                : "Unable to load activity",
-          });
+        if (stop.signal.aborted) return;
+        // Bounded store concurrency is backpressure, not a failure: retry it
+        // instead of raising an assertive alert inside the scrolling feed.
+        if (
+          error instanceof ProtocolError &&
+          error.code === "retry_later" &&
+          attempt < 8
+        ) {
+          retry = setTimeout(
+            () => setAttempt((value) => value + 1),
+            50 * (attempt + 1),
+          );
+          return;
+        }
+        setSaved({
+          view,
+          key: row.key,
+          offset,
+          attempt,
+          loaded: null,
+          error:
+            error instanceof Error ? error.message : "Unable to load activity",
+        });
       });
-    return () => stop.abort();
+    return () => {
+      clearTimeout(retry);
+      stop.abort();
+    };
   }, [view, row.key, row.kind, row.id, offset, attempt]);
   if (!current)
     return (
