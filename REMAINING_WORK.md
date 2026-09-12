@@ -37,10 +37,18 @@ The user-directed order remains: finish missing product features, then performan
 - Broader media and module-syntax previews; cross-browser isolation and resource-exhaustion acceptance.
 - Interrupted/versioned uploads, export pins and garbage collection across lifecycle operations.
 
+## Security findings still open
+
+From the 2026-09-12 review (the authorization layer itself was probed route by route and found sound):
+
+- Disabling a hosted account does not stop that account's live publisher or public serving: publishing authorizes on the per-recording write secret alone, so an abusive account keeps appending and its public recording keeps being served and listed. Moderation currently needs per-recording removal as well.
+- Archive import and export stage up to ~9 GiB per in-flight request in the system temporary directory, outside every storage limit and the free-space floor, by any authenticated account. Stage under the accounted data directory or charge the staging size.
+- Redaction is exact-substring only, so case variants and base64/URL/JSON-escaped copies of a secret survive by design; restate this wherever redaction is promised.
+
 ## 4. Publisher durability and spool lifecycle — M1/M2
 
-- Durable capture before the first remote binding exists, reconciled later.
-- Segmented outbox pruning with safe retention of source mappings, filter tails, checkpoints and artifact dependencies.
+- Retention for OpenCode and import bindings, whose journals still grow without bound because they rebuild converter state by replaying from sequence zero.
+- Sealed source-key index checksums are verified in bulk reads but not on every lookup, so same-size bit rot can cause a missed dedup and one duplicate capture.
 - Unavailable artifact work must not block unrelated capture/delivery indefinitely.
 - Explicit publisher epoch handoff and the remaining lifecycle/recovery fault matrix.
 - A single-step `publish --new-stream` (today: `finish`, then `retire`, then `publish`), and a way to start a new recording from the current native position instead of the retained beginning.

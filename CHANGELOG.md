@@ -6,6 +6,11 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 
 ### Added
 
+- `agentlive visibility --stream <id> [--visibility public|unlisted|private]` reads and changes a recording's visibility from the command line.
+- The server reclaims superseded snapshot content automatically, keeping the current head, every unexpired lease and every pinned read; `serve --no-snapshot-collection` disables it.
+- Live file publishing keeps a bounded, segmented journal instead of an ever-growing `capture.jsonl`, and captures durably before the recording exists, so a session started while the server is unreachable is recorded and delivered when it returns.
+- `pnpm probe:release` rehearses the whole publish → watch → rewind → catch up → replay journey against the installed package.
+
 - Publication control commands: `agentlive status`, `pause`, `resume`, `finish` and `reopen` operate on local publisher bindings without printing credentials or content; `agentlive retire` sets a finished binding aside so the next publish of that native session starts a new recording; `agentlive doctor` checks the runtime, credentials, server and installed agents.
 - `serve` reports the viewer URLs that actually reach it and whether it is reachable only from this machine.
 - `publish` output includes the recording's stable `viewerUrl`; `watch` and `replay` accept a viewer URL; the server redirects `/s/<id>` short links.
@@ -22,6 +27,10 @@ AgentLive has not made a versioned release yet. This file records notable user-v
 - A synthetic sample recording in `docs/sample` that replays without a server or agent.
 
 ### Fixed
+
+- Secret redaction no longer depends on a file extension or a transcript-supplied media type (security finding; see the commit for the exact rule).
+- `recover-publisher` works against a pruned journal; previously it replayed from sequence zero and would have failed on any publisher that had compacted.
+- A failed online-backup cleanup no longer wedges every later backup or leaves the plaintext owner credential in the partial output.
 
 - Long uncached browser playback no longer fails at the memory store's entry quota: generational collection, cheaper validation and compact blob storage let a 500,000-event recording play back under default limits.
 - Kimi histories whose tool results contain a single content-part object (Kimi 1.5 image outputs) no longer fail conversion.
