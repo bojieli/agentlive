@@ -1,0 +1,9 @@
+# Recorded evidence: probe reports and measurements are artifacts of a run.
+# Reformatting them rewrites the record, so leave their bytes alone.
+docs/browser/*.json
+docs/performance/*.json
+docs/terminal/*.json
+deployment/*.json
+probe-results/
+# Verbatim historical copies of former status documents.
+docs/history/

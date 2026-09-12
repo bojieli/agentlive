@@ -190,11 +190,15 @@
           "id": "color-contrast",
           "nodes": [
             {
-              "target": ["a > span[aria-hidden=\"true\"]"],
+              "target": [
+                "a > span[aria-hidden=\"true\"]"
+              ],
               "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
             },
             {
-              "target": [".status > span[aria-hidden=\"true\"]"],
+              "target": [
+                ".status > span[aria-hidden=\"true\"]"
+              ],
               "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
             }
           ]
@@ -209,11 +213,15 @@
           "id": "color-contrast",
           "nodes": [
             {
-              "target": ["a > span[aria-hidden=\"true\"]"],
+              "target": [
+                "a > span[aria-hidden=\"true\"]"
+              ],
               "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
             },
             {
-              "target": [".status > span[aria-hidden=\"true\"]"],
+              "target": [
+                ".status > span[aria-hidden=\"true\"]"
+              ],
               "failureSummary": "Fix any of the following:\n  Element content contains only non-text characters"
             }
           ]
@@ -223,12 +231,16 @@
     },
     "reflow-320": {
       "passedRules": 28,
-      "incompleteRules": ["color-contrast"],
+      "incompleteRules": [
+        "color-contrast"
+      ],
       "violations": []
     },
     "zoom-200": {
       "passedRules": 28,
-      "incompleteRules": ["color-contrast"],
+      "incompleteRules": [
+        "color-contrast"
+      ],
       "violations": []
     }
   },
@@ -278,7 +290,10 @@
       "search:",
       "region:Scrollable session activity; use arrow keys to move between items"
     ],
-    "headings": [1, 2],
+    "headings": [
+      1,
+      2
+    ],
     "announcement": "3 new activity items; 72 in view.",
     "liveRegions": [
       "status:page",

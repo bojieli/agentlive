@@ -10,7 +10,9 @@
   "startedAt": "2026-09-12T09:31:32.755Z",
   "fixture": "load-v1",
   "options": {
-    "shapes": ["4x1@25"],
+    "shapes": [
+      "4x1@25"
+    ],
     "seconds": 30,
     "rampMs": 4000,
     "eventBytes": 1024,
@@ -26,7 +28,11 @@
     "attachmentBytes": 16777216,
     "socketProbe": 300,
     "cacheProbe": 160,
-    "skip": ["attachment", "slow-viewer", "capacity"]
+    "skip": [
+      "attachment",
+      "slow-viewer",
+      "capacity"
+    ]
   },
   "limits": {
     "publishBatch": "100 events or 256 KiB",

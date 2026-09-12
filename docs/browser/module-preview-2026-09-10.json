@@ -20,5 +20,9 @@
     "verified-source-download",
     "selection-and-mobile-viewport"
   ],
-  "screenshots": ["desktop.png", "mobile.png", "interactive-mobile.png"]
+  "screenshots": [
+    "desktop.png",
+    "mobile.png",
+    "interactive-mobile.png"
+  ]
 }
