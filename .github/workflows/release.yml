@@ -26,7 +26,19 @@ jobs:
           test "v$version" = "$GITHUB_REF_NAME"
       - name: Build publishable package
         run: node scripts/build-package.mjs --release
-      - name: Publish with provenance
-        run: npm publish dist/release/agentlive-*.tgz --provenance --access public
+      # Trusted publishing (OIDC) is preferred and needs no secret: it is used as
+      # soon as the npm environment has no NPM_TOKEN, and it attests provenance by
+      # itself. npm cannot attach a trusted publisher to a package that does not
+      # exist yet, so the very first release of a new name still needs a granular
+      # token; deleting the secret afterwards is the whole migration.
+      - name: Publish
+        run: |
+          if [ -n "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "Publishing with the npm environment token."
+            npm publish dist/release/agentlive-*.tgz --provenance --access public
+          else
+            echo "Publishing with trusted publishing (OIDC); provenance is automatic."
+            npm publish dist/release/agentlive-*.tgz --access public
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

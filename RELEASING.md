@@ -36,10 +36,20 @@ Before a first public release, have testers who did not build this run the [test
 
 The npm package is named `agentlive`. Ordinary builds keep `private: true` so a stray `npm publish` fails; only `node scripts/build-package.mjs --release` emits a publishable manifest.
 
-1. One-time setup: create the `npm` environment in the GitHub repository with an `NPM_TOKEN` secret (an npm automation token for the `agentlive` package), and require reviewers on that environment if desired.
-2. Tag and push: `git tag v<version> && git push origin v<version>`.
-3. The [release workflow](.github/workflows/release.yml) reruns `check` and `package:verify`, verifies the tag matches the package version, builds the release tarball and runs `npm publish --provenance --access public`, so npm shows a signed provenance statement linking the package to the workflow run.
-4. Create GitHub release notes from the changelog entry, and attach the tarball if desired.
+1. One-time setup, first release only. npm no longer accepts classic automation tokens for publishing ("Two-factor authentication or granular access token with bypass 2fa enabled is required"), and it cannot attach a trusted publisher to a package that does not exist yet — unlike PyPI, npm has no pending-publisher concept ([npm/cli#8544](https://github.com/npm/cli/issues/8544)). So the first release of a new name is bootstrapped with a token: create a **granular access token** with read-and-write permission on **all packages** (a token scoped to one package cannot create that package), then create the `npm` environment in the GitHub repository with it as the `NPM_TOKEN` secret, and require reviewers on that environment if desired.
+2. After the first release, switch to trusted publishing and stop using tokens entirely:
+
+   ```sh
+   npm trust github agentlive --file release.yml \
+     --repo bojieli/agentlive --env npm --allow-publish
+   gh secret delete NPM_TOKEN --env npm     # the workflow then uses OIDC
+   npm token revoke <id>                    # from `npm token list`
+   ```
+
+   The release workflow needs no edit: it publishes with the token while the secret exists and with OIDC once it does not, and trusted publishing attests provenance by itself, so the `--provenance` flag is dropped on that path. Trusted publishing requires npm 11.5.1+ and Node 22.14.0+ (this repository pins Node 26.8.1) and the `id-token: write` permission the workflow already declares.
+3. Tag and push: `git tag v<version> && git push origin v<version>`.
+4. The [release workflow](.github/workflows/release.yml) reruns `check` and `package:verify`, verifies the tag matches the package version, builds the release tarball and publishes it, so npm shows a signed provenance statement linking the package to the workflow run. Provenance requires the repository to be **public**; npm refuses to generate it for a private one.
+5. Create GitHub release notes from the changelog entry, and attach the tarball if desired.
 
 ## After publishing
 
