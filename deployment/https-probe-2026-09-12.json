@@ -1,0 +1,173 @@
+{
+  "success": true,
+  "at": "2026-09-12T09:45:12.405Z",
+  "durationMs": 77156,
+  "publicOrigin": "https://recordings.agentlive.test",
+  "proxy": "caddy:2.11.4-alpine, tls internal",
+  "composeFiles": ["compose.yaml", "deployment/compose.https.yaml"],
+  "quietViewerMs": 65000,
+  "attachmentBytes": 5242880,
+  "checks": [
+    "proxy-terminates-tls-for-public-name",
+    "server-reachable-only-through-proxy",
+    "viewer-and-assets-survive-proxying",
+    "security-headers-and-csps-unchanged",
+    "browser-origin-accepted-at-public-origin",
+    "private-import-and-replay-through-proxy",
+    "private-recording-stays-private-through-proxy",
+    "websocket-publisher-and-viewer-concurrently",
+    "quiet-viewer-outlives-proxy-idle-timeout",
+    "attachment-streams-through-proxy",
+    "short-link-and-public-viewer-url",
+    "publisher-and-viewer-recover-from-proxy-restart",
+    "publisher-and-viewer-recover-from-server-restart",
+    "no-events-lost-or-duplicated-across-restarts"
+  ],
+  "results": [
+    {
+      "name": "proxy-terminates-tls-for-public-name",
+      "status": "passed",
+      "ms": 1,
+      "detail": {
+        "issuer": {
+          "CN": "Caddy Local Authority - ECC Intermediate"
+        },
+        "subjectAltName": "DNS:recordings.agentlive.test",
+        "via": "1.1 Caddy"
+      }
+    },
+    {
+      "name": "server-reachable-only-through-proxy",
+      "status": "passed",
+      "ms": 81,
+      "detail": {
+        "serverPublishers": [
+          {
+            "URL": "",
+            "TargetPort": 7331,
+            "PublishedPort": 0,
+            "Protocol": "tcp"
+          }
+        ]
+      }
+    },
+    {
+      "name": "viewer-and-assets-survive-proxying",
+      "status": "passed",
+      "ms": 1244,
+      "detail": {
+        "/": 448,
+        "/app.js": 1175320,
+        "/app.css": 8336,
+        "/favicon.svg": 211,
+        "/artifact-preview": 347,
+        "/artifact-preview.js": 304,
+        "/artifact-interactive": 641
+      }
+    },
+    {
+      "name": "security-headers-and-csps-unchanged",
+      "status": "passed",
+      "ms": 511,
+      "detail": {
+        "/": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; frame-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+        "/artifact-preview": "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src data:; frame-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts",
+        "/artifact-interactive": "default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline'; img-src data:; frame-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; sandbox allow-scripts"
+      }
+    },
+    {
+      "name": "browser-origin-accepted-at-public-origin",
+      "status": "passed",
+      "ms": 10,
+      "detail": {
+        "foreignOriginStatus": 403
+      }
+    },
+    {
+      "name": "private-import-and-replay-through-proxy",
+      "status": "passed",
+      "ms": 745,
+      "detail": {
+        "streamId": "8e535ed3-1a0a-4914-ac1a-ab4c91fb92c9",
+        "viewerUrl": "https://recordings.agentlive.test/?stream=8e535ed3-1a0a-4914-ac1a-ab4c91fb92c9"
+      }
+    },
+    {
+      "name": "private-recording-stays-private-through-proxy",
+      "status": "passed",
+      "ms": 3,
+      "detail": {
+        "anonymousStatus": 403
+      }
+    },
+    {
+      "name": "websocket-publisher-and-viewer-concurrently",
+      "status": "passed",
+      "ms": 15,
+      "detail": {
+        "delivered": 5
+      }
+    },
+    {
+      "name": "quiet-viewer-outlives-proxy-idle-timeout",
+      "status": "passed",
+      "ms": 65016,
+      "detail": {
+        "quietMs": 65000,
+        "heartbeats": 6,
+        "frames": 7
+      }
+    },
+    {
+      "name": "attachment-streams-through-proxy",
+      "status": "passed",
+      "ms": 117,
+      "detail": {
+        "bytes": 5242880,
+        "chunks": 326
+      }
+    },
+    {
+      "name": "short-link-and-public-viewer-url",
+      "status": "passed",
+      "ms": 95,
+      "detail": {
+        "ready": {
+          "viewerUrls": ["https://recordings.agentlive.test/"],
+          "url": "http://0.0.0.0:7331"
+        }
+      }
+    },
+    {
+      "name": "publisher-and-viewer-recover-from-proxy-restart",
+      "status": "passed",
+      "ms": 907,
+      "detail": {
+        "publisherAttempts": 2,
+        "delivered": 9
+      }
+    },
+    {
+      "name": "publisher-and-viewer-recover-from-server-restart",
+      "status": "passed",
+      "ms": 956,
+      "detail": {
+        "publisherAttempts": 3,
+        "delivered": 11
+      }
+    },
+    {
+      "name": "no-events-lost-or-duplicated-across-restarts",
+      "status": "passed",
+      "ms": 8,
+      "detail": {
+        "published": 11,
+        "storedEvents": 12,
+        "liveDeliveries": 12,
+        "repeatedSequences": 0,
+        "viewerReconnects": 2,
+        "publisherAttempts": 3
+      }
+    }
+  ]
+}
