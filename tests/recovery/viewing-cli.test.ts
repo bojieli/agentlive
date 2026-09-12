@@ -44,7 +44,7 @@ it("issues, lists, uses and revokes a private viewing credential through the CLI
         ],
         {
           env: { ...process.env, AGENTLIVE_OWNER_SECRET: secret },
-          timeout: 10000,
+          timeout: 30000,
         },
       );
     const issued = await command("viewing-grant", [

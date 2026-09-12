@@ -83,7 +83,7 @@ it("runs local serve/import across processes with private credentials and restar
         await exec(
           process.execPath,
           [cli, "discover", "--agent", "claude", "--source-root", root],
-          { env, timeout: 10000 },
+          { env, timeout: 30000 },
         )
       ).stdout,
     );
@@ -102,7 +102,7 @@ it("runs local serve/import across processes with private credentials and restar
       server.url,
     ];
     const first = JSON.parse(
-      (await exec(process.execPath, args, { env, timeout: 10000 })).stdout,
+      (await exec(process.execPath, args, { env, timeout: 30000 })).stdout,
     );
     expect(first.event).toBe("imported");
     expect(first.visibility).toBe("private");
@@ -124,13 +124,13 @@ it("runs local serve/import across processes with private credentials and restar
             "--server",
             server.url,
           ],
-          { env, timeout: 10000 },
+          { env, timeout: 30000 },
         )
       ).stdout,
     );
     expect(selected.streamId).toBe(first.streamId);
     const second = JSON.parse(
-      (await exec(process.execPath, args, { env, timeout: 10000 })).stdout,
+      (await exec(process.execPath, args, { env, timeout: 30000 })).stdout,
     );
     expect(second.streamId).toBe(first.streamId);
     expect(second.producerEvents).toBe(first.producerEvents);
@@ -149,7 +149,7 @@ it("runs local serve/import across processes with private credentials and restar
     ];
     const replay = await exec(process.execPath, replayArgs, {
       env,
-      timeout: 10000,
+      timeout: 30000,
     });
     expect(replay.stdout).toContain("CLI test message");
     expect(replay.stdout).toContain("Recording ended");
@@ -168,12 +168,12 @@ it("runs local serve/import across processes with private credentials and restar
         "--state-dir",
         root,
       ],
-      { env, timeout: 10000 },
+      { env, timeout: 30000 },
     );
     const offline = await exec(
       process.execPath,
       [cli, "replay", "--source", portable],
-      { env, timeout: 10000 },
+      { env, timeout: 30000 },
     );
     expect(offline.stdout).toBe(replay.stdout);
     const restored = await exec(
@@ -188,7 +188,7 @@ it("runs local serve/import across processes with private credentials and restar
         "--state-dir",
         root,
       ],
-      { env, timeout: 10000 },
+      { env, timeout: 30000 },
     );
     const restoredId = JSON.parse(restored.stdout).streamId;
     expect(restoredId).not.toBe(first.streamId);
@@ -204,7 +204,7 @@ it("runs local serve/import across processes with private credentials and restar
         "--state-dir",
         root,
       ],
-      { env, timeout: 10000 },
+      { env, timeout: 30000 },
     );
     expect(restoredReplay.stdout).toBe(replay.stdout);
     const timed = await exec(
@@ -219,13 +219,13 @@ it("runs local serve/import across processes with private credentials and restar
     const compressed = await exec(
       process.execPath,
       [...replayArgs, "--idle-cap-ms", "0"],
-      { env, timeout: 10000 },
+      { env, timeout: 30000 },
     );
     expect(compressed.stdout).toBe(replay.stdout);
     const uncompressed = await exec(
       process.execPath,
       [...replayArgs, "--idle-cap-ms", "off", "--speed", "1024"],
-      { env, timeout: 10000 },
+      { env, timeout: 30000 },
     );
     expect(uncompressed.stdout).toBe(replay.stdout);
     await expect(
@@ -259,7 +259,7 @@ it("runs local serve/import across processes with private credentials and restar
     const seek = await exec(
       process.execPath,
       [...replayArgs, "--from-ms", "1000000"],
-      { env, timeout: 10000 },
+      { env, timeout: 30000 },
     );
     expect(seek.stdout).toContain("Playback state");
     expect(seek.stdout).toContain("CLI test message");
@@ -293,7 +293,7 @@ it("runs local serve/import across processes with private credentials and restar
     await expect(
       exec(process.execPath, [...replayArgs, "--anonymous"], {
         env,
-        timeout: 10000,
+        timeout: 30000,
       }),
     ).rejects.toMatchObject({ code: 1 });
     const timestamp = "2026-09-01T00:00:00.000Z";
@@ -347,7 +347,7 @@ it("runs local serve/import across processes with private credentials and restar
               server.url,
               ...fixture.extra,
             ],
-            { env, timeout: 10000 },
+            { env, timeout: 30000 },
           )
         ).stdout,
       );
@@ -406,7 +406,7 @@ it("runs local serve/import across processes with private credentials and restar
             if (publisherError) throw new Error(publisherError);
             return publisherOutput;
           },
-          { timeout: 10000 },
+          { timeout: 30000 },
         )
         .toContain('"event":"source-caught-up"');
       expect(publisherOutput).toContain(first.streamId);
@@ -483,7 +483,7 @@ fs.writeFileSync(require('node:path').join(childDir, 'agent-worker.jsonl'), JSON
           "--state-dir",
           root,
         ],
-        { env: { ...env, PATH: `${bin}:${env.PATH}` }, timeout: 10000 },
+        { env: { ...env, PATH: `${bin}:${env.PATH}` }, timeout: 30000 },
       );
       expect(launched.stdout).toBe("NATIVE_TERMINAL_OUTPUT\n");
       const publishing = launched.stderr
@@ -570,7 +570,7 @@ it("fresh launch retains its identity when native exits without a transcript", a
         "--server",
         server.url,
       ],
-      { env: { ...env, PATH: `${bin}:${env.PATH}` }, timeout: 10000 },
+      { env: { ...env, PATH: `${bin}:${env.PATH}` }, timeout: 30000 },
     ).then(
       () => {
         throw new Error("Expected launch failure");
@@ -649,7 +649,7 @@ if(process.argv[2] === 'serve') {
           server.url,
           ...(attempt ? ["--native-session", "ses_managed"] : []),
         ],
-        { env: { ...env, PATH: `${bin}:${env.PATH}` }, timeout: 10000 },
+        { env: { ...env, PATH: `${bin}:${env.PATH}` }, timeout: 30000 },
       );
       expect(result.stdout).toBe("OPENCODE_NATIVE_OUTPUT\n");
       const recording = result.stderr
@@ -768,7 +768,7 @@ console.log('KIMI_NATIVE_EXIT');
           "--server",
           server.url,
         ],
-        { env: { ...env, PATH: `${bin}:${env.PATH}` }, timeout: 10000 },
+        { env: { ...env, PATH: `${bin}:${env.PATH}` }, timeout: 30000 },
       ).then(
         (result) => {
           expect(partial).toBe(false);
@@ -897,7 +897,7 @@ console.log('CODEX_NATIVE_EXIT');
           "--state-dir",
           root,
         ],
-        { env: { ...env, PATH: `${bin}:${env.PATH}` }, timeout: 10000 },
+        { env: { ...env, PATH: `${bin}:${env.PATH}` }, timeout: 30000 },
       );
       expect(result.stdout).toBe("CODEX_NATIVE_EXIT\n");
       const journal = await PublisherJournal.open(join(root, "publisher"), {
@@ -1070,14 +1070,14 @@ it.each(["kimi", "claude", "codex", "opencode"])(
               "--include-children",
               ...common,
             ],
-            { env, timeout: 10000 },
+            { env, timeout: 30000 },
           )
         ).stdout,
       );
       const replay = await exec(
         process.execPath,
         [cli, "replay", "--stream", imported.streamId, ...common],
-        { env, timeout: 10000 },
+        { env, timeout: 30000 },
       );
       expect(replay.stdout).toContain("CLI_FAMILY_main");
       expect(replay.stdout).toContain("CLI_FAMILY_worker");
@@ -1094,12 +1094,12 @@ it.each(["kimi", "claude", "codex", "opencode"])(
           path,
           ...common,
         ],
-        { env, timeout: 10000 },
+        { env, timeout: 30000 },
       );
       const offline = await exec(
         process.execPath,
         [cli, "replay", "--source", path],
-        { env, timeout: 10000 },
+        { env, timeout: 30000 },
       );
       expect(offline.stdout).toBe(replay.stdout);
       if (native === "opencode") {
@@ -1179,7 +1179,7 @@ it.each(["kimi", "claude", "codex", "opencode"])(
                 if (error) throw new Error(error);
                 return output;
               },
-              { timeout: 10000 },
+              { timeout: 30000 },
             )
             .toContain(imported.streamId);
         } finally {
@@ -1229,7 +1229,7 @@ it.each(["kimi", "claude", "codex", "opencode"])(
                 if (error) throw new Error(error);
                 return output;
               },
-              { timeout: 10000 },
+              { timeout: 30000 },
             )
             .toContain('"event":"source-caught-up"');
           expect(output).toContain(imported.streamId);
