@@ -4,13 +4,21 @@ This file records notable user-visible changes. AgentLive is pre-release softwar
 
 ## Unreleased
 
+## 0.1.1 — 2026-09-13
+
+First release published by trusted publishing (OIDC), so it carries a provenance attestation; `0.1.0` was published from a workstation and does not.
+
 ### Added
 
 - `agentlive --version` (also `-v` and `version`) prints the installed version.
 
 ### Fixed
 
-- The web assets are rebuilt from an empty directory, so a file an older build script emitted can no longer survive into the published package.
+- The web assets are rebuilt from an empty directory, so a file an older build script emitted can no longer survive into the published package. `0.1.0` was packed from a clean tree and is unaffected.
+
+### Changed
+
+- Refreshed the runtime lock: transitive `nanoid` 3.3.18 → 3.3.19 (via `postcss`). No direct dependency changed.
 
 ## 0.1.0 — 2026-09-12
 
